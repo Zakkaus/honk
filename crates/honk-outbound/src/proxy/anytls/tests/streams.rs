@@ -149,6 +149,52 @@ async fn a_server_alert_does_not_become_clean_eof() {
 }
 
 #[tokio::test]
+async fn a_deferred_read_error_releases_the_stream_slot() {
+    use crate::session::ManagedSession;
+    use tokio::io::AsyncReadExt;
+
+    let (session, mut server) = establish_test_session("deferred-error").await;
+    expect_handshake(&mut server).await;
+    let mut stream = session
+        .open_stream_direct(b"target".to_vec(), session.try_reserve().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(read_frame(&mut server).await.unwrap().0, CMD_SYN);
+    assert_eq!(read_frame(&mut server).await.unwrap().0, CMD_PSH);
+    assert_eq!(session.active_streams(), 1);
+
+    write_frame(&mut server, CMD_PSH, stream.sid, b"hello")
+        .await
+        .unwrap();
+    write_frame(&mut server, CMD_ALERT, 0, b"server gave up")
+        .await
+        .unwrap();
+
+    // The payload and the failure land together, so the error is deferred
+    // behind the bytes; the next read delivers it and ends the stream.
+    let mut buf = [0u8; 32];
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match stream.read(&mut buf).await {
+                Ok(0) => panic!("an alerted session must not read as clean EOF"),
+                Ok(_) => continue,
+                Err(e) => return e,
+            }
+        }
+    })
+    .await
+    .expect("read settles");
+
+    assert_eq!(
+        session.active_streams(),
+        0,
+        "the slot must be released once the deferred error is delivered, \
+         even while the caller still holds the stream"
+    );
+    drop(stream);
+}
+
+#[tokio::test]
 async fn empty_control_frames_do_not_close_the_session() {
     let (session, mut server) = establish_test_session("empty-controls").await;
     expect_handshake(&mut server).await;

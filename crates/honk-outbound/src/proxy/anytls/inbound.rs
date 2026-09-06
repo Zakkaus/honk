@@ -626,6 +626,10 @@ impl tokio::io::AsyncRead for AnyTlsStream {
         }
         if let Some(e) = this.read_err.take() {
             this.read_eof = true;
+            // The branch that deferred this error kept the slot so the
+            // already-read bytes could be delivered; delivering the error
+            // ends the stream, so release it here as the immediate paths do.
+            this._permit.take();
             return std::task::Poll::Ready(Err(e));
         }
 
