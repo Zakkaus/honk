@@ -10,7 +10,7 @@ This file is written for AI coding agents that need to understand, build, test, 
 - Shared configuration types and parsers (`honk-config`) parse the original dae `{ section { ... } }` configuration syntax — the primary and only documented config format.
 - Status: **experimental alpha** (`v0.0.1-alpha`). Expect breaking changes.
 - License: **GPL-3.0-only**. Repository: <https://github.com/daeuniverse/honk>
-- Documentation: `README.md` / `README_CN.md` (bilingual overview, feature checklist, TODO list) and `doc/` — split by language into `doc/en/` and `doc/zh/` with identical layouts: `configuration.md` guide, `design/` architecture docs per subsystem (overview/datapath/routing/nfqueue/control-plane/dns/outbound/groups), `reference/` per-section field references (global/nodes/groups/routing/dns/subscription/experimental/api/cli), `operations/` runbooks, indexed by the bilingual `doc/README.md`. Lab benchmark tooling, evidence, and bilingual benchmark docs live only on the dedicated `bench` branch.
+- Documentation: `README.md` / `README.zh.md` (bilingual overview, feature checklist, TODO list) and `doc/` — split by language into `doc/en/` and `doc/zh/` with identical layouts: `configuration.md` guide, `design/` architecture docs per subsystem (overview/datapath/routing/nfqueue/control-plane/dns/outbound/groups), `reference/` per-section field references (global/nodes/groups/routing/dns/subscription/experimental/api/cli), `operations/` runbooks, indexed by the bilingual `doc/README.md`. Lab benchmark tooling, evidence, and bilingual benchmark docs live only on the dedicated `bench` branch.
 
 ## Repository layout
 
@@ -18,7 +18,7 @@ This file is written for AI coding agents that need to understand, build, test, 
 .
 ├── Cargo.toml / Cargo.lock   # Workspace manifest (release + release-musl profiles)
 ├── Justfile                  # Day-to-day dev tasks (build, test, run, debug via clash API, cleanup)
-├── README.md / README_CN.md  # Bilingual project overview
+├── README.md / README.zh.md  # Bilingual project overview
 ├── AGENTS.md                 # This file
 ├── LICENSE                   # GPL-3.0-only
 ├── config.dae                # Full-featured example config (production-leaning)
@@ -436,7 +436,7 @@ with the `ja4probe` tool on .70 (`/usr/local/bin/ja4probe`, source at
 - Structs crossing the kernel/userspace boundary live in `honk-ebpf-common`, must be `#[repr(C)]` with stable layouts, and must be changed together with `honk-ebpf` and the `honk-core` map writers.
 - Follow `cargo fmt --all` and keep `cargo clippy --all -- -D warnings` clean.
 - Match the surrounding file's idioms; make minimal, scoped changes (no opportunistic cleanups).
-- Documentation language: code comments and `doc/en/` docs are English; user docs are bilingual (`README_CN.md`, `doc/zh/`) — update both when you change documented behavior.
+- Documentation language: code comments and `doc/en/` docs are English; user docs are bilingual (`README.zh.md`, `doc/zh/`) — update both when you change documented behavior.
 
 ## Testing instructions
 

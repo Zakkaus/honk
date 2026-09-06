@@ -1,6 +1,6 @@
 # honk
 
-[English](./README.md) | [中文](./README_CN.md)
+[English](./README.md) | 中文
 
 ---
 
@@ -16,7 +16,7 @@
 
 许可证：**GPL-3.0-only**。
 
-可靠性优先的 Score 组策略始终随程序编译，并通过 `policy: score` 显式选择；省略 policy 时仍默认使用 Selector。Score 只在进程内存中从真实流量以及 DNS、真实 QUIC 握手、探测、delay test、预热和直连或经代理的 UI 下载中学习。经鉴权的 `GET /stats` 只导出按组汇总的安全选路原因计数；scorer cell、目标键和其他私有 scorer 数据绝不会写入日志、持久化或导出。详见[组参考](doc/zh/reference/groups.md#score-策略)。
+可靠性优先的 Score 组策略始终随程序编译，并通过 `policy: score` 显式选择；省略 policy 时仍默认使用 Selector。Score 只在进程内存中从真实流量以及 DNS、真实 QUIC 握手、探测、延迟测试、预热和直连或经代理的 UI 下载中学习。经鉴权的 `GET /stats` 只导出按组汇总的安全选路原因计数；scorer cell、目标键和其他私有 scorer 数据绝不会写入日志、持久化或导出。详见[组参考](doc/zh/reference/groups.md#score-策略)。
 
 ## 实验性首包保留 UDP 决策
 
@@ -60,7 +60,7 @@ VLESS 分享链接通过 `vless_mode=legacy|uot-v2|h2mux|h2mux-padded|xudp|mux-c
 - [x] 通过出站 `PacketTransport` 上的 quinn `AsyncUdpSocket` adapter 添加代理 DoQ/DoH3
 - [ ] 评估 AF_XDP 与 XDP 路径以进一步提升性能
 - [ ] 添加 honk REST API
-- [ ] 添加 inbound 支持
+- [ ] 添加入站支持
 - [ ] 通过 GitHub [Issues](https://github.com/Glassyiris/honk/issues) 和 [Discussions](https://github.com/Glassyiris/honk/discussions) 跟踪其他工作
 
 > 在所有当前尚未 review 的代码完成 review，并处理所有未经验证的 AI 生成实现前，不会发布 `test.1` release tag。
