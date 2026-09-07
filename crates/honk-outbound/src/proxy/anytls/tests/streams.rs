@@ -166,24 +166,27 @@ async fn a_deferred_read_error_releases_the_stream_slot() {
     write_frame(&mut server, CMD_PSH, stream.sid, b"hello")
         .await
         .unwrap();
-    write_frame(&mut server, CMD_ALERT, 0, b"server gave up")
+    write_frame(&mut server, CMD_ALERT, 0, &vec![0xff; u16::MAX as usize])
         .await
         .unwrap();
 
-    // The payload and the failure land together, so the error is deferred
-    // behind the bytes; the next read delivers it and ends the stream.
-    let mut buf = [0u8; 32];
     tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            match stream.read(&mut buf).await {
-                Ok(0) => panic!("an alerted session must not read as clean EOF"),
-                Ok(_) => continue,
-                Err(e) => return e,
-            }
+        while !session.is_closed() {
+            tokio::task::yield_now().await;
         }
     })
     .await
-    .expect("read settles");
+    .expect("alert closes the session");
+
+    let mut buf = [0u8; 32];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], b"hello");
+    let error = stream.read(&mut buf).await.unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionAborted);
+    assert!(
+        error.to_string().len() <= 4096,
+        "each stream must retain a bounded diagnostic, not the full server alert"
+    );
 
     assert_eq!(
         session.active_streams(),

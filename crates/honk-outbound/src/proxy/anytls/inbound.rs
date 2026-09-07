@@ -562,15 +562,21 @@ pub(super) async fn session_demux(session: Arc<AnyTlsSession>, mut read: BoxedRe
                 }
             }
             CMD_ALERT if !data.is_empty() => {
-                let alert = String::from_utf8_lossy(&data).into_owned();
+                let shown = &data[..data.len().min(MAX_STREAM_ERROR_SOURCE_BYTES)];
+                let suffix = if shown.len() == data.len() {
+                    ""
+                } else {
+                    " [truncated]"
+                };
+                let alert = String::from_utf8_lossy(shown);
                 warn!(
-                    "AnyTLS session {} alert from server: {}",
+                    "AnyTLS session {} alert from server: {}{suffix}",
                     session.seq, alert
                 );
                 // Without a reason the loop ends in `session.close()` and a
                 // reader sees clean EOF, which is the one thing the server
                 // just said this session is not.
-                fail_reason = Some(anyhow::anyhow!("server alert: {alert}"));
+                fail_reason = Some(anyhow::anyhow!("server alert: {alert}{suffix}"));
                 break;
             }
             CMD_SERVER_SETTINGS => {
