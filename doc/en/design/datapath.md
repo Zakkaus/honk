@@ -112,7 +112,7 @@ A changed link/address/route/interface role also republishes generated `direct(m
 | `UDP_DECISION_INFLIGHT` | Two-slot per-CPU reader counts for NFQUEUE decision work; see [NFQUEUE](./nfqueue.md). |
 | `UDP_DECISION_RETIRE_FENCE` | 65,536-entry tuple fence map used during NFQUEUE retirement; see [NFQUEUE](./nfqueue.md). |
 
-Kernel/userspace map keys and values are `#[repr(C)]` ABI. IPv4 addresses in shared flow structures are IPv4-mapped IPv6 values in network byte order.
+Kernel/userspace map keys and values are `#[repr(C)]` ABI. The `src/` paths below are in `crates/honk-ebpf-common`, the shared no_std crate. IPv4 addresses in shared flow structures are IPv4-mapped IPv6 values in network byte order.
 
 - `src/lib.rs` — datapath constants including `TPROXY_MARK`, `DAE_BYPASS_MARK`, `CLASSIFIED_MARK`, `NFQUEUE_PENDING_MARK`, `NFQUEUE_TOKEN_MASK`, reserved-mark validation, NFQUEUE enabled/ready flags, outbound indices, tuples/redirect entries, and per-outbound stats helpers. Marks must never overlap the pending/token namespace.
 - `src/conn.rs` — `ConnState` (including protocol-specific `UdpDecisionState::{None,Preparing,Pending,DirectArmed,Proxy,Block}` and `decision_token`), `ConntrackArgs`, `ParseTransportCtx`, `BpfStatsKey`, `TcpState`.
