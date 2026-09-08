@@ -24,7 +24,13 @@
 10. 检查 NFQUEUE 健康状态，发布其 ready 状态，开放 pending verdict 准入，最后把 `DATAPATH_STATE_MAP[0]` 设为 ready。随后 TCP accept loop 在控制面 supervisor 中运行。
 `RealEbpfBackend` 负责 aya program、map、link、持久分配器处理和真实 NFQUEUE 集成。`MockEbpfBackend` 在没有特权内核资源时提供相同控制面接口。请求的 NFQUEUE 路径无法通过锁交接后的固定队列前置检查时会记录 warning 并关闭；服务准入后的失败仍为 fatal。
 
+固定的 `UDP_DECISION_SEQUENCE` 保持 12 字节 ABI；`next` 存完整 raw token，由 2 位 generation 和 28 位 sequence 组成，启动只校验、不改写。重置前必须先 fence 并排空暂存，确认候选 generation 到 `3` 的整个后缀在 conn-state、handoff、redirect 和 retirement-fence 四类 map 中均为空。因为回滚后的旧分配器从重置点单调递增，只检查候选 generation 会留下 token 冲突风险。
+
 当 `global.store_subscribe` 启用时，经过校验的原始正文存放在 `<global.data_dir>/.sub`。切换数据目录期间，若配置存储不存在，则依次保留并使用已有的 `/var/share/honk/.sub` 与 `./.sub`；honk 不会自动移动或删除它们。目录必须是非符号链接目录、权限 `0700`；文件权限 `0600`，文件名由请求 URL、配置中的 User-Agent 覆盖值（未设置或为空时贡献空组件）与 headers 共同计算 URL-safe SHA-256。未配置订阅覆盖值时，请求标识为 `honk/<version>`。写入使用新的临时文件、`sync_all`、原子 rename 和目录 sync。
+
+订阅 worker 由 `src/subscription/supervisor.rs` 按配置 revision 授权。`SIGHUP` 提交后才调整 worker；替换或关闭时必须等待旧 worker 退出。
+
+守护进程与 `honk-tool sub` 共用正文识别，只导入节点，不导入完整配置中的路由、`DNS` 或组。不支持的节点跳过；身份重复时保留首个可用节点。导入的 `Trojan`、`AnyTLS` 和 `QUIC` 节点必须启用 `TLS`，不能静默降为明文。跳过告警只含从 1 开始的节点序号和固定拒绝原因，不得输出原始记录或凭据。
 
 关闭时在资源消失前逆序释放所有权：fence NFQUEUE、关闭数据路径准入、拒绝新的用户态工作、取消并排空持有的 verdict 和 UDP initializer、停止 UDP driver 和 removal 处理、停止接口 watcher、卸载 BPF hook、最多用五秒排空已接受流、退役出站运行时、停止 NFQUEUE、停止 DNS controller 和 persistence，并清理 generation 持有的 BPF 状态。普通清理保留固定分配器。随后 listener 和 `daens`/link-pair 所有权离开作用域。
 
@@ -53,6 +59,8 @@ UDP 域名发现解密 QUIC v1/v2 Initial packet，重组 CRYPTO fragment，并�
 `connection.rs` 是每流 route/sniff/mode/selection 的规范边界。Socket UDP 入口与 NFQUEUE 持有的 payload 都在同一个 `UdpEndpointPool` 中预留相同的 `UdpInitLease`；NFQUEUE 没有第二套 Router、dialer 或 packet replay 路径。暂存流在 token 校验的终态转换前计算唯一最终出站与 mark。
 
 `build_tuples_key` 必须用 `mem::zeroed()` 初始化 `TuplesKey`。这个 `#[repr(C)]` key 在 40 字节布局中只有 37 字节字段，内核会散列包括三个 padding 字节在内的全部 40 字节。因此逐字段初始化可能产生用户态无法可靠查询或删除的 key。
+
+`TCP` 单候选拨号失败后，仅在重新选择有可用替代项时重试一次。`URLTest` 从 `urltest_retry_candidates` 取延迟最低的三个并发尝试；`Score` 先记录失败，再按精确目标重新排名，只尝试不同的替代节点。其他策略和实际只有一个叶节点的结果不重试。
 
 ## UDP endpoint 流水线
 
@@ -85,6 +93,8 @@ SOCKS5 UDP 在 endpoint 整个生命周期内保持 TCP `UDP ASSOCIATE` 控制�
 回复使用在 `daens` 内创建、透明绑定到 packet 原始目的地址的 anyfrom socket。通用 endpoint 保留其 original-destination socket，并按 endpoint 缓存已接受的其他 full-cone 来源。端口 53 回复另外共享每地址族一个透明 socket，并用 `IP_PKTINFO` 或 `IPV6_PKTINFO` 选择精确源 IP。从 TPROXY listener 回复会使用内部 `dae0` 源地址，因此不可用。
 
 Reload 在等待前推进 cancellation epoch。Initializer 捕获该 epoch 和 incarnation generation；若 cancellation 先于 `commit_ready` 线性化，则阻止发布。Reload 排空 `Initializing` lease 及其保留资源，但保留 `Ready` endpoint。每次 retirement 和 acknowledgement 都指定 token 与 generation，因此延迟工作不能删除替代 mapping。
+
+`PendingUdpVerdicts` 只持有 token/generation、阶段、FIFO verdict guard 和最终 direct mark；唯一 payload 以 `Bytes` 转移给 initializer。direct/block 完成后移除 initializer，交回内核；proxy 则把 token/generation 转入 `Ready`。
 
 ## Queue 与描述符预算
 
@@ -121,6 +131,8 @@ Reload 在等待前推进 cancellation epoch。Initializer 捕获该 epoch 和 i
 
 当两端都是普通 `TcpStream` 时，`relay_splice` 运行两个并发 `splice(2)` pump。每个方向持有一条最多 64 KiB 的非阻塞 pipe，因此全双工中继最多请求四个 pipe FD 和 128 KiB pipe page。EOF 对另一端 write side 执行 half-close，并允许反向继续排空。
 
+不能改回单向 `splice`，该路径曾导致超时。
+
 每个方向的首次 splice 同时是 capability probe。在任何字节到达目的 socket 前返回 `EINVAL`、`ENOSYS` 或 `EXDEV`，即可无损回退到用户态 copy，并设置进程全局 latch；后续连接跳过 probe。其他错误，或字节已经暂存后返回 unsupported，会使中继失败，而不是冒数据丢失风险。TLS 或协议包装流使用 `relay_auto`，它始终使用基于 select 的 copy loop。
 
 首次 EOF 后，两条中继路径只限制空闲排空时间：`DRAIN_DEADLINE` 是没有任何字节进展的 30 秒。活跃 survivor 可以运行超过 30 秒；静默 survivor 不能无限持有 accepted socket。
@@ -139,9 +151,13 @@ Accepted TCP socket 只有在其规范正向 `CONN_STATE_MAP` 条目仍存在时
 
 提交前构建失败不会触碰当前 generation。若 fence 后发布失败，控制平面重放精确的旧路由计划，恢复旧静态 flag，并重开旧 generation。若恢复不能证明数据路径健康，则继续拒绝准入。之后任何一次完整走完发布路径的 reload（闩锁期间会强制重推路由）会重新放开准入，因为到那一刻所有可能被撕裂的 map 都已重建（组连通性重发按既定策略仅告警、保持 fail-open）。
 
+复用编译结果前先比较 hosts 和引用的 geo 文件内容；内容变化必须重建。只有编译计划与投影字节都相同，才能跳过静态路由、LPM 和 domain 发布。启动时非致命的发布失败保持 dirty，直到每五秒一次的 heartbeat 重推或后续 reload 成功。
+
 `DnsServiceProvider` 是一致的 DNS generation pointer。请求 lease 保留其 generation 的 forwarder、projection、transport pool 和出站运行时，直到退役。出站 registry 同样按 generation 持有：未变化的 node runtime 只在提交点转移，旧 registry 把这些 runtime 标记为已移出，然后开始优雅退役。现有 stream 与 `Ready` UDP endpoint 保持引用，同时旧 reusable pool 停止接受新工作并排空。
 
 `DrainTracker` 是进程全局的 accepted-flow gate。Reload 和关闭在 drain 前设置 reject-new；关闭最多等待五秒，然后带着剩余计数继续拆除。
+
+`DatapathFlagsHandle` 用同一异步 mutex 串行更新 `ModeState`、`DATAPATH_FLAGS_MAP` 和 NFQUEUE fence/reopen 状态，防止并发 API 更新在 reload 中重开 ready。Fence 必须等 ready 清零、内核 reader-epoch 宽限期结束及未交付的 `Preparing`/`Pending` 状态全部清除后才算完成。
 
 ### 需要重启的变更
 
@@ -167,6 +183,8 @@ Accepted TCP socket 只有在其规范正向 `CONN_STATE_MAP` 条目仍存在时
 ## Clash API 与 cache DB
 
 可选的 Clash-compatible axum server 是当前配置、GroupManager、mode/flags handle、connection tracker、DNS service、统计和出站 runtime pointer 上的用户态视图与修改接口；endpoint 细节见 [API 参考](../reference/api.md)。当 API 成功绑定，或任一配置组使用 `interrupt_connections` 时，才启用连接元数据，因此即使没有 API 也能在选择变化时中断连接。可选 SQLite `cachedb` 在数据路径准入前打开，持久化 Selector 选择、Clash 模式和可选 DNS 应答。相对路径依次优先使用 `global.data_dir` 下、`/var/share/honk` 下和原始配置目录中的已有数据库；缺失数据库在 `global.data_dir` 下创建。配置和持久化语义见 [Experimental 参考](../reference/experimental.md)。
+
+`GET /stats` 返回用户态统计，不是 eBPF `OUTBOUND_STATS`。`receiptToVerdict` 从 listener 收到报文计到 verdict 成功，不包含内核排队时间。`Score` 的统计只公开经认证的组级原因计数，不得暴露评分单元或私有目标数据；保留 `type: "url_test"`，`now` 显示当前聚合 TCP 胜者，拒绝 `PUT /proxies/{name}`。API 关闭只移除自己的元数据消费者，不能停止组配置要求的连接中断。
 
 ## 相关文档
 

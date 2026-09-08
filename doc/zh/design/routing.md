@@ -8,6 +8,8 @@
 
 因此，路由结果是流的属性，而不是每个数据包的属性。已建立流的数据包使用 conntrack 状态中保存的决策，不会重复执行规则求值，也不会读取当前 Clash 模式标志。
 
+路由规则与 `fallback` 只能指向组或内建 `direct`/`block`。普通节点没有 eBPF 出站编号，因此必须先放入组；`Config::validate` 也拒绝组与配置节点重名。
+
 ## 内核路由
 
 ### `MatchSet` 求值
@@ -17,6 +19,8 @@
 同一条件内的多个值形成 OR 链，不同条件形成 AND 链。中间结果 `LogicalOr` 与 `LogicalAnd` 保留这一结构，内核中无需分配规则对象。最后的 fallback 条目为未匹配流提供真实出站。
 
 进入路由时，`route()` 准备全前缀的源、目的与 MAC key，并对选中的 bank 调用 `bpf_loop`。`RouteCtx` 在循环迭代之间维护 `GoodSubrule`、`BadRule`、`Must`、DNS 查询和域名已知状态。最终结果以 0–7 位编码出站、8–39 位编码 mark、40 位编码 `must`。
+
+内核求值位于 `crates/honk-ebpf/src/route.rs`；同目录的 `routing.rs` 只提供 `bpf_sock_is_dae_socket`。旧的 `sockops`/`sk_msg` 路径曾在部分内核引发 panic，因此已改用 TC 重定向。
 
 | 索引 | 在路由状态机中的含义 |
 | --- | --- |

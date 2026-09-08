@@ -50,6 +50,8 @@ flowchart LR
 | `WarmableOutbound` | `warm(runtime, timeout, WarmRequirement)` | 为 `WarmRequirement::Session` 或 `WarmRequirement::Udp` 建立可复用状态。只有 Hysteria2 区分 `Udp`，以验证服务端是否允许 UDP。 |
 | `ProbeableOutbound` | `test_connectivity` | 测试原始代理服务器可达性。协议可以覆盖默认的带 mark TCP 连接。 |
 
+`ProxyStream::into_tcp_stream` 必须保留供零拷贝 `splice` 使用的下转型能力。
+
 `PacketTransport` 暴露 relay 目标、`send_packet`、
 `send_packet_confirmed` 与 `recv_packet`。对于带队列的 tunnel，
 `send_packet_confirmed` 是更强的首包准入点。full-cone 协议还可以声明
@@ -83,10 +85,12 @@ Ready-stream pooling 保存已经完成且绑定目标的握手。Bare-TCP pooli
 多路复用与 QUIC 协议排除两者，因为其 generation runtime 是可复用状态的
 唯一所有者。
 
-Registry 组装会检查 descriptor capability 与填充的槽是否一致。
+Registry 组装会检查 descriptor capability、填充的槽与 runtime 类型是否一致。
 依赖节点的 entry 即使默认节点没有 UDP，也可以携带 packet 槽。`block`
 是显式例外：其 descriptor 声明没有 UDP capability，但分派允许其 packet
 槽通过，使选定的 block 决策能够终结并拒绝该流。
+
+未知 transport 会失败关闭；用户节点不得占用保留的内建名称或协议。
 
 ### 协议与 UDP 清单
 
@@ -121,6 +125,10 @@ feature 集启用它。不带 `rprx` 时，这些节点形式仍能解析，但 
 Mux.Cool `SessionPool`，或一个类型擦除的 QUIC client 槽。对于 generation
 所有的 session，handler 保持无状态。
 
+非空 `TlsOptions.alpn`（扁平序列化字段为 `tls_alpn`）以旧节点 ID 为命名空间，
+用 JSON 元组 `["tls-alpn", <ordered list>]` 派生新的 `UUID v5`。
+列表顺序参与身份；空列表保持旧 ID。
+
 ### Generation 生命周期
 
 启动时先构建并校验完整 runtime registry，再发布。Reload 根据前一份
@@ -147,6 +155,10 @@ AnyTLS 或 VLESS stream 与 packet transport 在整个生命周期内保留 guar
 正常完成可以等待 `close`；drop 也会启动确定性 teardown，因此一次性
 pool 不会在调用方 abort 后残留。Single XUDP 没有 generation runtime。
 
+`WarmAttempt` 在建立资源期间持有 retention 锁；失败或取消只回滚本次新增的
+所有权 bit，首次预热失败也不例外。取消后的 `QUIC` 清理须重新加锁检查 bitmap，
+仅在没有后继所有者时释放 client，避免误删新所有者的资源。
+
 ### 拨号准入
 
 物理出站连接（包括 direct TCP 与代理 TCP/QUIC 尝试）及其协议握手获取两个 permit：
@@ -159,7 +171,7 @@ replacement 可以立即采用新的 generation 局部限额，而旧的进行�
 继续占用共享进程 gate。已经热 session 上的逻辑 stream 不再执行物理拨号。
 
 Session pool 的自主 replacement dial 只绑定已发布 owner 的 admission。reload
-发布时原子地重新绑定迁移的 pool；迟到的 speculative commit 不能恢复前任
+发布时先原子地重新绑定迁移的 pool，再退役旧 owner；迟到的 speculative commit 不能恢复前任
 generation 的 gate。退役会立即清除已存 admission，尚未 commit 的 prepared
 transport 既不保留 gate，也不保留成功拨号的 permit。
 
@@ -197,7 +209,8 @@ frame 不设置 `END_STREAM`，TLS 请求使用 `:scheme: https`。DATA 携带 g
 `EPERM` 环境中 mark 应用才是 best-effort；其他错误都会传播。
 
 带 mark UDP socket 为 `SO_RCVBUF` 与 `SO_SNDBUF` 分别请求 8 MiB。Linux
-可能 clamp，并以配置 sysctl 记账值的两倍报告；core 在启动时提高对应上限。
+可能 clamp，并以配置 sysctl 记账值的两倍报告；core 启动时将
+`net.core.rmem_max` 与 `net.core.wmem_max` 提高到 16 MiB。
 
 `bootstrap.rs` 避免代理主机名解析依赖 honk 自己拦截的 DNS 路径。节点
 拨号点经 `connect_marked` 或 QUIC 建立调用 `bootstrap::resolve`，绝不
@@ -211,7 +224,8 @@ raw 路径查询 DNS HTTPS 记录（`qtype 65`），并提取 SVCB `ech` 参数�
 的地址尝试分别持有 generation 与进程级拨号 permit；达到配置上限时，fallback
 必须等待先前尝试结束，因此
 `max_concurrent_dials: 1` 会串行尝试地址。竞速始终位于已经选定的同一节点
-内部：socket mark 与安全配置保持一致，QUIC 协议认证也只对胜出连接执行。
+内部：socket mark 与安全配置保持一致，`TLS` 与 `QUIC` 协议建立（含认证）
+只在胜出 transport 上执行。错误按原始地址顺序报告。
 
 ## TLS、指纹、ECH 与 pin
 
@@ -235,6 +249,14 @@ Chrome。该 profile 配置：
 
 其他 `utls_imitate` 名称会告警并使用 Chrome。
 `tls_implementation = "tls"` 保持普通 BoringSSL ClientHello。
+
+显式 `TlsOptions.alpn` 要求启用普通 `TLS`，仅允许 `AnyTLS` 或使用 `TCP`
+的 `Trojan`、`VMess`、`VLESS`；拒绝 `REALITY`、`WebSocket`、`gRPC` 与 `QUIC` 覆盖。
+单项长度为 1–255 字节，编码后的列表最多 65,533 字节。
+
+非空列表不仅在 registry 发布时校验，直接构建 connector 和共享 stream 分派也须校验，
+不能绕过 registry 后静默忽略非法值。`tls` 与 `utls` 都采用显式列表；空列表保留
+profile 默认值。`Chrome` 的 `ALPS` 仅在列表精确包含 `h2` 时启用。
 
 ### ECH 与证书 pin
 
@@ -408,7 +430,7 @@ Header protection 感知 packet-number 长度。接收时先 unmask 第一字节
 再推导一到四字节的 packet-number 长度；仅 mask 或 unmask 这么多字节。
 把所有 packet number 当作四字节，会破坏短 packet number 后面的 payload。
 
-进程级、有界 `SESSION_TICKETS` cache 按服务端身份保存 BoringSSL TLS 1.3
+进程级、有界 `SESSION_TICKETS` cache 按服务端主机名保存 BoringSSL TLS 1.3
 session。BoringSSL resumption 要求显式 `SSL_set_session`。`pinSHA256`
 节点绝不 resume，因为 PSK 握手会绕过证书 pin。被拒绝的缓存 session 会
 被淘汰，同时不会删除并发连接写入的更新 ticket。
@@ -434,11 +456,14 @@ client 槽，因此 warm 释放、重建与 speculative client 会复用同一�
 每条池化 QUIC connection 每秒采样一次 Quinn path 与 UDP I/O counter，汇总到
 `/stats` 的 `quic` 字段；临时 URL/健康探测连接明确排除。
 同一份采样也驱动按地址族保存的流控画像。收发方向使用 10 秒 goodput EWMA；
-只有 SRTT >= 80 ms 且连续三个样本确认高 BDP，才会把 connection 接收或发送
-floor 提高到约 `2 x BDP`。peer 发来的 `STREAM_DATA_BLOCKED` 会独立地把 stream
-接收 floor 加倍；connection 聚合 goodput 无法安全判断某一条 stream 的需求。
+常规样本需满足 SRTT >= 80 ms，且连续三个样本确认高 BDP，才会把 connection 接收或发送
+floor 提高到约 `2 x BDP`。收到 `DATA_BLOCKED` 或 `STREAM_DATA_BLOCKED` 的样本
+不受 RTT 门槛限制，并将对应 floor 的目标设为当前窗口的两倍：受限速率算出的
+`2 x BDP` 可能无法扩大窗口。连续三个样本与冷却要求仍然适用。
+stream 接收 floor 只依据 `STREAM_DATA_BLOCKED`；connection 聚合 goodput
+无法安全判断某一条 stream 的需求。
 每个 floor 独立执行五分钟升档冷却，最大 32 MiB，不自动缩小，并且无需重连即可
-更新当前 connection 与后续 stream。零进度样本只有在对应 connection credit
+更新当前 connection 与已有、后续 stream。零进度样本只有在对应 connection credit
 仍受压时才会保留尚未完成的升档 streak。
 endpoint 的单次发送截止时间为 `clamp(4 × SRTT, 1 s, 5 s)`。连续三次发送
 超时，或超过 `max(8 × SRTT, 10 s)` 没有新的 QUIC packet 被确认，endpoint 会被退役
@@ -460,7 +485,7 @@ QPACK，以及认证所需的 HEADERS 处理。它不得宣告
 `SETTINGS_H3_DATAGRAM`；否则会启动一个竞争的 quic-go datagram reader，
 可能吞掉 Hysteria2 UDP packet。
 
-Hysteria2 沿用 sing-quic 的 lazy TCP 建立方式：首写合并 request 与 payload，首读移除 response，从而节省一次 RTT。
+Hysteria2 沿用 sing-quic 的 lazy TCP 建立方式：打开 bi stream 后即返回，首写合并 request 与 payload，首读校验并移除 response，从而节省一次 RTT。
 
 Salamander obfuscation 在每个 wire datagram 前加 8 字节随机 salt，并用
 重复的 `BLAKE2b-256(password || salt)` 与 payload 做 XOR。client 端口
@@ -476,6 +501,9 @@ AnyTLS handler 无状态。每个 generation 的 `NodeRuntime::AnyTls` 拥有一
 
 ### Pool 与 session 生命周期
 
+`SessionPool` 由 `AnyTLS`、`VLESS H2MUX` 与 `VLESS Mux.Cool` 共用；
+`QUIC` 的可复用连接仍归 `QuicClient` 所有。
+
 通用 `SessionPool` 强制 `Active`、`Draining` 与 `Closed` 状态、atomic
 stream permit、event-driven capacity wait、least-loaded 选择与 pool 所有的
 物理拨号 single-flight。Draining session 不计入可复用 cap，并可在存活
@@ -485,6 +513,7 @@ AnyTLS 配置两条可复用物理 session，每条 128 个 stream。它会 spre
 第一条 session 变忙后，pool 会先建立第二条，再增加复用负载，随后按
 least-loaded 调度。连续拨号失败使用有界 backoff，而不是让每条代理 flow
 各执行一次物理连接。
+`H2MUX` 与 `Mux.Cool` 不采用这种提前扩池方式，而是在容量上限内填充负载最低的 carrier。
 
 协商 v2 server settings 后，每个复用逻辑 stream（SID 2 及以后）的 SYN 写出后
 即加入按 SID 跟踪的 pending 集合，SYNACK 只结清自己的 SID——无关 stream 的应答
@@ -502,13 +531,17 @@ UDP warm 所有权分别提高有效保留值；最后一个所有者释放时�
 
 所有 frame 都通过一个 `WriterQueue` 与一个物理 writer task。Data 使用有界
 permit，control frame 保留 queue headroom，整个 queue 封顶 1,024 个 frame。
-queue 耗尽时 session 会转为 terminal，而不会继续增长内存。stream 的 SYN 与
+queue 耗尽或关闭后仍有入队请求时，session 会转为 terminal，而不会继续增长内存。stream 的 SYN 与
 第一个 PSH 作为一个 atomic batch 插入，因此其他 stream 不能插入两者之间。
+开流中途放弃注册时发送 `FIN`，不终止整个 session。
 
 完成一次 blocking pop 后，writer 只 gather 已经排队的 frame，最多 63
 frame 或 256 KiB（均不含首帧），再执行一次 `write_all` 与一次 `flush`。它绝不等待
 凑满 batch。只有物理 batch 成功或 session 变为 terminal 后，才释放 data
 permit 与 confirmed-write completion。
+
+纯 control batch 的写入截止时间为 5 秒，超时使 session 失败。包含 data 的 batch
+不设截止时间：拥塞通过有界队列施加背压，不能因此终止其他 stream。
 
 `AnyTlsStream::poll_write` 通过自有 outbound slot 保证 cancellation-safe。
 只有恰好这 `n` 字节进入有序 queue 后才返回 `Ok(n)`；取消既不会丢失
@@ -528,6 +561,7 @@ Soft limit 为：
 越过 soft limit 不会杀死 stream。第一个 parked frame 启动每 250 ms tick
 一次的 watchdog。只有整整 3 秒没有成功 overflow flush 的 stream 才被
 reset；仅存在 queued byte 不是 stall 证据。
+overflow 排空后 watchdog 退出；session 关闭时中止 watchdog。
 
 Emergency hard limit 为每 session 768 个 frame 或 12 MiB。如果某 stream
 已经超过 3 秒 grace，admission 立即 reap 它。否则 demultiplexer 以有界
@@ -550,6 +584,7 @@ FIN 与 error event 绕过 data-frame quota，使 termination 不会被满队列
 stalled stream 自己 retained 的 payload。session failure 变成
 `ConnectionAborted`；逐 stream 拒绝或 slow-consumer reap 变成
 `ConnectionReset`。
+`SYNACK` 携带数据也返回 `ConnectionReset`，不使整个 session 失败。
 
 非空的服务端 ALERT 会使 session 失败；空 ALERT 仍被忽略。
 ALERT 与 SYNACK 诊断文本在有损 UTF-8 解码前最多保留 1 KiB 源字节，
@@ -576,8 +611,8 @@ connect request 与第一条编码后 datagram 作为一个有序 PSH 一起发�
 
 Session pool 会原子返回已有共享 session 上的 permit，或一个计入 pool cap、
 由调用方所有的 provisional 物理拨号槽。detached AnyTLS 或 VLESS mux
-session 在 winner commit 前保持在可复用 pool 外。drop loser 会移除其
-受 generation 保护的槽，并同步关闭 attached session。
+session 在 winner commit 前保持在可复用 pool 外，commit 发布后才启动 janitor。
+drop loser 会取消物理拨号，移除受 generation 保护的槽与 `SID`，并同步关闭 attached session。
 
 QUIC candidate 构建 detached client。Loser 会被 force-close。Winner
 commit 仅在 generation 槽仍为空时发布其 client。如果普通流量已经填充

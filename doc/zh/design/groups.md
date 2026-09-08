@@ -27,6 +27,9 @@ facade 与内部实现按职责拆分：
 
 选择遵循一个不变量：完成解析和存活性过滤后，拨号路径只使用策略选出的结果。Selector 返回其有效手动选择，URLTest 返回当前胜者，LoadBalance 返回下一个成员，Fallback 返回固定成员。唯一的多候选例外是尚无测量值的顶层 URLTest 组；已有测量值的 URLTest 和所有非 URLTest 计划都是权威的单叶节点计划。若未配置 `final` 的组只有一个唯一叶节点，且 TCP 存活性过滤将其排除，该节点仍作为权威的最后尝试：健康状态仍是 dead，但真实拨号可以证明恢复，且不会泄漏到 `direct`。UDP 继续执行正常的存活性排除。Selector 的已配置选择或 `default` 因健康过滤回退到其他成员、以及全候选被过滤后的最后尝试服务，都会在真实选择路径上记录限流警告（每组每网络 60 秒）——面板仍显示已配置选择，因此这种偏离必须可见。
 
+失败后的重试竞速由 `connection.rs` 负责，组选择和其他路径不得追加并行竞速。
+预热 `peek` 不输出选择回退警告。
+
 ## 策略语义
 
 | 策略 | 运行时行为 |
@@ -40,6 +43,8 @@ facade 与内部实现按职责拆分：
 ### Score 评分与生命周期
 
 Score 首先运行与其他策略相同的存活性过滤。过滤所用的 health family 描述到代理服务器的连通性；单独携带的 target family 决定评分分桶。因此经 IPv4 到达的服务器仍可承载 IPv6 业务目标，而评分绝不会让已被判死的节点重新入选。健康过滤后的计划只包含一个权威叶节点；只有冷 URLTest 仍可按既有规则进行推测准备。
+
+单候选拨号失败后，`Score` 先记录失败，再对同一精确目标重新排名；只有选出不同的替代叶节点时才重试。
 
 精确键为 `(group, TCP/UDP, target IPv4/IPv6, normalized target, NodeId)`。domain 会转为 ASCII 小写、去掉一个末尾点并保留端口；IP 目标保留 socket address。第二个有界的 `(group, TCP/UDP, optional target family, NodeId)` 聚合层为冷目标提供先验，并接收无目标预热样本。精确目标、target-family 和全局聚合层按衰减后的有效证据分层混合：精确证据增多时逐渐覆盖聚合证据，老化后又逐渐让出权重。递归选择携带同一 target context，并把叶节点结果归因到路径上的每个 Score 组。
 
@@ -83,7 +88,7 @@ Score 首先运行与其他策略相同的存活性过滤。过滤所用的 heal
 
 真实流量也会直接回馈排名（仅 TCP）。每个节点为自身的新鲜拨号延迟维护一个自引用 EMA（α=1/8，前 3 次拨号为预热期）；命中就绪连接池的拨号不产生网络往返，不计入。连续 3 次拨号慢于 `max(min(2×EMA, EMA+500 ms), 250 ms)` 会记一次失败 strike 并触发紧急探测；250 ms 下限避免快节点现任的正常负载抖动（如 60→120 ms）误触发判定。探测移动平均不受影响；误报（目标分布变化而非节点劣化）会自愈——紧急探测成功后，连续探测成功会清除 strike。渐进式劣化仍由探测周期负责；UDP 劣化保持探测周期加 `DataUdp` 流量阈值的处理方式。
 
-当权威单候选拨号失败时，该流量恰好重试一次：对 URLTest 按延迟排序的前 3 个候选发起 race——若刚记录的 strike 改变了首选则现任被替换，否则现任与备选一同重赛，单次瞬时失败不留 strike、不应让流量硬失败。非 URLTest 计划（Selector 固定、Fallback 固定）与单叶结果不产生重试候选，直接失败。
+URLTest 的权威单候选拨号失败时，该流量恰好重试一次：对 URLTest 按延迟排序的前 3 个候选发起 race——若刚记录的 strike 改变了首选则现任被替换，否则现任与备选一同重赛，单次瞬时失败不留 strike、不应让流量硬失败。`Selector`、`Fallback` 固定计划与单叶结果不产生重试候选，直接失败。
 
 组的 `check_url` 会建立独立的 TCP-only 存活性和延迟状态，键为 `(member tag, check_url)`。失败只会从使用该目标的组中排除该成员。Selector 组忽略 `check_url` 并打印告警。URLTest 在超过 `idle_timeout` 后暂停探测；未设置时使用健康层默认的 30 分钟，下一次真实选择会立即唤醒探测。
 
@@ -92,6 +97,9 @@ Score 首先运行与其他策略相同的存活性过滤。过滤所用的 heal
 `Group.groups` 指定子组。每个子组只贡献一个候选：该子组自己的策略针对当前网络和地址族选出的叶节点。父组把它作为一个成员进行排名或固定，而不是把所有后代合并进父策略。
 
 解析受 `MAX_GROUP_DEPTH = 8` 和每次遍历的 visited set 限制。构造阶段还会对组边执行 DFS，并切断每条闭环边，同时打印告警。这些检查可防止异常组图卡住选择或内省。
+
+父 `Selector` 先 `peek` 所有子组，再以 `commit_selector_pick` 只提交实际服务的选择。
+未选中的 `Score` 状态不得因其他流量改变；旧选择失效或死亡后的回退也在实际服务时提交。
 
 即使物理拨号落到更深的叶节点，身份仍然是成员 tag：
 
@@ -103,6 +111,8 @@ Score 首先运行与其他策略相同的存活性过滤。过滤所用的 heal
 | `selection_chain` | 从组经已选子组到叶节点的当前链 |
 
 自定义 URL 探测会在每个周期重新解析 `delay_test_members`。子组通过其当前选择接受探测，但结果记录在子组 tag 下。因此父组把子组视为一个稳定成员，符合 sing-box RealTag 语义。
+
+组表和 `(member tag, check_url)` 状态仍按名称索引：组没有 `NodeId`，成员也可能是子组。
 
 ## 冷启动 URLTest UDP 准备
 
@@ -128,13 +138,23 @@ Score 首先运行与其他策略相同的存活性过滤。过滤所用的 heal
 | 探测路径 | 行为 |
 | --- | --- |
 | TCP | 通过节点向 `tcp_check_url` 发送已配置 HTTP 方法；不适用 HTTP 探测时执行裸 TCP 连接。冷的可复用节点会先在临时 runtime 中建立 session/client；setup 不计时，随后只有完成的 HTTP 交换才把暖路径 RTT 记录到匹配的 TCP 地址族状态。setup 与目标交换失败都会更新活性/冷却，但不贡献延迟或排名 strike。 |
-| UDP 健康 | 通过节点自己的 `dial_udp_transport`，向第一个 `udp_check_dns` 目标发送一个最小 DNS 查询。成功记录实测 RTT，并把 `DnsUdp` 与 `DataUdp` 都标记为存活；失败分别给两个 UDP 域增加一次探测失败——除非同周期的独立 Score QUIC 握手成功，此时只有 `DnsUdp` 记录失败，`DataUdp` 由握手成功标记为存活（被封的 `:53` 检查目标不能判死一条正常的 UDP 数据通路）。它从不修改 TCP 状态。 |
+| UDP 健康 | 通过节点自己的 `dial_udp_transport`，向第一个 `udp_check_dns` 目标发送一个最小 DNS 查询。成功记录实测 RTT，并把 `DnsUdp` 与 `DataUdp` 都标记为存活；失败分别给两个 UDP 域增加一次探测失败——除非同周期的独立 Score QUIC 握手成功，此时只有 `DnsUdp` 记录失败，`DataUdp` 由握手成功标记为存活（被封的 `:53` 检查目标不能判死一条正常的 UDP 数据通路）。`TCP` 与 `UDP` 探测互不修改对方的状态。 |
 | Score QUIC 评分 | 通过新的 packet transport 为 Score 组中的每个节点单独执行一次 ALPN 为 `h3` 的真实 TLS-in-QUIC 握手，目标为第一个 HTTPS `tcp_check_url`，无论 DNS 探测成败都会运行。成功或失败会更新精确 `DataUdp` 分数与聚合先验，不奖励未观测的 byte volume；当 DNS 探测失败而握手成功时，还会按上表所述复活 `DataUdp` 活性。 |
 | 按组 URL | 用与全局 TCP 探测相同的临时暖路径计时，探测动态解析出的 `(member tag, current leaf)` 对。状态为 TCP-only，连续三次失败即死亡，并使用相同冷却与连续两次成功恢复。重载时 `sync_group_check_urls` 替换有效的组/URL 注册表。 |
+
+`TCP`/`UDP` 探测仅在 `NodeRuntime::is_warm_or_stateless` 时复用 generation 状态；
+否则使用带 guard 的临时 runtime，并在结束后关闭。
+
+周期 `HTTP` 探测先发不计时的 `HEAD`，再以配置方法计时请求；服务端提前关闭连接时，
+采用首轮交换耗时。Clash delay 不计代理拨号、目标 `TLS` 与首轮请求，仅测第二次请求；
+失败或超时则采用首轮耗时。两者均以状态码 `200–499` 为健康。
+Clash delay 的每个阶段各自享有完整的请求 timeout；失败计入拨号连败。
 
 `has_udp_state` 区分从未观察过 UDP 的节点与已明确观察为死亡的节点。已建立 endpoint 的终止性发送/接收错误，以及从未收到回包时的回包空闲到期，会上报 `DataUdp` 流量失败。单包拥塞、已有回包后的空闲到期、主动 endpoint 退役、节点死亡取消和进程关闭不影响健康状态。
 
 alive→dead 转换会调用控制面死亡回调，清除该节点的池连接与 UDP endpoint，避免新流量取得陈旧的可复用对象。
+若一个 `UDP` 域死亡时另一个 `UDP` 域仍明确存活，则跳过死亡回调，
+防止 `:53` 探测失败清除仍可用的连接与 endpoint。
 
 每个节点最近一次真实 TCP 延迟样本每 60 秒写入 `cache.db`；启动时只恢复不超过 24 小时的样本。存活性从不由缓存恢复。合成 10 秒占位样本带有标记，不显示在历史中，不进入移动平均，也不会作为最近真实样本持久化；选择降级由失败 strike 计数承担，与占位样本无关。
 
@@ -170,9 +190,11 @@ Selector 与 UDP 所有权是可复用节点 runtime 上相互独立的 bit。�
 
 ## 拨号准入预算
 
-`max_concurrent_dials` 默认为 64，并为物理代理连接和协议握手创建 generation-local semaphore。配置值会被启动时计算出的不可变进程级描述符 gate 限制。重载可以改变替代 generation 的本地上限，但重叠的新旧 generation 仍共享同一个进程 gate。
+`max_concurrent_dials` 默认为 64，并为物理出站连接和协议握手创建 generation-local semaphore。配置值会被启动时计算出的不可变进程级描述符 gate 限制。重载可以改变替代 generation 的本地上限，但重叠的新旧 generation 仍共享同一个进程 gate。
 
-Ready 池命中、已热 generation transport 上打开的逻辑流，以及内置 `direct`/`block` 拨号不占额度。裸 TCP 池命中仍需执行协议握手，因此仍受拨号预算准入。
+Ready 池命中和已热 generation transport 上打开的逻辑流不占额度。裸 TCP 池命中仍需执行协议握手，因此仍受拨号预算准入。
+
+用户态 `direct` 同样经过 `admit_physical_dial`，仍占额度；只有未进入用户态的直连流量才避开拨号准入。`block` 不执行拨号。
 
 ## 相关文档
 

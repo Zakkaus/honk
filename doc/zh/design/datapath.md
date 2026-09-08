@@ -75,6 +75,8 @@ flowchart LR
 
 TC 入口点是接受 `*mut __sk_buff` 的原始 `#[unsafe(no_mangle)] #[unsafe(link_section = "classifier")]` 函数。它们不用 Aya 的 `#[tc]` 宏，因为该宏的结构化参数形状在 7.0 及更高版本内核上触发 verifier 拒绝。程序主体返回 `Verdict = Result<c_long, c_long>`：`Ok` 表示正常路径，`Err` 表示提前退出，但两者都携带真实的 `TC_ACT_*` 值，`flatten` 把任一变体归约为内核的 `i32` verdict。内部 sentinel 值不是 TC verdict。
 
+`crates/honk-ebpf/src/sk.rs` 的套接字查找 helper 必须释放隐式引用。TC 使用 `sk_assign_by_index`；Aya 的 `SockMap::redirect_sk_lookup` 仅接受 `SkLookupContext`，不能直接用于 TC。
+
 ## Map 清单
 
 | Map | 形状与职责 |
@@ -85,14 +87,14 @@ TC 入口点是接受 `*mut __sk_buff` 的原始 `#[unsafe(no_mangle)] #[unsafe(
 | `ROUTING_MAP` | 256 项数组：两个各含 128 个 `MatchSet` 规则的 bank。用户空间在切换 generation 前填满 inactive bank。 |
 | `ROUTING_META_MAP` | 35 项数组，包含 active generation selector，以及每个 generation 的规则数和四个流量组 bitmap。selector 是提交点。 |
 | `ROUTING_GROUP_META_MAP` | 八个紧凑条目：两个 generation × TCP4/TCP6/UDP4/UDP6；每项包含规则数和 128-bit bitmap。 |
-| `DEST_LPM_ROUTING_MAP`, `SOURCE_LPM_ROUTING_MAP`, `MAC_LPM_ROUTING_MAP` | LPM trie，每个上限 65,536 项，分别匹配目的 CIDR、源 CIDR 和 MAC 前缀。 |
-| `DOMAIN_ROUTING_MAP` | 不预分配的 65,536 项 IP 到域名规则 bitmap hash，由 DNS 结果填充。 |
+| `DEST_LPM_ROUTING_MAP`, `SOURCE_LPM_ROUTING_MAP`, `MAC_LPM_ROUTING_MAP` | LPM trie，每个上限 65,536 项，分别匹配目的 CIDR、源 CIDR 和 MAC 前缀；value 同时保留两个路由 generation。 |
+| `DOMAIN_ROUTING_MAP` | 不预分配的 65,536 项 IP 到域名规则 bitmap hash，由 DNS 结果填充；bitmap 按 generation 划分。 |
 | `OUTBOUND_CONNECTIVITY_MAP` | 1,536 项数组。每个出站有六个存活槽，覆盖 TCP/UDP 类别与 IPv4/IPv6；缺失槽按存活处理。 |
 | `OUTBOUND_STATS` | 直接以出站编号为索引的 256 项 per-CPU 数组。每个 32-byte 值紧凑保存 `tx_packets`、`tx_bytes`、`rx_packets`、`rx_bytes`；当前 ABI 不使用 `outbound * 4 + counter` 索引。 |
 | `LISTEN_SOCKET_MAP` | 16 槽 `SockMap`；key `0..=9` 保存两个 TCP 和八个 UDP 透明监听器。 |
 | `DATAPATH_STATE_MAP` | 单槽准入数组。零值不改动地放行流量；非零值启用分类与重定向。 |
 | `DATAPATH_FLAGS_MAP` | 单槽运行时策略字：Rule/Direct 卸载属性、`global.nfqueue_enable` 及 NFQUEUE ready 栅栏。新流分类读取它；已建立流的 direct 卸载使用缓存元数据。 |
-| `COOKIE_PID_MAP` | 不预分配的 65,536 项套接字 cookie 到 PID/可执行文件 basename 的 hash，用于 `pname` 路由和识别控制平面；verifier 允许时内核通过 BTF 偏移读取 argv[0]，否则由 cgroup hook 同步记录线程 `comm`。 |
+| `COOKIE_PID_MAP` | 不预分配的 65,536 项套接字 cookie 到 PID/可执行文件 basename 的 hash，用于 `pname` 路由和识别控制平面。`pname` 保留 `argv[0]` 可执行文件 basename 的前 `15` 字节；内核通过 BTF 偏移读取，不可用或读取失败时由 cgroup hook 同步记录线程 `comm`。 |
 | `CONN_STATE_OCCUPANCY` | 两槽 per-CPU 累计插入/eBPF 删除计数；结合用户空间删除计数估算占用率。 |
 | `BPF_STATS_MAP` | 五个计数器：UDP/TCP conn-state overflow，以及 redirect、handoff 和 cookie map 插入失败。 |
 | `EVENT_RINGBUF` | 262,144-byte ring buffer，承载固定布局的 blocked、conntrack overflow 和 UDP token exhausted 事件。 |
@@ -102,6 +104,8 @@ TC 入口点是接受 `*mut __sk_buff` 的原始 `#[unsafe(no_mangle)] #[unsafe(
 | `UDP_DECISION_RETIRE_FENCE` | NFQUEUE retirement 使用的 65,536 项 tuple fence map；见 [NFQUEUE](./nfqueue.md)。 |
 
 内核/用户空间共用的 map key 和 value 是 `#[repr(C)]` ABI。共享流结构中的 IPv4 地址都以网络字节序的 IPv4-mapped IPv6 值保存。
+
+`ROUTING_MAP` 的单 bank 上限对应 `MAX_MATCH_SET_LEN = 128`；共享的 `RoutingGroupMeta { rule_count, bitmap[4] }` 布局由编译期断言约束。
 
 ## Mark 及其所有权
 
@@ -134,6 +138,8 @@ LAN TCP 和 UDP 的目的端口为 `53` 时跳过路由循环，直接进入控�
 - IPv6 `ff00::/8`。
 
 这使 DHCP、mDNS、SSDP、LLMNR 等链路流量不进入代理。内部链路地址空间为 `169.254.0.0/16` 和 `fd00:686f:6e6b::/64`。当任一端点位于这些范围时，控制平面 UDP 准入拒绝初始化代理；引擎自身的交付路径由 `dae0`/`dae0peer` 挂钩处理。
+
+`lan_egress` 只抑制本机生成的 `ICMPv6 Redirect`，必须在遍历扩展头后读取解析器定位的 `ICMPv6` 头；转发的 `Redirect` 和其他 `ICMPv6` 仍放行。
 
 ### 出站存活状态
 

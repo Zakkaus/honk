@@ -1,6 +1,6 @@
 # 架构概览
 
-`honk` 是面向网关与本机流量的 Linux eBPF 透明代理引擎；本页概述其架构及承载运行时的关键规则。项目当前为实验性 alpha `v0.0.1-alpha`，采用 `GPL-3.0-only` 许可证，仓库为 `Glassyiris/honk`。
+`honk` 是面向网关与本机流量的 Linux eBPF 透明代理引擎；本页概述其架构及承载运行时的关键规则。项目当前为实验性 alpha `v0.0.1-alpha`，采用 `GPL-3.0-only` 许可证，仓库为 `daeuniverse/honk`。
 
 其配置语法和 TC 数据路径源自 dae 技术脉络，并在文档声明的范围内保持 dae 兼容；出站 Handler、组与 Clash API 则采用 sing-box 风格的设计。`honk` 是独立实现，现已与两者显著分化。
 
@@ -50,6 +50,12 @@ flowchart LR
 
 共享 map 键、值、常量或布局的修改必须同步落到 `honk-ebpf-common`、`honk-ebpf` 和 `honk-core` 的 map 写入逻辑。
 
+`honk-config` 的 `from_file` 按扩展名选择解析器：`.json`、`.yaml`、`.toml` 只在三种兼容格式间回退，不尝试 dae；其他或无扩展名先解析 dae，再尝试 `TOML` → `YAML` → `JSON`。dae 仍是唯一有文档支持的格式。`include` 以入口文件目录为基准，不能越过其规范化目录边界，重复文件和循环均被拒绝。
+
+`Node::from_share_link` 统一解析分享链接，先应用协议、`TLS` 和传输选项，再校验并派生身份。`VLESS` 的 `encryption=` 和 `vless_mode` 必须在身份派生前规范化；省略模式保留 `legacy` 行为和 ID。有歧义、冲突或不受支持的第三方复用及数据包模式会被拒绝，不猜测其含义。
+
+标准 `VLESS` 链接默认启用 `TLS`，显式 `security=` 可覆盖；编码形式的 `Shadowrocket` 链接未给出安全选项时默认明文。启用的 `Clash` `smux`/`multiplex` 块必须以 `protocol: h2mux` 或显式 `padding` 布尔值消除歧义。默认节点名不得暴露凭据；链式链接只解析第一跳。
+
 ## 高层数据路径
 
 ```mermaid
@@ -73,13 +79,13 @@ flowchart TB
 ### 报文路径
 
 1. [数据路径](./datapath.md)在 LAN TC 分类 LAN 转发流量，并在 WAN TC 分类本机发起的 TCP/UDP。`direct(must)` 与路由时已安全的 direct 决策留在 Linux 原生路径；仍需用户态处理的决策不会卸载。
-2. [DNS 路径](./dns.md)让 TCP 和 UDP 目的端口 `53` 进入快速路径，跳过通用匹配循环并重定向到控制面。
+2. [DNS 路径](./dns.md)让 TCP 和 UDP 目的端口 `53` 进入快速路径，跳过通用匹配循环并重定向到控制面。透明入口、`dns.bind` 和流关联查询共用 `DnsController`/`DnsForwarder`；只有透明入口提供 `original_dst`。
 3. [数据路径](./datapath.md)将普通 proxy 和用户态决策经 `dae0` 重定向；在 `daens` 内，`sk_lookup` 将其指派给[控制面](./control-plane.md)的透明 TCP 或 UDP 监听器。
 4. [NFQUEUE 暂存](./nfqueue.md)默认由 `global.nfqueue_enable` 开启，但只有启动前置条件通过时才激活；它仅在 LAN TC 之后、conntrack/NAT 之前保留仍有歧义的 LAN 转发 UDP。每个暂存流在固定队列 `320` 中携带唯一决策 token；本机发起的 WAN 流量继续走普通透明路径。
 5. [控制面](./control-plane.md)恢复原始目的地址并消费 eBPF 路由 handoff。handoff 缺失或结果为 `ControlPlaneRouting` 时进入用户态路由。
 6. [路由路径](./routing.md)可嗅探 TLS SNI、HTTP Host 或 QUIC Initial SNI，并在内核结果尚未终结时运行用户态 `Router`。
-7. [组层](./groups.md)应用 Clash 模式覆盖但不改写最终 `must`/`block` 结果，再将权威组策略选择解析为叶节点。显式选择 Score 时，它只在健康合格成员中按目标的 TCP/UDP 与目标地址族 transport-quality 评分排名；服务特定的语义解锁应由 routing 或 geosite 选择专用 Score 组表达。省略策略仍使用 Selector。
-8. [出站层](./outbound.md)拨号该叶节点，并中继 TCP 或数据报。嗅探得到的 TCP 字节先于后续流量转发。
+7. [组层](./groups.md)应用 Clash 模式覆盖但不改写最终 `must`/`block` 结果，再将权威组策略选择解析为叶节点。显式选择 Score 时，它只在健康合格成员中按目标的 TCP/UDP 与目标地址族 transport-quality 评分排名；服务特定的语义解锁应由 routing 或 geosite 选择专用 Score 组表达。省略策略仍使用 Selector。只有冷启动的顶层 `URLTest` 会错开启动多个候选，且仅胜者绑定 `PacketTransport` 驱动；其他选择通常只使用一个权威叶节点。
+8. [出站层](./outbound.md)拨号该叶节点，并中继 TCP 或数据报。嗅探得到的 TCP 字节先于后续流量转发；中继必须遵守 `src/relay/` 的空闲 `DRAIN_DEADLINE`。
 9. 控制面出口携带 `DAE_BYPASS_MARK`（`0x100`），避免再次被 WAN TC 拦截。代理 UDP 与透明 53 端口回包使用绑定原始目的地址的 [anyfrom 套接字](./control-plane.md)，使[返回数据路径](./datapath.md)保持源地址。
 
 ## 运行时不变量

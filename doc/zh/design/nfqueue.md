@@ -128,6 +128,8 @@ Retirement 以 `BPF_NOEXIST` 插入 `UDP_DECISION_RETIRE_FENCE[tuple] = token`�
 
 启用 API 后，`GET /stats` 会公开 `udp.nfqueue`（文档中的 dotted path `/stats.udp.nfqueue`）：listener/correlator 计数、actor 深度/字节数/最老 age、内核队列/drop/read 状态、held/peak guard 与实际接收缓冲区、终态 verdict 和 token 计数、verdict 错误，以及从收包到 verdict 成功的延迟。字段清单见 [API 参考](../reference/api.md)。
 
+`QueueStats` 的队列深度只反映当前实例，丢包数则跨 `hard rebind` 在进程内累计。
+
 `EVENT_RINGBUF` 会发送受速率限制的 `udp_decision_token_exhausted` 警告，作为即时耗尽提示。恢复不依赖这个有损通道：supervisor 会定期锁定读取 `UDP_DECISION_SEQUENCE`，即使事件丢失也能发现耗尽；该 backstop 失败为 fatal。
 
 ## 相关文档
