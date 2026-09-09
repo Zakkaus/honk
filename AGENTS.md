@@ -12,7 +12,7 @@ Re-read it when a conversation grows long or context is trimmed: a rule read onc
 - `honk-config` provides shared types/parsers for original dae `{ section { ... } }`, the primary and only documented config syntax.
 - Status: **experimental alpha** (`v0.0.1-alpha`). Expect breaking changes.
 - License: **GPL-3.0-only**. Repository: <https://github.com/daeuniverse/honk>
-- Docs: `README.md` / `README_CN.md` (bilingual overview, feature checklist, TODO list); matching `doc/en/` / `doc/zh/` trees under `doc/`, indexed by bilingual `doc/README.md`. Each has `configuration.md`, `design/` (overview/datapath/routing/nfqueue/control-plane/dns/outbound/groups), `reference/` (global/nodes/groups/routing/dns/subscription/experimental/api/cli), and `operations/` runbooks. Lab benchmark tooling, evidence, and bilingual docs live only on `bench`.
+- Docs: `README.md` / `README.zh.md` (bilingual overview, feature checklist, TODO list); matching `doc/en/` / `doc/zh/` trees under `doc/`, indexed by bilingual `doc/README.md`. Each has `configuration.md`, `design/` (overview/datapath/routing/nfqueue/control-plane/dns/outbound/groups), `reference/` (global/nodes/groups/routing/dns/subscription/experimental/api/cli), and `operations/` runbooks. Lab benchmark tooling, evidence, and bilingual docs live only on `bench`.
 
 ## Repository layout
 
@@ -20,7 +20,7 @@ Re-read it when a conversation grows long or context is trimmed: a rule read onc
 .
 ├── Cargo.toml / Cargo.lock   # Workspace manifest (release + release-musl profiles)
 ├── Justfile                  # Day-to-day dev tasks (build, test, run, debug via clash API, cleanup)
-├── README.md / README_CN.md  # Bilingual project overview
+├── README.md / README.zh.md  # Bilingual project overview
 ├── AGENTS.md                 # This file
 ├── LICENSE                   # GPL-3.0-only
 ├── config.dae                # Full-featured example config (production-leaning)
@@ -240,7 +240,7 @@ JA4 was verified on .70 with `/usr/local/bin/ja4probe` (`ja4probe`, source
 - **A check that could not run did not pass.** If a gate is missing, errors, or produces no output, say so; empty output reads exactly like a clean run.
 - Stop before touching an area `CONTRIBUTING.md` reserves, before anything leaves the machine, and before discarding work someone else may want; otherwise continue.
 - Match the surrounding file's idioms; make minimal, scoped changes (no opportunistic cleanups).
-- Documentation language: code comments and `doc/en/` docs are English; user docs are bilingual (`README_CN.md`, `doc/zh/`) — update both when you change documented behavior.
+- Documentation language: code comments and `doc/en/` docs are English; user docs are bilingual (`README.zh.md`, `doc/zh/`) — update both when you change documented behavior.
 
 ## Testing instructions
 
