@@ -592,7 +592,26 @@ fn unquote_filter_argument(value: &str) -> &str {
     value
 }
 
-fn split_entry_tag(line: &str) -> (Option<&str>, &str) {
+fn split_entry_tag(mut line: &str) -> (Option<&str>, &str) {
+    let bytes = line.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\'' | b'"' => {
+                if let Some(end) = quoted_end(bytes, index) {
+                    index = end;
+                    continue;
+                }
+            }
+            b'#' if index == 0 || matches!(bytes[index - 1], b' ' | b'\t') => {
+                line = line[..index].trim_end();
+                break;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+
     if line.starts_with(['\'', '"']) {
         if let Some(end) = quoted_end(line.as_bytes(), 0)
             && let Some(value) = line[end..].trim_start().strip_prefix(':')
@@ -1114,15 +1133,45 @@ fn parse_subscription_value(value: &str) -> (String, Option<String>) {
     let value = value.trim();
     if matches!(value.as_bytes().first().copied(), Some(b'\'' | b'"'))
         && let Some(end) = quoted_end(value.as_bytes(), 0)
-        && let Some(ua) = value[end..]
-            .trim()
+    {
+        let mut remainder = value[end..].trim();
+        if remainder.is_empty() || remainder.starts_with('#') {
+            return (value[1..end - 1].to_string(), None);
+        }
+        if remainder.starts_with('(') {
+            let bytes = remainder.as_bytes();
+            let mut depth = 0;
+            let mut index = 0;
+            while index < bytes.len() {
+                match bytes[index] {
+                    b'\'' | b'"' => {
+                        if let Some(end) = quoted_end(bytes, index) {
+                            index = end;
+                            continue;
+                        }
+                    }
+                    b'(' => depth += 1,
+                    b')' if depth > 0 => {
+                        depth -= 1;
+                        if depth == 0 && bytes.get(index + 1) == Some(&b'#') {
+                            remainder = &remainder[..index + 1];
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                index += 1;
+            }
+        }
+        if let Some(ua) = remainder
             .strip_prefix('(')
             .and_then(|ua| ua.strip_suffix(')'))
-    {
-        return (
-            value[1..end - 1].to_string(),
-            Some(unquote_filter_argument(ua).to_string()),
-        );
+        {
+            return (
+                value[1..end - 1].to_string(),
+                Some(unquote_filter_argument(ua).to_string()),
+            );
+        }
     }
     (unquote_filter_argument(value).to_string(), None)
 }

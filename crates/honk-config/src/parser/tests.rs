@@ -647,6 +647,180 @@ group {
     }
 
     #[test]
+    fn test_entry_comment_tagless_file_subscription() {
+        let config = parse_dae_config(
+            "subscription {\n 'file://relative/path/to/mysub.sub' # Put subscription content in /etc/dae/relative/path/to/mysub.sub\n}",
+        )
+        .unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(
+            config.subscriptions[0].url,
+            "file://relative/path/to/mysub.sub"
+        );
+        assert_eq!(config.subscriptions[0].name, "relative");
+        assert_eq!(config.subscriptions[0].user_agent, None);
+    }
+
+    #[test]
+    fn test_entry_comment_tagged_subscription() {
+        let config = parse_dae_config("subscription {\n tag: 'https://h/p' # c\n}").unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "tag");
+        assert_eq!(config.subscriptions[0].url, "https://h/p");
+        assert_eq!(config.subscriptions[0].user_agent, None);
+    }
+
+    #[test]
+    fn test_entry_comment_quoted_subscription_glued_user_agent() {
+        let config = parse_dae_config(
+            "subscription {\n sub: 'http://sub'(honk/1.0 like)#xxxx\n other: 'http://other'(agent)# note\n}",
+        )
+        .unwrap();
+        assert_eq!(
+            config
+                .subscriptions
+                .iter()
+                .map(|sub| (
+                    sub.name.as_str(),
+                    sub.url.as_str(),
+                    sub.user_agent.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("sub", "http://sub", Some("honk/1.0 like")),
+                ("other", "http://other", Some("agent")),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_entry_comment_quoted_subscription_glued_url() {
+        let config = parse_dae_config("subscription {\n tag: 'http://q'#c\n}").unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "tag");
+        assert_eq!(config.subscriptions[0].url, "http://q");
+        assert_eq!(config.subscriptions[0].user_agent, None);
+    }
+
+    #[test]
+    fn test_entry_comment_quoted_subscription_parentheses_in_comment() {
+        let config = parse_dae_config("subscription {\n tag: 'http://q'(ua)#c(x)\n}").unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "tag");
+        assert_eq!(config.subscriptions[0].url, "http://q");
+        assert_eq!(config.subscriptions[0].user_agent.as_deref(), Some("ua"));
+    }
+
+    #[test]
+    fn test_entry_comment_quoted_subscription_hash_in_user_agent() {
+        let config =
+            parse_dae_config("subscription {\n tag: 'http://q'(agent#build)#c\n}").unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "tag");
+        assert_eq!(config.subscriptions[0].url, "http://q");
+        assert_eq!(
+            config.subscriptions[0].user_agent.as_deref(),
+            Some("agent#build")
+        );
+    }
+
+    #[test]
+    fn test_entry_comment_quoted_subscription_empty_user_agent() {
+        let config = parse_dae_config("subscription {\n tag: 'http://q'()#c\n}").unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "tag");
+        assert_eq!(config.subscriptions[0].url, "http://q");
+        assert_eq!(config.subscriptions[0].user_agent.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn test_entry_comment_quoted_subscription_remainder_controls() {
+        for (value, url, user_agent) in [
+            ("'http://q'(agent) junk", "'http://q'(agent) junk", None),
+            ("'http://q'(agent", "'http://q'(agent", None),
+            ("'http://q'(ua)(x)", "http://q", Some("ua)(x")),
+            (
+                "'http://q'('agent)#build')",
+                "http://q",
+                Some("agent)#build"),
+            ),
+        ] {
+            let config = parse_dae_config(&format!("subscription {{\n tag: {value}\n}}")).unwrap();
+            assert_eq!(config.subscriptions.len(), 1, "{value}");
+            assert_eq!(config.subscriptions[0].name, "tag", "{value}");
+            assert_eq!(config.subscriptions[0].url, url, "{value}");
+            assert_eq!(
+                config.subscriptions[0].user_agent.as_deref(),
+                user_agent,
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_entry_comment_quoted_subscription_nested_parentheses() {
+        let config = parse_dae_config(
+            "subscription {\n tag: 'http://q'(Mozilla/5.0 (X11; (Linux)#build))\n}",
+        )
+        .unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "tag");
+        assert_eq!(config.subscriptions[0].url, "http://q");
+        assert_eq!(
+            config.subscriptions[0].user_agent.as_deref(),
+            Some("Mozilla/5.0 (X11; (Linux)#build)")
+        );
+    }
+
+    #[test]
+    fn test_entry_comment_node_glued_hash_controls() {
+        let config = parse_dae_config(
+            "node {\n 'ss://YWVzLTI1Ni1nY206cGFzcw==@1.2.3.4:8388#hk1'#note\n ss://YWVzLTI1Ni1nY206cGFzcw==@1.2.3.4:8388#hk2#note\n}",
+        )
+        .unwrap();
+        assert_eq!(
+            config
+                .nodes
+                .iter()
+                .map(|node| (node.name.as_str(), node.host.as_str(), node.port))
+                .collect::<Vec<_>>(),
+            vec![("hk1", "1.2.3.4", 8388), ("hk2#note", "1.2.3.4", 8388)]
+        );
+    }
+
+    #[test]
+    fn test_entry_comment_bare_node_fragment() {
+        let config =
+            parse_dae_config("node {\n ss://YWVzLTI1Ni1nY206cGFzcw==@1.2.3.4:8388#hk1 # note\n}")
+                .unwrap();
+        assert_eq!(config.nodes.len(), 1);
+        assert_eq!(config.nodes[0].name, "hk1");
+        assert_eq!(config.nodes[0].host, "1.2.3.4");
+        assert_eq!(config.nodes[0].port, 8388);
+    }
+
+    #[test]
+    fn test_entry_comment_tagged_node() {
+        let config =
+            parse_dae_config("node {\n edge: 'socks5://127.0.0.1:1080' # note\n}").unwrap();
+        assert_eq!(config.nodes.len(), 1);
+        assert_eq!(config.nodes[0].name, "edge");
+        assert_eq!(config.nodes[0].host, "127.0.0.1");
+        assert_eq!(config.nodes[0].port, 1080);
+    }
+
+    #[test]
+    fn test_entry_comment_quoted_node_trailing_text() {
+        let config =
+            parse_dae_config("node {\n 'ss://YWVzLTI1Ni1nY206cGFzcw==@1.2.3.4:8388#hk1' # note\n}")
+                .unwrap();
+        assert_eq!(config.nodes.len(), 1);
+        assert_eq!(config.nodes[0].name, "hk1");
+        assert_eq!(config.nodes[0].host, "1.2.3.4");
+        assert_eq!(config.nodes[0].port, 8388);
+    }
+
+    #[test]
     fn test_entry_subscription_tagless_quoted() {
         let config =
             parse_dae_config("subscription {\n 'https://example.com/no_tag_link'\n}").unwrap();

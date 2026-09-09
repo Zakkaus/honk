@@ -27,6 +27,12 @@ A tagless entry uses its URL host as its name: `'https://example.com/sub'` becom
 
 Tagless text without `://` is ignored. Explicitly tagged entries still reach validation, which requires a non-empty name and an HTTP(S) URL. `file://`, `http-file://`, and `https-file://` remain unsupported.
 
+On entry lines, `#` starts a comment outside matching quotes at the start of the statement or immediately after an ASCII space or tab. In a bare URL, a glued `#` remains data, including after parentheses: `https://example.com/sub?filter=(hk)#token`. An unmatched quote is ordinary text. Quote a User-Agent containing a spaced `#`: `'https://example.com/sub'('agent # build')`; without UA quotes, the comment cuts off the suffix.
+
+After a quoted URL, `#` also starts a comment immediately after the closing quote or the `)` that brings the `(UA)` suffix's nesting depth back to zero: `'http://q'#c` and `'http://q'(ua)#c` keep URL `http://q`, with UA `ua` only in the second form. Parentheses inside matching quotes do not affect that depth. A glued `#` inside the suffix remains UA data, including in `(Mozilla/5.0 (X11; (Linux)#build))`. The existing first-`(`/last-`)` UA slice is unchanged: `(ua)(x)` gives `ua)(x`. Other trailing text, such as `(agent) junk`, keeps the whole value as the URL.
+
+This rule runs after block scanning. Unquoted braces in a trailing comment remain structural: `tag: 'https://h/p' # {` still causes an unclosed-block error. Keep such comments on separate lines. The block form's `url`, `ua`, and `interval` parsing is unchanged.
+
 ## Internal model
 
 | Field | Type | Default | Settable in dae | Meaning |

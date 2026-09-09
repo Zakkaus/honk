@@ -6,6 +6,8 @@
 
 Each non-comment line is one share link. Tags and links may be quoted or bare:
 
+Outside matching quotes, `#` starts a comment at the start of the statement or immediately after an ASCII space or tab. In a bare share link, a glued `#` remains data: `ss://…#hk1 # note` keeps the name `hk1`, while `ss://…#hk2#note` keeps `hk2#note`. An untagged quoted link takes only the quoted interior, so `'ss://…#hk1'#note` also keeps `hk1`. An unmatched quote is ordinary text. Block scanning still treats unquoted braces in trailing comments as structure; keep comments containing braces on separate lines.
+
 ```dae
 node {
     iris: 'socks5://10.10.10.1:2077'
