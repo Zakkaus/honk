@@ -119,7 +119,7 @@ cargo +nightly build --release -Zbuild-std=core --target bpfel-unknown-none
 
 | Recipe                                                                          | Purpose                                                                                                                                                                                                                                      |
 | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `build` / `check` / `lint` / `fmt`                                              | `cargo build --release` / `check` / `clippy --all -D warnings` / `fmt --all`                                                                                                                                                                 |
+| `build` / `check` / `lint` / `fmt` / `fmt-check`                                              | `cargo build --release` / `check` / `clippy --all --all-targets -- -D warnings` / `fmt --all` / `fmt --all -- --check`                                                                                                                                                                 |
 | `test-routing` | Root-gated compiled-policy check: builds the `routing-test` eBPF object and exercises the real object against independent goldens plus failed root-publication preservation (Linux 6.12+) |
 | `test` / `test-ci` / `test-core` / `test-config` / `test-ebpf`                  | Test suites (`test` = full workspace; `test-ci` = CI gate with the known legacy routing failure skipped; `test-ebpf` = honk-ebpf-common only)                                                                                                |
 | `test-netns`                                                                    | Depends on `test-routing`; root-gated real-kernel tests for production NFQUEUE/nftables IPv4+IPv6 held-verdict contract, eBPF netlink/netns roundtrips, link ownership/rebind lifecycle, and pinned allocator rollback compatibility (`--features ebpf --ignored`, serial) |
@@ -233,7 +233,7 @@ JA4 was verified on .70 with `/usr/local/bin/ja4probe` (`ja4probe`, source
 - Use `tracing` macros for logging; prefer structured fields (`info!(network = "tcp", outbound = %name, ...)`).
 - Use `tokio` async/await and `tokio::select!` for long-lived loops.
 - Kernel/userspace structs belong in `honk-ebpf-common`; follow its stable `#[repr(C)]` layout and coordinated `honk-ebpf`/`honk-core` map-writer change rules.
-- Follow `cargo fmt --all` and keep `cargo clippy --all -- -D warnings` clean.
+- Follow `cargo fmt --all` and keep `cargo clippy --all --all-targets -- -D warnings` clean.
 - **Claims need their line.** A consequence stated in a PR or an issue names the code producing it, or is narrowed until it can; say what you did not check. Line numbers come from `origin/main`, not your working tree.
 - **Read to the end of the path before describing a defect.** The trigger, the consequence, and the absence of a thing are each bounded by code you have not opened yet: the callee, the caller, the consumer that clamps the value, the search that would have settled it.
 - **Fix where the paths converge**, not where you first saw the failure: a guard on one loader leaves its siblings failing open.
