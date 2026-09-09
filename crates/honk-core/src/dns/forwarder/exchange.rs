@@ -179,6 +179,7 @@ impl DnsForwarder {
         mode: ResolveMode,
         flight_key: CacheKey,
         publication_epoch: PublicationEpoch,
+        refreshing: u64,
     ) {
         let ingress = flight_key.ingress();
         let crate::dns::singleflight::FlightRole::Leader(owner) =
@@ -196,7 +197,11 @@ impl DnsForwarder {
                 ingress,
                 true,
                 mode,
-                crate::dns::engine::pipeline::ResolveExecution::refresh(owner, publication_epoch),
+                crate::dns::engine::pipeline::ResolveExecution::refresh(
+                    owner,
+                    publication_epoch,
+                    refreshing,
+                ),
             )
             .await;
             if result.is_err() {
