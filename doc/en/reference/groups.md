@@ -88,6 +88,8 @@ For Clash compatibility, Score remains automatic but is represented as `type: "u
 4. Filter-derived membership is rebuilt after every subscription refresh. Stable node UUIDs therefore do not retain stale membership after their subscription provenance changes.
 5. A group with neither node filters nor nested groups receives all current nodes. A group with nested groups but no node filters receives only its nested candidates, not all nodes.
 
+A filter honk cannot parse is ignored and reported by its ordinal among the group's node filters, excluding `group(...)` entries.
+
 ## Nested groups
 
 Nested selection is depth-capped at 8. When the group manager builds the graph, it removes each cycle-closing edge and logs a warning; an unknown nested tag contributes no candidate. Each nested group contributes the single leaf selected by its own policy, so every dial ultimately resolves to one node.

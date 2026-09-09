@@ -444,7 +444,12 @@ pub fn parse_dae_config_with_diagnostics(
         }
     }
 
-    resolve_group_filters(&mut config.groups, &config.nodes, &config.subscriptions);
+    resolve_group_filters_inner(
+        &mut config.groups,
+        &config.nodes,
+        &config.subscriptions,
+        Some(diagnostics),
+    );
 
     Ok(config)
 }
@@ -459,6 +464,16 @@ pub fn parse_dae_config_with_diagnostics(
 /// `group('tag')` entries are not node filters — the dae parser routes them
 /// into `Group.groups` at parse time.
 pub fn resolve_group_filters(groups: &mut [Group], nodes: &[Node], subscriptions: &[Subscription]) {
+    // Runtime re-resolution: the filters were reported when the config was parsed.
+    resolve_group_filters_inner(groups, nodes, subscriptions, None);
+}
+
+fn resolve_group_filters_inner(
+    groups: &mut [Group],
+    nodes: &[Node],
+    subscriptions: &[Subscription],
+    mut diagnostics: Option<&mut Vec<ConfigDiagnostic>>,
+) {
     let mut subscription_tags: HashMap<uuid::Uuid, Vec<&str>> = HashMap::new();
     for subscription in subscriptions {
         subscription_tags
@@ -468,12 +483,13 @@ pub fn resolve_group_filters(groups: &mut [Group], nodes: &[Node], subscriptions
     }
 
     for group in groups {
-        let filters: Vec<&str> = group
+        let filters: Vec<(usize, &str)> = group
             .filters
             .iter()
-            .map(|filter| filter.trim())
+            .enumerate()
+            .map(|(index, filter)| (index, filter.trim()))
             // Unterminated group filters must not trigger the all-nodes fallback.
-            .filter(|filter| !filter.starts_with("group(") || !filter.contains(')'))
+            .filter(|(_, filter)| !filter.starts_with("group(") || !filter.contains(')'))
             .collect();
 
         if filters.is_empty() {
@@ -487,13 +503,26 @@ pub fn resolve_group_filters(groups: &mut [Group], nodes: &[Node], subscriptions
             continue;
         }
 
-        let filters: Vec<Vec<GroupFilterTerm>> = filters
-            .into_iter()
-            .filter_map(parse_group_filter_expression)
-            .collect();
+        let mut parsed_filters = Vec::new();
+        for (index, filter) in filters {
+            if let Some(parsed) = parse_group_filter_expression(filter) {
+                parsed_filters.push(parsed);
+            } else if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                diagnostics.push(ConfigDiagnostic {
+                    setting: format!("group.{}.filter", group.name),
+                    value: (index + 1).to_string(),
+                    message: if filter.starts_with("group(") {
+                        "group(...) is unterminated; ignored"
+                    } else {
+                        "honk could not parse this filter; ignored"
+                    }
+                    .to_string(),
+                });
+            }
+        }
         group.nodes.clear();
         for node in nodes {
-            if filters.iter().any(|filter| {
+            if parsed_filters.iter().any(|filter| {
                 filter
                     .iter()
                     .all(|term| term.matches(node, &subscription_tags))
