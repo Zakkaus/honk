@@ -1745,10 +1745,7 @@ dns {
 }
 "#;
     let config = parse_dae_config(input).unwrap();
-    assert!(matches!(
-        config.dns.strategy,
-        crate::dns::DnsStrategy::PreferIpv4
-    ));
+    assert!(matches!(config.dns.strategy, crate::dns::DnsStrategy::Both));
     assert!(!config.dns.cache.enabled);
     assert_eq!(config.dns.cache.ttl, 60);
     assert_eq!(config.dns.cache.max_size, 10000);
@@ -2101,15 +2098,12 @@ fn test_unparseable_ipversion_prefer_uses_the_fallback_and_returns_a_diagnostic(
         );
         assert_eq!(diagnostics[0].setting, "dns.ipversion_prefer");
         assert_eq!(diagnostics[0].value, value);
-        assert!(diagnostics[0].message.contains("prefer IPv4"));
-        assert!(matches!(
-            config.dns.strategy,
-            crate::dns::DnsStrategy::PreferIpv4
-        ));
+        assert!(diagnostics[0].message.contains("no preference"));
+        assert!(matches!(config.dns.strategy, crate::dns::DnsStrategy::Both));
     }
 
     for (value, expected) in [
-        ("0", crate::dns::DnsStrategy::PreferIpv4),
+        ("0", crate::dns::DnsStrategy::Both),
         ("+6", crate::dns::DnsStrategy::PreferIpv6),
         ("06", crate::dns::DnsStrategy::PreferIpv6),
     ] {

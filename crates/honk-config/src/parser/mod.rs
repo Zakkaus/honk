@@ -1399,9 +1399,11 @@ fn lenient_duration_ms(
 fn parse_ip_prefer(s: &str) -> Option<crate::dns::DnsStrategy> {
     use crate::dns::DnsStrategy;
     // dae `ipversion_prefer` is a *preference*, not an only-mode: 4/6 map to
-    // the prefer variants (other family still answered when it alone exists).
+    // the prefer variants (other family still answered when it alone exists),
+    // and 0 is dae's "no preference", the same as omitting the setting.
     match s.parse::<i32>() {
-        Ok(0 | 4) => Some(DnsStrategy::PreferIpv4),
+        Ok(0) => Some(DnsStrategy::Both),
+        Ok(4) => Some(DnsStrategy::PreferIpv4),
         Ok(6) => Some(DnsStrategy::PreferIpv6),
         _ => None,
     }

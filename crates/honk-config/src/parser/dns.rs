@@ -40,13 +40,13 @@ pub(super) fn parse_section(
     if let Some(v) = kv.get("ipversion_prefer") {
         cfg.strategy = lenient(
             parse_ip_prefer(v),
-            crate::dns::DnsStrategy::PreferIpv4,
+            crate::dns::DnsStrategy::Both,
             diagnostics,
             || {
                 ConfigDiagnostic {
                 setting: "dns.ipversion_prefer".to_string(),
                 value: v.to_string(),
-                message: "honk could not parse the preference as decimal 0, 4 or 6; using fallback prefer IPv4"
+                message: "honk could not parse the preference as decimal 0, 4 or 6; using fallback: no preference"
                     .to_string(),
             }
             },
