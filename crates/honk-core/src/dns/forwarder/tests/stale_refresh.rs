@@ -1,3 +1,5 @@
+use crate::dns::outcome::Provenance;
+
 #[tokio::test]
 async fn forwarding_hot_path_is_not_serialized_by_compatibility_cache_mutex() {
     let cache = test_cache();
@@ -29,7 +31,7 @@ impl DnsUpstreamPool for FailUpstream {
 
 /// Fill the cache with a 1-second-TTL answer, let it expire, then
 /// resolve through a failing upstream — the stale entry must be served
-/// (RFC 8767) with TTLs rewritten to SERVE_STALE_TTL_SECS.
+/// (RFC 8767) with TTLs rewritten to the configured stale reply TTL.
 #[tokio::test]
 async fn test_serve_stale_on_upstream_failure() {
     let response = make_a_response([93, 184, 216, 34], 1);
@@ -44,9 +46,66 @@ async fn test_serve_stale_on_upstream_failure() {
     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
 
     let fwd_fail = DnsForwarder::new(Arc::new(FailUpstream), cache, test_router());
+    let expected_ttl = fwd_fail.stale_reply_ttl;
     let stale = fwd_fail.resolve(&query).await.expect("stale served");
     assert!(stale.windows(4).any(|w| w == [93, 184, 216, 34]));
-    assert_eq!(extract_min_ttl(&stale), SERVE_STALE_TTL_SECS);
+    assert_eq!(extract_min_ttl(&stale), expected_ttl);
+}
+
+#[tokio::test]
+async fn serve_stale_with_configured_reply_ttl_updates_wire_and_outcome() {
+    let response = make_a_response([93, 184, 216, 34], 1);
+    let cache = test_cache();
+    let query = make_a_query();
+    let fwd_ok = DnsForwarder::new(
+        Arc::new(MockUpstream::new(response)),
+        cache.clone(),
+        test_router(),
+    );
+    fwd_ok.resolve(&query).await.expect("initial resolve");
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+
+    let fwd_fail =
+        DnsForwarder::new(Arc::new(FailUpstream), cache, test_router()).with_stale_reply_ttl(7);
+    let stale = fwd_fail
+        .resolve_outcome(&query)
+        .await
+        .expect("stale outcome");
+    assert_eq!(stale.provenance(), Provenance::Stale);
+    assert_eq!(extract_min_ttl(stale.rendered()), 7);
+    assert_eq!(stale.expiry().ttl(), Duration::from_secs(7));
+}
+
+#[tokio::test]
+async fn serve_stale_with_zero_reply_ttl_preserves_wire_and_outcome_expiry() {
+    let response = make_a_response([93, 184, 216, 34], 1);
+    let cache = test_cache();
+    let query = make_a_query();
+    let fwd_ok = DnsForwarder::new(
+        Arc::new(MockUpstream::new(response)),
+        cache.clone(),
+        test_router(),
+    );
+    fwd_ok.resolve(&query).await.expect("initial resolve");
+    let stored_ttl = {
+        let guard = cache.lock().await;
+        extract_min_ttl(&guard.positive_entries_for_test()[0].response)
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+
+    let fwd_fail =
+        DnsForwarder::new(Arc::new(FailUpstream), cache, test_router()).with_stale_reply_ttl(0);
+    let stale = fwd_fail
+        .resolve_outcome(&query)
+        .await
+        .expect("stale outcome");
+    assert_eq!(stale.provenance(), Provenance::Stale);
+    assert_ne!(stored_ttl, 30);
+    assert_eq!(extract_min_ttl(stale.rendered()), stored_ttl);
+    assert_eq!(
+        stale.expiry().ttl(),
+        Duration::from_secs(u64::from(extract_min_ttl(stale.rendered())))
+    );
 }
 
 /// A SERVFAIL answer must not shadow a recently-expired positive entry.

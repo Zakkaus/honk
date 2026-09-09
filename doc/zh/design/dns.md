@@ -162,7 +162,7 @@ wire 身份保留 flags、精确 question 编码、QCLASS 与 EDNS 内容。UDP 
 | 容量 | 最多 16 个 LRU 分片精确划分 `max_cache_size`。每个分片同时受条目数与保留的 key/response wire 字节限制。字节目标为每个配置条目 4 KiB，每分片至少 65,535 字节，全局上限 64 MiB。 |
 | 正缓存 TTL | `fixed_domain_ttl` 优先级最高；零表示该域名不缓存。否则，非零 `optimistic_cache_ttl` 覆盖应答最小 TTL。所选 TTL 也会写入缓存的 answer record。 |
 | 负缓存 TTL | NXDOMAIN 与 SERVFAIL 使用从 SOA 得出的负 TTL，缺省为 60 秒，随后钳制到 `1..=300` 秒。 |
-| Stale 处理 | 过期正应答在一小时内仍可用于 serve-stale。上游错误或 SERVFAIL 可返回该应答，并将 wire TTL 改为 30 秒。接近过期的命中会启动去重的 stale-while-revalidate refresh。 |
+| Stale 处理 | 过期正应答在一小时内仍可用于 serve-stale。上游交换失败或已接受的 SERVFAIL 可返回该应答。`optimistic_stale_reply_ttl` 默认为 30 秒；非零值替换每个非 OPT RR 的 TTL，并设置 outcome TTL。`0` 保留缓存中已按策略改写的 TTL，而不是权威 TTL；此时 outcome TTL 由该 wire 的 `extract_min_ttl` 得出，不存在正 TTL 时回退为 60 秒。接近过期的命中会启动去重的 stale-while-revalidate refresh。 |
 | Flush fence | publication epoch 防止 flush 前开始的前台或后台工作在 flush barrier 后重新填充内存或持久化。 |
 
 `store_dns` 启用持久化后，一个有界 actor 会将仍被保留的正缓存插入镜像到 SQLite。若条目因分片 wire 字节预算而立即被驱逐，则不会进入持久化队列。actor 将命令队列与 pending set 都限制为 4,096 项，批量写入并按 epoch 隔离；flush 会在接纳当前状态前丢弃更旧的排队 epoch。
