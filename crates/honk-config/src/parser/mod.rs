@@ -1081,10 +1081,29 @@ fn append_subscriptions(
 }
 
 fn parse_subscription_entry(line: &str) -> Option<Subscription> {
-    let (tag, value) = line.trim().split_once(':')?;
-    let (url, user_agent) = parse_subscription_value(value);
+    let (tag, value) = split_entry_tag(line.trim());
+    let (mut url, user_agent) = parse_subscription_value(value);
+    let name = if let Some(tag) = tag {
+        unquote_filter_argument(tag).to_string()
+    } else {
+        let tag_colon = url.find(':').filter(|&pos| !url[pos..].starts_with("://"));
+        let value = tag_colon.map_or(url.as_str(), |pos| &url[pos + 1..]);
+        if !value.contains("://") {
+            return None;
+        }
+        if let Some(pos) = tag_colon {
+            let name = url[..pos].to_string();
+            url.drain(..=pos);
+            name
+        } else {
+            url::Url::parse(&url)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_owned))
+                .unwrap_or_default()
+        }
+    };
     Some(Subscription {
-        name: unquote_filter_argument(tag).to_string(),
+        name,
         url,
         user_agent,
         ..Default::default()

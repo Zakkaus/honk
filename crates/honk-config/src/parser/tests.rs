@@ -647,6 +647,182 @@ group {
     }
 
     #[test]
+    fn test_entry_subscription_tagless_quoted() {
+        let config =
+            parse_dae_config("subscription {\n 'https://example.com/no_tag_link'\n}").unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "example.com");
+        assert_eq!(
+            config.subscriptions[0].url,
+            "https://example.com/no_tag_link"
+        );
+        assert_eq!(config.subscriptions[0].user_agent, None);
+    }
+
+    #[test]
+    fn test_entry_subscription_tagless_bare() {
+        let config =
+            parse_dae_config("subscription {\n https://example.net/sub?x=(1)#frag\n}").unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "example.net");
+        assert_eq!(
+            config.subscriptions[0].url,
+            "https://example.net/sub?x=(1)#frag"
+        );
+        assert_eq!(config.subscriptions[0].user_agent, None);
+    }
+
+    #[test]
+    fn test_entry_subscription_tagless_user_agent() {
+        let config =
+            parse_dae_config("subscription {\n 'https://example.org/sub'(provider/2.0)\n}")
+                .unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "example.org");
+        assert_eq!(config.subscriptions[0].url, "https://example.org/sub");
+        assert_eq!(
+            config.subscriptions[0].user_agent.as_deref(),
+            Some("provider/2.0")
+        );
+    }
+
+    #[test]
+    fn test_entry_subscription_tag_inside_literal() {
+        let config =
+            parse_dae_config("subscription {\n 'paid:https://example.com/sub'\n}").unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "paid");
+        assert_eq!(config.subscriptions[0].url, "https://example.com/sub");
+        assert_eq!(config.subscriptions[0].user_agent, None);
+    }
+
+    #[test]
+    fn test_entry_subscription_apostrophe_tag() {
+        let config =
+            parse_dae_config("subscription {\n edge': https://example.com/sub\n}").unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "edge'");
+        assert_eq!(config.subscriptions[0].url, "https://example.com/sub");
+        assert_eq!(config.subscriptions[0].user_agent, None);
+    }
+
+    #[test]
+    fn test_entry_subscription_escaped_quote_tag() {
+        let config = parse_dae_config(
+            r#"subscription {
+    "paid\"east": "https://example.com/sub"(provider/2.0)
+}"#,
+        )
+        .unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, r#"paid\"east"#);
+        assert_eq!(config.subscriptions[0].url, "https://example.com/sub");
+        assert_eq!(
+            config.subscriptions[0].user_agent.as_deref(),
+            Some("provider/2.0")
+        );
+    }
+
+    #[test]
+    fn test_entry_subscription_colliding_names_select_both_nodes() {
+        let mut config = parse_dae_config(
+            r#"subscription {
+    example.com: 'https://other.example/paid'
+    'https://example.com/free'
+}
+node {
+    paid: 'socks5://127.0.0.1:1080'
+    free: 'socks5://127.0.0.2:1080'
+}
+group {
+    proxy {
+        filter: subtag(example.com)
+    }
+}"#,
+        )
+        .unwrap();
+        assert_eq!(config.subscriptions.len(), 2);
+        assert_eq!(config.nodes.len(), 2);
+        config.nodes[0].subscription_id = Some(config.subscriptions[0].id);
+        config.nodes[1].subscription_id = Some(config.subscriptions[1].id);
+        crate::parser::resolve_group_filters(
+            &mut config.groups,
+            &config.nodes,
+            &config.subscriptions,
+        );
+        assert_eq!(
+            config.groups[0].nodes,
+            vec![config.nodes[0].id, config.nodes[1].id]
+        );
+        assert_eq!(
+            config
+                .subscriptions
+                .iter()
+                .map(|sub| (
+                    sub.name.as_str(),
+                    sub.url.as_str(),
+                    sub.user_agent.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("example.com", "https://other.example/paid", None),
+                ("example.com", "https://example.com/free", None),
+            ]
+        );
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn test_entry_subscription_hostless_validation() {
+        let config = parse_dae_config("subscription {\n 'https://:80/x'\n}").unwrap();
+        let crate::ConfigError::Validation(message) = config.validate().unwrap_err() else {
+            panic!("expected subscription validation error");
+        };
+        assert_eq!(message, "subscription name must not be empty");
+    }
+
+    #[test]
+    fn test_entry_subscription_hostless_name() {
+        let config = parse_dae_config("subscription {\n 'https://:80/x'\n}").unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "");
+        assert_eq!(config.subscriptions[0].url, "https://:80/x");
+        assert_eq!(config.subscriptions[0].user_agent, None);
+    }
+
+    #[test]
+    fn test_entry_subscription_spaced_tag() {
+        let config =
+            parse_dae_config("subscription {\n paid : https://example.com/sub\n}").unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "paid");
+        assert_eq!(config.subscriptions[0].url, "https://example.com/sub");
+        assert_eq!(config.subscriptions[0].user_agent, None);
+    }
+
+    #[test]
+    fn test_entry_subscription_tagged_invalid_url() {
+        let config = parse_dae_config("subscription {\n broken: not-a-url\n}").unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].name, "broken");
+        assert_eq!(config.subscriptions[0].url, "not-a-url");
+        assert_eq!(config.subscriptions[0].user_agent, None);
+        let crate::ConfigError::Validation(message) = config.validate().unwrap_err() else {
+            panic!("expected subscription validation error");
+        };
+        assert_eq!(
+            message,
+            "subscription 'broken' url must use http:// or https://"
+        );
+    }
+
+    #[test]
+    fn test_entry_subscription_tagless_garbage() {
+        let config = parse_dae_config("subscription {\n foo bar\n}").unwrap();
+        assert!(config.subscriptions.is_empty());
+    }
+
+    #[test]
     fn test_parse_subscriptions() {
         let input = r#"
 subscription {
