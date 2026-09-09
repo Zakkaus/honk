@@ -54,7 +54,7 @@ group {
 | `fallback` | `fallback` | Pins the first alive member in declaration order independently for TCP and UDP; recovery of an earlier member does not immediately fail back. |
 | `score` | `score` | Always compiled; when explicitly selected, automatically chooses one alive member from per-target reliability-first scores. TCP/UDP and the target's IPv4/IPv6 family are independent. |
 
-Policy matching is ASCII case-insensitive. The parser removes a parenthesized suffix when present before matching, which accepts `fixed(0)`. An unrecognized policy silently becomes `selector`. Legacy `honk` is invalid; use `score`.
+Policy matching is ASCII case-insensitive. The parser removes a parenthesized suffix when present before matching, which accepts `fixed(0)`. An unrecognized policy becomes `selector` and a diagnostic names the group. Legacy `honk` is invalid; use `score`.
 
 If a group has exactly one unique leaf, no `final`, and that leaf is excluded by TCP health, honk still dials the same leaf as a last resort. The node remains marked dead until real traffic or probes recover it; this never implies a `direct` fallback. UDP keeps normal dead-member exclusion. The last-resort serve and a health-filtered Selector choice/default falling back to another member each log a rate-limited warning (60s per group/network).
 
