@@ -2,6 +2,9 @@ mod dns;
 mod routing;
 
 #[cfg(test)]
+mod structure;
+
+#[cfg(test)]
 mod tests;
 
 use std::collections::{HashMap, HashSet};
