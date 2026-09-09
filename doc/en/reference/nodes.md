@@ -17,6 +17,8 @@ node {
 
 The current parser accepts both tagged and untagged entries. A non-empty dae tag replaces the link's `#fragment` name. An untagged link keeps its decoded fragment; without one, it receives the credential-free fallback `{scheme}-{host}`.
 
+In quoted tags and links, a backslash escapes the next character when locating the closing quote; the source escape is retained in the parsed text.
+
 A malformed recognized link is dropped with `node section: skipping unparseable entry: ...` on stderr. An unknown scheme is a hard configuration error. A standalone `mux:` or `mux=` line is also rejected; VLESS wire behavior belongs in each link's `vless_mode=` query.
 
 ## Node identity

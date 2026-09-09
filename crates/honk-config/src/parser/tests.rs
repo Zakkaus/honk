@@ -606,6 +606,47 @@ group {
     }
 
     #[test]
+    fn test_entry_node_escaped_quote_tag() {
+        let config = parse_dae_config(
+            r#"node {
+    'a\'b': 'socks5://127.0.0.1:1080'
+}"#,
+        )
+        .unwrap();
+        assert_eq!(config.nodes.len(), 1);
+        assert_eq!(config.nodes[0].name, r"a\'b");
+    }
+
+    #[test]
+    fn test_entry_node_escaped_quote_uri() {
+        let config = parse_dae_config(
+            r#"node {
+    'socks5://127.0.0.1:1080#left\':socks5://127.0.0.2:1081#right'
+}"#,
+        )
+        .unwrap();
+        assert_eq!(config.nodes.len(), 1);
+        assert_eq!(config.nodes[0].host, "127.0.0.1");
+        assert_eq!(config.nodes[0].port, 1080);
+        assert_eq!(
+            config.nodes[0].name,
+            r"left\':socks5://127.0.0.2:1081#right"
+        );
+    }
+
+    #[test]
+    fn test_entry_node_spaced_tag() {
+        let config = parse_dae_config("node {\n edge : 'socks5://127.0.0.1:1080'\n}").unwrap();
+        assert!(config.nodes.is_empty());
+        let config =
+            parse_dae_config("node {\n 'edge west': 'socks5://127.0.0.1:1080'\n}").unwrap();
+        assert_eq!(config.nodes.len(), 1);
+        assert_eq!(config.nodes[0].name, "edge west");
+        assert_eq!(config.nodes[0].host, "127.0.0.1");
+        assert_eq!(config.nodes[0].port, 1080);
+    }
+
+    #[test]
     fn test_parse_subscriptions() {
         let input = r#"
 subscription {

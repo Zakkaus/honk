@@ -592,6 +592,21 @@ fn unquote_filter_argument(value: &str) -> &str {
     value
 }
 
+fn split_entry_tag(line: &str) -> (Option<&str>, &str) {
+    if line.starts_with(['\'', '"']) {
+        if let Some(end) = quoted_end(line.as_bytes(), 0)
+            && let Some(value) = line[end..].trim_start().strip_prefix(':')
+        {
+            return (Some(&line[..end]), value.trim());
+        }
+    } else if let Some(pos) = line.find(':')
+        && !line[pos..].starts_with("://")
+    {
+        return (Some(&line[..pos]), line[pos + 1..].trim());
+    }
+    (None, line)
+}
+
 fn parse_kv_pair(line: &str) -> Option<(&str, &str)> {
     let trimmed = strip_unquoted_comment(line.trim()).trim();
     let (key, value) = trimmed.split_once(':')?;
@@ -878,31 +893,21 @@ fn parse_node_section(section: &Block) -> Result<Vec<Node>, crate::ConfigError> 
             ));
         }
         let unquote = |s: &str| s.trim().trim_matches(|c| c == '\'' || c == '"').to_string();
-        // Shapes: `tag: 'uri'` | `'tag': 'uri'` | `'uri'` | bare `scheme://uri`.
-        // The first colon only splits tag/uri when it sits outside any quotes
-        // and is not the URI scheme separator (`://`).
-        let (tag, uri) = if trimmed.starts_with(['\'', '"']) {
-            let q = trimmed.as_bytes()[0] as char;
-            match trimmed[1..].find(q) {
-                Some(rel) => {
-                    let close = 1 + rel;
-                    let after = trimmed[close + 1..].trim_start();
-                    if let Some(rest) = after.strip_prefix(':') {
-                        (trimmed[1..close].to_string(), unquote(rest))
-                    } else {
-                        (String::new(), trimmed[1..close].to_string())
-                    }
-                }
-                None => (String::new(), unquote(trimmed)),
+        let (tag, value) = split_entry_tag(trimmed);
+        let (tag, uri) = match tag {
+            Some(tag) if tag.starts_with(['\'', '"']) => {
+                (tag[1..tag.len() - 1].to_string(), unquote(value))
             }
-        } else if let Some(pos) = trimmed.find(':') {
-            if trimmed[pos..].starts_with("://") || trimmed[..pos].contains(char::is_whitespace) {
-                (String::new(), trimmed.to_string())
-            } else {
-                (unquote(&trimmed[..pos]), unquote(&trimmed[pos + 1..]))
-            }
-        } else {
-            (String::new(), unquote(trimmed))
+            Some(tag) if tag.contains(char::is_whitespace) => (String::new(), trimmed.to_string()),
+            Some(tag) => (unquote(tag), unquote(value)),
+            None if value.starts_with(['\'', '"']) => (
+                String::new(),
+                quoted_end(value.as_bytes(), 0)
+                    .map(|end| value[1..end - 1].to_string())
+                    .unwrap_or_else(|| unquote(value)),
+            ),
+            None if value.contains(':') => (String::new(), value.to_string()),
+            None => (String::new(), unquote(value)),
         };
         match Node::from_share_link(&uri) {
             Ok(mut node) => {
