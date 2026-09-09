@@ -1,6 +1,6 @@
 use super::{
-    Block, extract_fn_args, lenient, lenient_bool, normalize_geosite_code, parse_ip_prefer,
-    parse_kv_pair, parse_kv_pairs, strip_tag_arg,
+    Block, extract_fn_args, find_unquoted, lenient, lenient_bool, normalize_geosite_code,
+    parse_ip_prefer, parse_kv_pair, parse_kv_pairs, split_unquoted, strip_tag_arg,
 };
 use crate::ConfigDiagnostic;
 use crate::dns::DnsConfig;
@@ -298,6 +298,21 @@ fn parse_fixed_domain_ttl<'a>(
     map
 }
 
+fn strip_dns_routing_comment(line: &str) -> &str {
+    let line = line.trim();
+    // DNS gives // precedence and tests only the first unquoted # for a preceding space.
+    if let Some(pos) = find_unquoted(line, "//") {
+        &line[..pos]
+    } else if let Some(pos) = find_unquoted(line, "#")
+        && pos > 0
+        && line.as_bytes()[pos - 1] == b' '
+    {
+        &line[..pos]
+    } else {
+        line
+    }
+}
+
 /// Parse `routing.request { ... }` block.
 fn parse_dns_request_routing<'a>(
     lines: impl IntoIterator<Item = &'a str>,
@@ -305,15 +320,7 @@ fn parse_dns_request_routing<'a>(
     let mut routing = crate::dns::DnsRequestRouting::default();
 
     for line in lines {
-        let mut trimmed = line.trim();
-        if let Some(pos) = trimmed.find("//") {
-            trimmed = trimmed[..pos].trim();
-        } else if let Some(pos) = trimmed.find('#') {
-            // Only strip # if preceded by space (to avoid stripping domain # itself)
-            if pos > 0 && trimmed.as_bytes()[pos - 1] == b' ' {
-                trimmed = trimmed[..pos].trim();
-            }
-        }
+        let trimmed = strip_dns_routing_comment(line).trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -324,7 +331,7 @@ fn parse_dns_request_routing<'a>(
             continue;
         }
 
-        if let Some(arrow_pos) = trimmed.find("->") {
+        if let Some(arrow_pos) = find_unquoted(trimmed, "->") {
             let left = trimmed[..arrow_pos].trim();
             let right = trimmed[arrow_pos + 2..].trim();
             let action = crate::dns::DnsRequestAction::parse(right);
@@ -348,15 +355,7 @@ fn parse_dns_response_routing<'a>(
     let mut routing = crate::dns::DnsResponseRouting::default();
 
     for line in lines {
-        let mut trimmed = line.trim();
-        if let Some(pos) = trimmed.find("//") {
-            trimmed = trimmed[..pos].trim();
-        } else if let Some(pos) = trimmed.find('#')
-            && pos > 0
-            && trimmed.as_bytes()[pos - 1] == b' '
-        {
-            trimmed = trimmed[..pos].trim();
-        }
+        let trimmed = strip_dns_routing_comment(line).trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -367,7 +366,7 @@ fn parse_dns_response_routing<'a>(
             continue;
         }
 
-        if let Some(arrow_pos) = trimmed.find("->") {
+        if let Some(arrow_pos) = find_unquoted(trimmed, "->") {
             let left = trimmed[..arrow_pos].trim();
             let right = trimmed[arrow_pos + 2..].trim();
             let action = crate::dns::DnsResponseAction::parse(right);
@@ -387,9 +386,8 @@ fn parse_dns_response_routing<'a>(
 /// Parse a chain of `&&`-separated conditions.
 fn parse_dns_conditions(expr: &str, is_response: bool) -> Vec<crate::dns::DnsCond> {
     let mut conds = Vec::new();
-    let parts: Vec<&str> = expr.split("&&").map(|s| s.trim()).collect();
 
-    for part in parts {
+    for part in split_unquoted(expr, "&&") {
         let part = part.trim();
         if part.is_empty() {
             continue;
@@ -409,7 +407,8 @@ fn parse_dns_conditions(expr: &str, is_response: bool) -> Vec<crate::dns::DnsCon
         if let Some(args) = extract_fn_args(inner, "qtype") {
             let types: Vec<u16> = args
                 .iter()
-                .filter_map(|a| crate::dns::parse_qtype_token(a))
+                .flat_map(|argument| argument.split(','))
+                .filter_map(crate::dns::parse_qtype_token)
                 .collect();
             conds.push(crate::dns::DnsCond::Qtype { not, types });
             continue;

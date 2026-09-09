@@ -419,7 +419,9 @@ fn resolve_group_filters_inner(
             .enumerate()
             .map(|(index, filter)| (index, filter.trim()))
             // Unterminated group filters must not trigger the all-nodes fallback.
-            .filter(|(_, filter)| !filter.starts_with("group(") || !filter.contains(')'))
+            .filter(|(_, filter)| {
+                !filter.starts_with("group(") || find_unquoted(filter, ")").is_none()
+            })
             .collect();
 
         if filters.is_empty() {
@@ -489,7 +491,7 @@ impl GroupFilterTerm {
 
 fn parse_group_filter_expression(filter: &str) -> Option<Vec<GroupFilterTerm>> {
     let mut terms = Vec::new();
-    for raw_term in filter.split("&&") {
+    for raw_term in split_unquoted(filter, "&&") {
         let raw_term = raw_term.trim();
         let (negated, predicate) = match raw_term.strip_prefix('!') {
             Some(predicate) => (true, predicate.trim()),
@@ -800,26 +802,51 @@ fn parse_global_section(
     Ok(cfg)
 }
 
+fn find_unquoted(input: &str, delimiter: &str) -> Option<usize> {
+    let bytes = input.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if matches!(bytes[index], b'\'' | b'"') {
+            index = quoted_end(bytes, index)?;
+        } else if bytes[index..].starts_with(delimiter.as_bytes()) {
+            return Some(index);
+        } else {
+            index += 1;
+        }
+    }
+    None
+}
+
+fn split_unquoted<'a>(input: &'a str, delimiter: &'a str) -> impl Iterator<Item = &'a str> {
+    let mut remaining = Some(input);
+    std::iter::from_fn(move || {
+        let input = remaining.take()?;
+        if let Some(index) = find_unquoted(input, delimiter) {
+            remaining = Some(&input[index + delimiter.len()..]);
+            Some(&input[..index])
+        } else {
+            Some(input)
+        }
+    })
+}
+
 fn extract_fn_args(expr: &str, fn_name: &str) -> Option<Vec<String>> {
-    let args = expr
-        .strip_prefix(fn_name)?
-        .strip_prefix('(')?
-        .split_once(')')?
-        .0;
+    let body = expr.strip_prefix(fn_name)?.strip_prefix('(')?;
+    let args = &body[..find_unquoted(body, ")")?];
     Some(
-        args.split(',')
-            .map(str::trim)
-            .map(|arg| arg.trim_matches(['\'', '"']))
+        split_unquoted(args, ",")
+            .map(unquote_filter_argument)
             .filter(|arg| !arg.is_empty())
             .map(str::to_owned)
             .collect(),
     )
 }
 
-/// Strip a `prefix:` marker from a route argument and trim surrounding
-/// whitespace.  Dae syntax allows spaces after the colon (`geosite: cn`).
+/// Strip a `prefix:` marker from a route argument.  Dae syntax allows spaces
+/// after the colon (`geosite: cn`), and the value may carry its own quotes.
 fn strip_tag_arg(arg: &str, prefix: &str) -> Option<String> {
-    arg.strip_prefix(prefix).map(|s| s.trim().to_string())
+    arg.strip_prefix(prefix)
+        .map(|value| unquote_filter_argument(value).to_string())
 }
 
 /// Normalize a geosite list name.
@@ -934,11 +961,10 @@ fn parse_group_section(
                 .split_once(':')
                 .map(|(_, v)| strip_unquoted_comment(v.trim()).trim())
                 .unwrap_or("");
-            // separated by commas or pipes: `group('hk', 'jp')`, `group('hk|jp')`.
             if let Some(tags) = extract_fn_args(val, "group") {
                 for tag in tags
                     .iter()
-                    .flat_map(|t| t.split('|').map(str::trim))
+                    .flat_map(|t| t.split(['|', ',']).map(str::trim))
                     .map(str::to_string)
                 {
                     if !tag.is_empty() && !group.groups.contains(&tag) {
