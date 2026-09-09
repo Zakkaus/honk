@@ -204,7 +204,7 @@ only the ignored root NFQUEUE test proves real nftables/queue/verdict semantics,
 not the unprivileged suite. Deployment A/B needs real eBPF/netns/upstreams and the
 `bench` lab harness. Production BoringSSL versus test rustls: Technology stack.
 
-`routing::tests::test_geosite_*` needs `/etc/dae/geosite.dat` and `geoip.dat`.
+`routing::tests::test_geosite_*` need `geosite.dat`/`geoip.dat`. Both tests call `use_repo_geo_assets()`, which points `DAE_LOCATION_ASSET` at the checkout root, so files at the top of the checkout are the quickest local setup; otherwise the loader falls through the documented geo asset search order, which is how CI's `/etc/dae` install works, and the tests fail for a reason unrelated to the change under test.
 Unset `HTTP_PROXY`/`HTTPS_PROXY` so reqwest does not proxy Clash UI loopback fetches.
 Install boring-sys prerequisites (Technology stack) and its REALITY-hooks checkout
 at pinned `/root/code/boring-rprx/boring-sys`. Cross-build with `ci/zig*`, not containers.
