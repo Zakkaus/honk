@@ -1,12 +1,14 @@
-use super::{Section, extract_fn_args, normalize_geosite_code, strip_tag_arg};
+use super::{Block, extract_fn_args, normalize_geosite_code, strip_tag_arg};
 use crate::routing::RoutingConfig;
 
-fn split_routing_statements(body: &str) -> Result<Vec<String>, crate::ConfigError> {
+fn split_routing_statements<'a>(
+    lines: impl IntoIterator<Item = &'a str>,
+) -> Result<Vec<String>, crate::ConfigError> {
     let mut statements = Vec::new();
     let mut current = String::new();
     let mut parenthesis_depth = 0usize;
 
-    for (line_index, line) in body.lines().enumerate() {
+    for (line_index, line) in lines.into_iter().enumerate() {
         let mut chunk = String::new();
         let mut quote = None;
         let mut escaped = false;
@@ -110,8 +112,8 @@ fn parse_routing_rule(
     Some((rule, is_complex.then_some(statement)))
 }
 
-pub(super) fn parse_section(section: &Section) -> Result<RoutingConfig, crate::ConfigError> {
-    split_routing_statements(&section.body).map(|statements| {
+pub(super) fn parse_section(section: &Block) -> Result<RoutingConfig, crate::ConfigError> {
+    split_routing_statements(section.lines_except(&[])).map(|statements| {
         statements
             .into_iter()
             .fold(RoutingConfig::default(), |mut config, statement| {

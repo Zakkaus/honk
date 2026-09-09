@@ -5,7 +5,8 @@ use crate::{ConfigDiagnostic, ConfigError};
 
 fn scanned(input: &str) -> Vec<Block> {
     let mut diagnostics = Vec::new();
-    let blocks = scan(input, None, &mut diagnostics).expect("scanner input should be valid");
+    let blocks =
+        scan(input, None, &mut diagnostics, &mut false).expect("scanner input should be valid");
     assert!(
         diagnostics.is_empty(),
         "valid scanner input emitted diagnostics: {diagnostics:?}"
@@ -15,13 +16,15 @@ fn scanned(input: &str) -> Vec<Block> {
 
 fn scanned_with_diagnostics(input: &str) -> (Vec<Block>, Vec<ConfigDiagnostic>) {
     let mut diagnostics = Vec::new();
-    let blocks = scan(input, None, &mut diagnostics).expect("scanner input should be valid");
+    let blocks =
+        scan(input, None, &mut diagnostics, &mut false).expect("scanner input should be valid");
     (blocks, diagnostics)
 }
 
 fn parse_error(input: &str, source: Option<&Path>) -> String {
     let mut diagnostics = Vec::new();
-    let error = scan(input, source, &mut diagnostics).expect_err("scanner input should fail");
+    let error =
+        scan(input, source, &mut diagnostics, &mut false).expect_err("scanner input should fail");
     match error {
         ConfigError::Parse(message) => message,
         other => panic!("unexpected scanner error: {other:?}"),
@@ -225,6 +228,7 @@ fn unclosed_include_uses_include_error_when_source_is_known() {
         "include {\n proxy.dae\n",
         Some(Path::new("/tmp/settings.dae")),
         &mut diagnostics,
+        &mut false,
     )
     .expect_err("unclosed include should fail");
     assert_eq!(
@@ -422,6 +426,7 @@ fn include_quotes_do_not_recover_as_ordinary_characters() {
         "include { 'unterminated.dae }",
         Some(Path::new("entry.dae")),
         &mut Vec::new(),
+        &mut false,
     )
     .unwrap_err();
     assert!(matches!(error, ConfigError::Include(message)

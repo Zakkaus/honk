@@ -50,6 +50,22 @@ impl Block {
             Item::Statement(_, _) => None,
         })
     }
+
+    pub fn blocks_matching<'a>(&'a self, recognised: &[&str]) -> Vec<&'a Block> {
+        let mut blocks = Vec::new();
+        self.append_matching(recognised, &mut blocks);
+        blocks
+    }
+
+    fn append_matching<'a>(&'a self, recognised: &[&str], blocks: &mut Vec<&'a Block>) {
+        for block in self.blocks_any() {
+            if recognised.contains(&block.name.as_str()) {
+                blocks.push(block);
+            } else {
+                block.append_matching(recognised, blocks);
+            }
+        }
+    }
 }
 
 /// Scan dae's brace structure without interpreting settings or expressions.
@@ -57,16 +73,20 @@ impl Block {
 /// `source` is used only for the include-specific error wording.  Includes are
 /// bounded and retained as raw blocks, but their path patterns are deliberately
 /// left to the include reader in the next parser layer.
+/// `saw_include` remains set on errors so file loading preserves include error mapping.
 pub fn scan(
     input: &str,
     source: Option<&Path>,
     diagnostics: &mut Vec<ConfigDiagnostic>,
+    saw_include: &mut bool,
 ) -> Result<Vec<Block>, ConfigError> {
     let lines = Line::all(input);
     let mut scanner = Scanner::default();
     let mut position = (0, 0);
     while position.0 < lines.len() {
-        position = scanner.process_line(input, &lines, position, source, diagnostics)?;
+        let next = scanner.process_line(input, &lines, position, source, diagnostics);
+        *saw_include |= scanner.saw_include;
+        position = next?;
     }
 
     if let Some(frame) = scanner.frames.last() {
@@ -120,6 +140,7 @@ struct Scanner {
     frames: Vec<Block>,
     braces: Vec<Brace>,
     pending_include: Option<usize>,
+    saw_include: bool,
 }
 
 #[derive(Debug)]
@@ -196,6 +217,7 @@ impl Scanner {
         header_line: usize,
         source: Option<&Path>,
     ) -> Result<(usize, usize), ConfigError> {
+        self.saw_include = true;
         let open = lines[line_index].start + brace;
         let body_start = open + 1;
         let close = find_include_close(input, body_start);
@@ -398,15 +420,15 @@ fn named_opener(
 
 fn include_candidate(text: &str, cursor: usize) -> Option<IncludeCandidate> {
     let bytes = text.as_bytes();
-    let mut start = cursor;
-    while start < bytes.len() && bytes[start].is_ascii_whitespace() {
-        start += 1;
-    }
+    let start = text.len() - text[cursor..].trim_start().len();
     if !text[start..].starts_with("include") {
         return None;
     }
     let mut index = start + "include".len();
-    if index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'{' {
+    if index < bytes.len()
+        && !bytes[index].is_ascii_whitespace()
+        && !matches!(bytes[index], b'{' | b'#')
+    {
         return None;
     }
     while index < bytes.len() && bytes[index].is_ascii_whitespace() {
