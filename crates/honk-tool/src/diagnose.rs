@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use clap::Args;
+use tokio::time::Duration;
 
 #[derive(Args)]
 pub struct DiagnoseArgs {
@@ -15,6 +16,9 @@ pub struct DiagnoseArgs {
     /// Clash API base URL to probe (empty = skip API checks).
     #[arg(long, default_value = "http://127.0.0.1:9090")]
     pub api: String,
+    /// Clash API Bearer token (overrides HONK_API_SECRET).
+    #[arg(long, env = "HONK_API_SECRET", hide_env_values = true)]
+    pub secret: Option<String>,
     /// Expected TPROXY mark (hex, no 0x).
     #[arg(long, default_value_t = 0x0800_0000)]
     pub tproxy_mark: u32,
@@ -75,7 +79,7 @@ pub async fn run(args: DiagnoseArgs) -> anyhow::Result<()> {
 
     if !args.api.is_empty() {
         let url = format!("{}/version", args.api.trim_end_matches('/'));
-        match reqwest_get(&url).await {
+        match http_get(&url, args.secret.as_deref()).await {
             Ok(body) => println!("[ok] clash API {}: {}", args.api, body.trim()),
             Err(e) => {
                 println!("[FAIL] clash API {}: {}", args.api, e);
@@ -84,14 +88,10 @@ pub async fn run(args: DiagnoseArgs) -> anyhow::Result<()> {
         }
     }
 
-    println!(
-        "\n{}",
-        if issues == 0 {
-            "diagnose: all checks passed".to_string()
-        } else {
-            format!("diagnose: {issues} issue(s) found")
-        }
-    );
+    if issues > 0 {
+        anyhow::bail!("diagnose: {issues} issue(s) found");
+    }
+    println!("\ndiagnose: all checks passed");
     Ok(())
 }
 
@@ -125,23 +125,52 @@ fn run_cmd(cmd: &str, args: &[&str]) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-/// Minimal GET helper (avoids pulling reqwest into the tool for one call).
-async fn reqwest_get(url: &str) -> anyhow::Result<String> {
-    let rest = url
-        .strip_prefix("http://")
-        .ok_or_else(|| anyhow::anyhow!("only http:// API URLs are supported"))?;
-    let (host, path) = match rest.find('/') {
-        Some(i) => (&rest[..i], &rest[i..]),
-        None => (rest, "/"),
+async fn http_get(url: &str, secret: Option<&str>) -> anyhow::Result<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?;
+    let mut request = client.get(url);
+    if let Some(secret) = secret {
+        request = request.bearer_auth(secret);
+    }
+    let report_error = |error: reqwest::Error| -> anyhow::Error {
+        if error.is_timeout() {
+            anyhow::anyhow!("timed out after 5s")
+        } else {
+            error.into()
+        }
     };
-    let stream = tokio::net::TcpStream::connect(host).await?;
-    let (mut reader, mut writer) = tokio::io::split(stream);
-    tokio::io::AsyncWriteExt::write_all(
-        &mut writer,
-        format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").as_bytes(),
-    )
-    .await?;
-    let mut buf = String::new();
-    tokio::io::AsyncReadExt::read_to_string(&mut reader, &mut buf).await?;
-    Ok(buf)
+    let response = request.send().await.map_err(report_error)?;
+    let status = response.status();
+    anyhow::ensure!(
+        status.is_success(),
+        "{} {}",
+        status.as_str(),
+        status.canonical_reason().unwrap_or_default()
+    );
+    response.text().await.map_err(report_error)
+}
+
+#[cfg(test)]
+mod http_tests {
+    use std::time::Duration;
+
+    #[tokio::test(start_paused = true)]
+    async fn silent_api_times_out() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/version", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+
+        let result =
+            tokio::time::timeout(Duration::from_secs(10), super::http_get(&url, None)).await;
+        server.abort();
+
+        assert_eq!(
+            result.expect("API check hung").unwrap_err().to_string(),
+            "timed out after 5s"
+        );
+    }
 }

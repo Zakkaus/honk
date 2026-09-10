@@ -97,8 +97,13 @@ honk-tool bpf stats [--pin-root PATH]
 ### `diagnose` — 一键体检
 
 ```bash
-honk-tool diagnose [--api http://127.0.0.1:9090] [--pin-root PATH] [--tproxy-mark 0x8000000]
+honk-tool diagnose [--api http://127.0.0.1:9090] [--secret TOKEN] [--pin-root PATH] [--tproxy-mark 0x8000000]
 ```
+
+`--api` 支持 `http://` 和 `https://`。
+Clash API 启用认证时，可传入 `--secret TOKEN` 或设置 `HONK_API_SECRET`。
+命令行参数优先；令牌通过 `Authorization: Bearer` 发送。
+`--secret` 会出现在进程列表中，因此建议使用 `HONK_API_SECRET`；无论使用哪种方式，令牌都会通过 `http://` 明文发送。
 
 只读检查，逐项打印 `[ok]` / `[FAIL]`:
 
@@ -108,9 +113,13 @@ honk-tool diagnose [--api http://127.0.0.1:9090] [--pin-root PATH] [--tproxy-mar
 4. 必需的 pin map 存在（`CONN_STATE_MAP`、`REDIRECT_TRACK`、
    `ROUTING_HANDOFF_MAP`、`CONN_STATE_OCCUPANCY`);
 5. conntrack 水位/溢出计数可读；
-6. clash API 可达（`/version`)。
+6. clash API 返回 2xx 状态码（`/version`），打印响应正文；
+   非 2xx 状态码则打印 `[FAIL]` 和状态文本。
+   整个请求的超时为五秒，包括读取响应正文，超时打印
+   `[FAIL] clash API <api>: timed out after 5s`。
 
-末尾输出 `all checks passed` 或 `N issue(s) found`。
+全部通过时，标准输出打印 `diagnose: all checks passed`，退出状态为 `0`。
+存在失败检查时，退出状态为 `1`，标准错误只输出一次汇总信息 `diagnose: N issue(s) found`。
 
 ## 设计说明
 

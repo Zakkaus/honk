@@ -1632,6 +1632,7 @@ dependencies = [
  "honk-ebpf-common",
  "honk-outbound",
  "libc",
+ "reqwest",
  "tempfile",
  "tokio",
  "tracing-subscriber",

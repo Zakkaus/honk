@@ -54,6 +54,7 @@ A real-datapath process holds the lock for its lifetime. `reload` verifies that 
 | Variable | Scope | Current behavior |
 | --- | --- | --- |
 | `RUST_LOG` | Both binaries | Tracing filter. It has the effective `honk-core` precedence described above; `honk-tool` otherwise defaults to `warn`. |
+| `HONK_API_SECRET` | `honk-tool diagnose` | Clash API Bearer token; `--secret` takes precedence. |
 | `HONK_UI_DOWNLOAD_URL` | `honk-core` with `clash-api` | Highest-precedence dashboard ZIP URL; overrides `external_ui_download_url` when a configured external-UI directory needs downloading. |
 | `HONK_POOL_DISABLE=1` | `honk-core` | Bypasses both ready-stream and bare-TCP pools and performs fresh dials. The code also accepts case-insensitive `true`; the value is cached on first use. |
 | `HONK_QUIC_GSO=0|1` | QUIC outbounds | Forces UDP GSO off/on. Without an override, the conservative 1252-byte MTU keeps GSO off, while an explicit larger `mtu` enables batches capped at 16 segments. |
@@ -170,16 +171,19 @@ The implementation opens pins with raw `bpf(2)` operations; it does not use aya,
 ### `diagnose`
 
 ```text
-honk-tool diagnose [--api URL] [--pin-root PATH] [--tproxy-mark VALUE]
+honk-tool diagnose [--api URL] [--secret TOKEN] [--pin-root PATH] [--tproxy-mark VALUE]
 ```
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--api URL` | `http://127.0.0.1:9090` | Plain-HTTP Clash API base URL. An empty value skips the API check; the built-in client does not support HTTPS. |
+| `--api URL` | `http://127.0.0.1:9090` | Clash API base URL; accepts `http://` and `https://`. An empty value skips the API check. |
+| `--secret TOKEN` | `HONK_API_SECRET`, if set | Bearer token for the Clash API. The flag overrides the environment variable. |
 | `--pin-root PATH` | `/sys/fs/bpf` | Root used for pinned-map presence and statistics reads. |
 | `--tproxy-mark VALUE` | `134217728` (`0x08000000`) | Expected fwmark in the `daens` policy rule. |
 
-The check is read-only. It looks for an engine process (`honk-core`, `honk`, or `dae`), `/var/run/netns/daens`, `/sys/class/net/dae0`, the fwmark rule inside `daens`, required pinned maps, readable occupancy/overflow statistics, and `<api>/version` reachability. It ends with exactly `diagnose: all checks passed` or `diagnose: N issue(s) found`. Detected failed checks are summarized but do not by themselves change the process exit status.
+The check is read-only. It looks for an engine process (`honk-core`, `honk`, or `dae`), `/var/run/netns/daens`, `/sys/class/net/dae0`, the fwmark rule inside `daens`, required pinned maps, readable occupancy/overflow statistics, and a successful HTTP response from `<api>/version`. The API check prints `[ok]` with the body for a 2xx status or `[FAIL]` with the status text for a non-2xx status. The request has a five-second timeout, including reading the body; expiry prints `[FAIL] clash API <api>: timed out after 5s`. Failed checks cause exit status `1` and a single error message on standard error, `diagnose: N issue(s) found`; all checks passing prints `diagnose: all checks passed` on standard output and exits `0`.
+
+`--secret` is visible in the process list, so prefer `HONK_API_SECRET`; either way, the token is sent in cleartext over `http://`.
 
 ### `geosite` and `geoip`
 

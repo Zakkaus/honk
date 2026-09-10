@@ -54,6 +54,7 @@ CLI 与 Clash API 共用构建时版本号：发布构建使用 GitHub tag 名�
 | 变量 | 作用范围 | 当前行为 |
 | --- | --- | --- |
 | `RUST_LOG` | 两个二进制 | Tracing filter。对 `honk-core` 采用上述当前有效优先级；`honk-tool` 在未设置时默认 `warn`。 |
+| `HONK_API_SECRET` | `honk-tool diagnose` | Clash API 的 Bearer 令牌；`--secret` 优先。 |
 | `HONK_UI_DOWNLOAD_URL` | 启用 `clash-api` 的 `honk-core` | dashboard ZIP URL 的最高优先级覆盖；已配置的外部 UI 目录需要下载时，它会覆盖 `external_ui_download_url`。 |
 | `HONK_POOL_DISABLE=1` | `honk-core` | 绕过 Ready stream 与裸 TCP 两类池，每次全新拨号。代码也接受不区分大小写的 `true`；首次使用后缓存该值。 |
 | `HONK_QUIC_GSO=0|1` | QUIC 出站 | 强制关闭/开启 UDP GSO。未覆盖时，保守的 1252-byte MTU 保持关闭；显式设置更大的 `mtu` 时自动开启，并把批量限制为最多 16 个 segment。 |
@@ -170,16 +171,19 @@ honk-tool bpf stats [--pin-root PATH]
 ### `diagnose`
 
 ```text
-honk-tool diagnose [--api URL] [--pin-root PATH] [--tproxy-mark VALUE]
+honk-tool diagnose [--api URL] [--secret TOKEN] [--pin-root PATH] [--tproxy-mark VALUE]
 ```
 
 | 参数 | 默认值 | 含义 |
 | --- | --- | --- |
-| `--api URL` | `http://127.0.0.1:9090` | 明文 HTTP Clash API 基础 URL。空值跳过 API 检查；内置客户端不支持 HTTPS。 |
+| `--api URL` | `http://127.0.0.1:9090` | Clash API 基础 URL，支持 `http://` 和 `https://`。空值跳过 API 检查。 |
+| `--secret TOKEN` | `HONK_API_SECRET`（若已设置） | Clash API 的 Bearer 令牌。命令行参数优先于环境变量。 |
 | `--pin-root PATH` | `/sys/fs/bpf` | 检查 pin map 是否存在及读取统计时使用的根目录。 |
 | `--tproxy-mark VALUE` | `134217728`（`0x08000000`） | `daens` 策略规则中预期的 fwmark。 |
 
-该检查只读。它查找引擎进程（`honk-core`、`honk` 或 `dae`）、`/var/run/netns/daens`、`/sys/class/net/dae0`、`daens` 内的 fwmark 规则、必需的 pin map、可读取的占用/溢出统计，以及 `<api>/version` 可达性。最后一行严格为 `diagnose: all checks passed` 或 `diagnose: N issue(s) found`。发现失败检查会计入汇总，但本身不会改变进程退出状态。
+该检查只读。它查找引擎进程（`honk-core`、`honk` 或 `dae`）、`/var/run/netns/daens`、`/sys/class/net/dae0`、`daens` 内的 fwmark 规则、必需的 pin map、可读取的占用/溢出统计，并检查 `<api>/version` 是否返回成功的 HTTP 响应。API 返回 2xx 状态码时打印 `[ok]` 和响应正文；返回非 2xx 状态码时打印 `[FAIL]` 和状态文本。整个请求的超时为五秒，包括读取响应正文；超时打印 `[FAIL] clash API <api>: timed out after 5s`。存在失败检查时，退出状态为 `1`，标准错误只输出一次汇总信息 `diagnose: N issue(s) found`；全部通过时，标准输出打印 `diagnose: all checks passed`，退出状态为 `0`。
+
+`--secret` 会出现在进程列表中，因此建议使用 `HONK_API_SECRET`；无论使用哪种方式，令牌都会通过 `http://` 明文发送。
 
 ### `geosite` 与 `geoip`
 
