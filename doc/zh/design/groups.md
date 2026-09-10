@@ -172,7 +172,7 @@ Selector 与 UDP 所有权是可复用节点 runtime 上相互独立的 bit。�
 
 `max_concurrent_dials` 默认为 64，并为物理代理连接和协议握手创建 generation-local semaphore。配置值会被启动时计算出的不可变进程级描述符 gate 限制。重载可以改变替代 generation 的本地上限，但重叠的新旧 generation 仍共享同一个进程 gate。
 
-Ready 池命中和已预热 generation 传输上的逻辑流不占额度。`block` 不会拨号；用户态 `direct` 拨号不享有豁免，`DirectHandler::dial` 与其他物理连接一样经过 `admit_physical_dial`。只有已卸载到数据路径的直连流量因不进入用户态而避开该限制。裸 TCP 池命中仍需执行协议握手，因此仍受拨号预算准入。
+Ready 池命中和已预热 generation 传输上的逻辑流不占额度。`block` 不会拨号；`DirectHandler::dial` 与其他物理连接一样经过 `admit_physical_dial`。已卸载到数据路径的直连流量，以及通过 reqwest 直连的 UI 下载，不使用该 handler 的准入 gate。裸 TCP 池命中仍需执行协议握手，因此仍受拨号预算准入。
 
 ## 相关文档
 
