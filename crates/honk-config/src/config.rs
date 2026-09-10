@@ -614,6 +614,108 @@ impl Config {
             .client_subnet_mode()
             .map_err(|error| crate::ConfigError::Validation(error.to_string()))?;
 
+        let declared_dns_upstreams = || {
+            let mut declared: Vec<_> = self
+                .dns
+                .upstream
+                .iter()
+                .map(|upstream| upstream.name.as_str())
+                .collect();
+            declared.sort_unstable();
+            declared
+        };
+        let check_dns_upstream = |location: std::fmt::Arguments<'_>, target: &str| {
+            if self
+                .dns
+                .upstream
+                .iter()
+                .any(|upstream| upstream.name == target)
+            {
+                return Ok(());
+            }
+            let declared = declared_dns_upstreams();
+            Err(crate::ConfigError::Validation(format!(
+                "{location} references undeclared DNS upstream '{target}' \
+                 (declared upstreams: {declared:?}); dae action names are lowercased \
+                 before exact lookup against unchanged declarations; legacy targets are matched verbatim"
+            )))
+        };
+        let routing = &self.dns.routing;
+        let legacy_rules_active = routing.request.rules.is_empty() && !routing.rules.is_empty();
+        if legacy_rules_active {
+            for (index, rule) in routing.rules.iter().enumerate() {
+                check_dns_upstream(
+                    format_args!("dns.routing.rules[{index}].upstream"),
+                    &rule.upstream,
+                )?;
+            }
+        } else {
+            for (index, rule) in routing.request.rules.iter().enumerate() {
+                if let crate::dns::DnsRequestAction::Upstream(target) = &rule.action {
+                    check_dns_upstream(
+                        format_args!("dns.routing.request.rules[{index}].action"),
+                        target,
+                    )?;
+                }
+            }
+        }
+        // Match effective_request precedence without allocating converted rules on every reload.
+        let legacy_fallback_active = legacy_rules_active
+            || (routing.request.rules.is_empty()
+                && matches!(
+                    &routing.request.fallback,
+                    crate::dns::DnsRequestAction::Upstream(name) if name == "default"
+                )
+                && !matches!(routing.fallback.as_str(), "" | "upstream" | "default"));
+        let fallback_target = if legacy_fallback_active {
+            Some(routing.fallback.as_str())
+        } else if let crate::dns::DnsRequestAction::Upstream(target) = &routing.request.fallback {
+            Some(target.as_str())
+        } else {
+            None
+        };
+        if let Some(target) = fallback_target {
+            if legacy_rules_active
+                && matches!(target, "" | "upstream")
+                && !self
+                    .dns
+                    .upstream
+                    .iter()
+                    .any(|upstream| upstream.name == target)
+            {
+                let declared = declared_dns_upstreams();
+                let message = if target.is_empty() {
+                    format!(
+                        "dns.routing.fallback has an empty fallback for active legacy rules \
+                         (fallback value ''; declared upstreams: {declared:?})"
+                    )
+                } else {
+                    format!(
+                        "dns.routing.fallback has no fallback declared for the legacy default 'upstream' \
+                         (declared upstreams: {declared:?})"
+                    )
+                };
+                return Err(crate::ConfigError::Validation(message));
+            }
+            if legacy_fallback_active {
+                check_dns_upstream(format_args!("dns.routing.fallback"), target)?;
+            } else {
+                check_dns_upstream(format_args!("dns.routing.request.fallback"), target)?;
+            }
+        }
+        for (index, rule) in self.dns.routing.response.rules.iter().enumerate() {
+            if let crate::dns::DnsResponseAction::Upstream(target) = &rule.action {
+                check_dns_upstream(
+                    format_args!("dns.routing.response.rules[{index}].action"),
+                    target,
+                )?;
+            }
+        }
+        if let crate::dns::DnsResponseAction::Upstream(target) = &self.dns.routing.response.fallback
+        {
+            check_dns_upstream(format_args!("dns.routing.response.fallback"), target)?;
+        }
+
         // A duration that fails to parse becomes zero, and a zero period makes
         // tokio::time::interval panic, taking the health-check loop down at startup.
         if self.global.check_interval_secs == 0 {
@@ -944,6 +1046,246 @@ mod builtin_nodes_tests {
         let error = config.validate().unwrap_err();
         assert!(matches!(error, crate::ConfigError::Validation(_)));
         assert!(error.to_string().contains("dns.client_subnet"));
+    }
+
+    fn dns_validation_fixture(name: &str) -> Config {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/dns-validation")
+            .join(name);
+        let source = std::fs::read_to_string(&path).unwrap();
+        if name.ends_with(".json") {
+            Config::from_json_str(&source).unwrap()
+        } else if name.ends_with(".toml") {
+            Config::from_file(path.to_str().unwrap()).unwrap()
+        } else {
+            crate::parser::parse_dae_config(&source).unwrap()
+        }
+    }
+
+    fn assert_missing_dns_upstream(
+        config: &Config,
+        location: &str,
+        target: &str,
+        declared: &[&str],
+    ) {
+        let error = config
+            .validate()
+            .expect_err("undeclared DNS target must fail");
+        assert!(matches!(error, crate::ConfigError::Validation(_)));
+        let message = error.to_string();
+        assert!(message.contains(location), "{message}");
+        assert!(message.contains(&format!("'{target}'")), "{message}");
+        let expected = format!("declared upstreams: {:?}", declared);
+        assert!(message.contains(&expected), "{message}");
+        let mut corrected = config.clone();
+        let mut declaration = corrected.dns.upstream[0].clone();
+        declaration.name = target.into();
+        corrected.dns.upstream.push(declaration);
+        corrected.validate().unwrap();
+    }
+
+    fn assert_missing_legacy_fallback(config: &Config, detail: &str, declared: &[&str]) {
+        let error = config
+            .validate()
+            .expect_err("legacy fallback without a declaration must fail");
+        assert!(matches!(error, crate::ConfigError::Validation(_)));
+        let message = error.to_string();
+        assert!(message.contains("dns.routing.fallback"), "{message}");
+        assert!(message.contains(detail), "{message}");
+        let expected = format!("declared upstreams: {:?}", declared);
+        assert!(message.contains(&expected), "{message}");
+        let mut corrected = config.clone();
+        corrected.dns.routing.fallback = "default".into();
+        corrected.validate().unwrap();
+    }
+
+    #[test]
+    fn test_validate_rejects_dns_request_rule_target() {
+        let config = dns_validation_fixture("request-rule-missing.dae");
+        assert_missing_dns_upstream(
+            &config,
+            "dns.routing.request.rules[0].action",
+            "missing",
+            &["alpha", "default", "zeta"],
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_dns_request_fallback_target() {
+        let config = dns_validation_fixture("request-fallback-missing.dae");
+        assert_missing_dns_upstream(
+            &config,
+            "dns.routing.request.fallback",
+            "missing",
+            &["alpha", "default", "zeta"],
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_dns_implicit_fallback_after_catch_all() {
+        let config = dns_validation_fixture("explicit-only-alidns-catchall.dae");
+        assert_missing_dns_upstream(
+            &config,
+            "dns.routing.request.fallback",
+            "default",
+            &["alidns"],
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_dns_implicit_fallback_without_request_routing() {
+        let config = dns_validation_fixture("explicit-only-alidns.dae");
+        assert_missing_dns_upstream(
+            &config,
+            "dns.routing.request.fallback",
+            "default",
+            &["alidns"],
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_dns_response_rule_target() {
+        let config = dns_validation_fixture("response-rule-missing.dae");
+        assert_missing_dns_upstream(
+            &config,
+            "dns.routing.response.rules[0].action",
+            "missing",
+            &["default"],
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_dns_response_fallback_target() {
+        let config = dns_validation_fixture("response-fallback-missing.dae");
+        assert_missing_dns_upstream(
+            &config,
+            "dns.routing.response.fallback",
+            "missing",
+            &["default"],
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_dae_uppercase_declaration_mismatch() {
+        let config = dns_validation_fixture("dae-uppercase-request-mismatch.dae");
+        assert_missing_dns_upstream(
+            &config,
+            "dns.routing.request.rules[0].action",
+            "alidns",
+            &["AliDNS", "default"],
+        );
+
+        let config = dns_validation_fixture("dae-uppercase-response-mismatch.dae");
+        assert_missing_dns_upstream(
+            &config,
+            "dns.routing.response.rules[0].action",
+            "alidns",
+            &["AliDNS", "default"],
+        );
+        dns_validation_fixture("dae-lowercase-declaration.dae")
+            .validate()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_validate_accepts_dns_empty_upstreams_with_terminal_fallback() {
+        dns_validation_fixture("empty-terminal-fallback.dae")
+            .validate()
+            .unwrap();
+        let config = dns_validation_fixture("empty-asis-fallback.dae");
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn test_validate_accepts_named_dns_response_fallback() {
+        let config = dns_validation_fixture("response-named-fallback.dae");
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn test_validate_rejects_effective_legacy_dns_rule_target() {
+        let config = dns_validation_fixture("legacy-rule-missing.json");
+        assert_missing_dns_upstream(
+            &config,
+            "dns.routing.rules[0].upstream",
+            "missing",
+            &["alpha", "default"],
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_omitted_legacy_dns_fallback() {
+        let config = dns_validation_fixture("legacy-fallback-omitted.json");
+        assert_missing_legacy_fallback(&config, "no fallback declared", &["alpha", "default"]);
+    }
+
+    #[test]
+    fn test_validate_rejects_empty_legacy_dns_fallback() {
+        let config = dns_validation_fixture("legacy-fallback-empty.toml");
+        assert_missing_legacy_fallback(&config, "empty fallback", &["alpha", "default"]);
+    }
+
+    #[test]
+    fn test_validate_rejects_effective_legacy_dns_fallback_target() {
+        let config = dns_validation_fixture("legacy-fallback-missing.json");
+        assert_missing_legacy_fallback(&config, "'missing'", &["alpha", "default"]);
+    }
+
+    #[test]
+    fn test_validate_rejects_promoted_legacy_dns_fallback_target() {
+        let config = dns_validation_fixture("legacy-promotion-missing.json");
+        assert_missing_legacy_fallback(&config, "'missing'", &["alpha", "default"]);
+    }
+
+    #[test]
+    fn test_validate_accepts_legacy_dns_exact_case() {
+        let config = dns_validation_fixture("legacy-exact-case.json");
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn test_validate_accepts_256_legacy_dns_rules() {
+        let mut config = dns_validation_fixture("legacy-exact-case.json");
+        let rule = config.dns.routing.rules[0].clone();
+        config.dns.routing.rules.resize(256, rule);
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn test_validate_accepts_legacy_dns_upstream_sentinel_without_rules() {
+        let config = dns_validation_fixture("legacy-sentinel-upstream.json");
+        config.validate().unwrap();
+        let mut config = dns_validation_fixture("legacy-sentinel-upstream.json");
+        config.dns.routing.fallback.clear();
+        config.validate().unwrap();
+
+        let config = dns_validation_fixture("legacy-sentinel-rules.json");
+        assert_missing_dns_upstream(&config, "dns.routing.fallback", "upstream", &["default"]);
+    }
+
+    #[test]
+    fn test_validate_typed_api_new_request_rules_ignore_legacy_fields() {
+        let mut config = dns_validation_fixture("dae-lowercase-declaration.dae");
+        config.dns.routing.rules.push(crate::dns::DnsRule {
+            domain: "ignored.example".into(),
+            upstream: "missing".into(),
+        });
+        config.dns.routing.fallback = "missing".into();
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn test_validate_typed_api_legacy_rules_precede_new_request_fallback() {
+        let mut config = dns_validation_fixture("dae-lowercase-declaration.dae");
+        config.dns.routing.request.rules.clear();
+        let legacy = dns_validation_fixture("legacy-exact-case.json");
+        config.dns.upstream = legacy.dns.upstream;
+        config.dns.routing.rules = legacy.dns.routing.rules;
+        config.dns.routing.fallback = legacy.dns.routing.fallback;
+        config.dns.routing.response = legacy.dns.routing.response;
+        config.dns.routing.request.fallback =
+            crate::dns::DnsRequestAction::Upstream("missing".into());
+        config.validate().unwrap();
     }
 
     #[test]

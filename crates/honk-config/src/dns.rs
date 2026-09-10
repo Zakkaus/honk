@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
@@ -617,6 +618,27 @@ impl<'de> Deserialize<'de> for DnsResponseRouting {
 }
 
 impl DnsRouting {
+    /// Select request routing with legacy compatibility precedence.
+    pub fn effective_request(&self) -> Cow<'_, DnsRequestRouting> {
+        if !self.request.rules.is_empty() {
+            return Cow::Borrowed(&self.request);
+        }
+        if !self.rules.is_empty() {
+            return Cow::Owned(self.convert_legacy_rules());
+        }
+        let uses_default = matches!(
+            &self.request.fallback,
+            DnsRequestAction::Upstream(name) if name == "default"
+        );
+        if uses_default && !matches!(self.fallback.as_str(), "" | "upstream" | "default") {
+            return Cow::Owned(DnsRequestRouting {
+                rules: vec![],
+                fallback: DnsRequestAction::Upstream(self.fallback.clone()),
+            });
+        }
+        Cow::Borrowed(&self.request)
+    }
+
     /// Convert legacy rules into request rules.
     pub fn convert_legacy_rules(&self) -> DnsRequestRouting {
         let mut rules = Vec::with_capacity(self.rules.len());
