@@ -26,14 +26,23 @@
 //! call site (multiplexed handlers never deposit ready entries — their
 //! session pool already owns reuse). Hit/miss/entry counters feed the
 //! clash API `/stats`.
+//!
+//! One mutex keeps the stream total equal to the sum of non-empty entry
+//! vectors and ready-target counts equal to the present ready keys. Entry,
+//! target, warm-claim and hotness changes are synchronous transactions; the
+//! lock is never held across an await. Removed streams are dropped after
+//! unlocking, so socket teardown cannot extend the critical section.
+//! Hotness is bounded to 4,096 keys; warm claims remain one per in-flight
+//! dial, without a separate cardinality cap.
 
-use dashmap::DashMap;
-use dashmap::mapref::entry::Entry;
 use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::{Barrier, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tracing::{debug, trace};
@@ -75,26 +84,76 @@ struct TimedStream {
     last_used: Instant,
 }
 
+#[cfg(test)]
+#[derive(Clone)]
+struct PauseHook {
+    name: &'static str,
+    reached: Arc<Barrier>,
+    resume: Arc<Barrier>,
+}
+
+#[cfg(test)]
+impl PauseHook {
+    fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            reached: Arc::new(Barrier::new(2)),
+            resume: Arc::new(Barrier::new(2)),
+        }
+    }
+}
+
 pub struct ConnectionPool {
-    entries: DashMap<String, Arc<Mutex<Vec<TimedStream>>>>,
-    total_entries: AtomicU64,
+    state: Mutex<PoolState>,
     capacity_limit: u64,
-    /// Ready-key cardinality per node, updated only when a ready key enters
-    /// or leaves `entries`; no deposit scans every shard.
-    ready_targets: DashMap<String, Arc<AtomicU64>>,
-    /// One background warmer per ready key. Followers retain the existing
-    /// ready entry or wait for the next flow rather than duplicate a dial.
-    warm_dials: DashMap<String, ()>,
     idle_timeout: Duration,
     ready_idle_timeout: Duration,
     max_age: Duration,
-    /// Target hotness for ready-deposit gating (`ready|node|target` →
-    /// (flow count, window start)). This remains strictly bounded: stale
-    /// entries are reset on their next access, never reclaimed by a scan.
-    hot: DashMap<String, (u32, Instant)>,
-    hot_entries: AtomicU64,
     ready_hits: AtomicU64,
     ready_misses: AtomicU64,
+    #[cfg(test)]
+    pause_hook: StdMutex<Option<PauseHook>>,
+}
+
+#[derive(Default)]
+struct PoolState {
+    entries: HashMap<String, Vec<TimedStream>>,
+    total: u64,
+    ready_targets: HashMap<String, u32>,
+    warm_dials: HashSet<String>,
+    hot: HashMap<String, (u32, Instant)>,
+}
+
+impl PoolState {
+    fn decrement_ready_target(targets: &mut HashMap<String, u32>, key: &str) {
+        if key.starts_with("ready|") {
+            let node = ConnectionPool::ready_node(key);
+            let count = targets.get_mut(node).expect("present ready target");
+            *count -= 1;
+            if *count == 0 {
+                targets.remove(node);
+            }
+        }
+    }
+
+    fn remove_empty_key(&mut self, key: &str) {
+        if self.entries.get(key).is_some_and(Vec::is_empty) {
+            self.entries.remove(key);
+            Self::decrement_ready_target(&mut self.ready_targets, key);
+        }
+    }
+
+    fn remove_matching(
+        &mut self,
+        mut matches: impl FnMut(&str) -> bool,
+        removed: &mut Vec<TimedStream>,
+    ) {
+        for (key, mut list) in self.entries.extract_if(|key, _| matches(key)) {
+            self.total -= list.len() as u64;
+            Self::decrement_ready_target(&mut self.ready_targets, &key);
+            removed.append(&mut list);
+        }
+    }
 }
 
 pub(crate) struct WarmDialGuard<'a> {
@@ -104,7 +163,7 @@ pub(crate) struct WarmDialGuard<'a> {
 
 impl Drop for WarmDialGuard<'_> {
     fn drop(&mut self) {
-        self.pool.warm_dials.remove(&self.key);
+        self.pool.state.lock().warm_dials.remove(&self.key);
     }
 }
 
@@ -144,18 +203,39 @@ impl ConnectionPool {
 
     pub(crate) fn with_capacity_limit(capacity_limit: usize) -> Self {
         Self {
-            entries: DashMap::new(),
-            total_entries: AtomicU64::new(0),
+            state: Mutex::new(PoolState::default()),
             capacity_limit: capacity_limit.min(MAX_TOTAL_ENTRIES) as u64,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             ready_idle_timeout: READY_IDLE_TIMEOUT,
-            ready_targets: DashMap::new(),
-            warm_dials: DashMap::new(),
             max_age: DEFAULT_MAX_AGE,
-            hot: DashMap::new(),
-            hot_entries: AtomicU64::new(0),
             ready_hits: AtomicU64::new(0),
             ready_misses: AtomicU64::new(0),
+            #[cfg(test)]
+            pause_hook: StdMutex::new(None),
+        }
+    }
+    #[cfg(test)]
+    fn install_pause_hook(&self, name: &'static str) -> PauseHook {
+        let hook = PauseHook::new(name);
+        *self.pause_hook.lock().expect("pause hook mutex poisoned") = Some(hook.clone());
+        hook
+    }
+
+    #[cfg(test)]
+    fn pause_at(&self, name: &'static str) {
+        let hook = {
+            let mut configured = self.pause_hook.lock().expect("pause hook mutex poisoned");
+            if configured.as_ref().is_some_and(|hook| hook.name == name) {
+                configured.take()
+            } else {
+                None
+            }
+        };
+        if let Some(hook) = hook {
+            self.check_invariants();
+            hook.reached.wait();
+            hook.resume.wait();
+            self.check_invariants();
         }
     }
 
@@ -164,52 +244,42 @@ impl ConnectionPool {
     /// ([`HOT_THRESHOLD`] flows within [`HOT_WINDOW`]).
     pub(crate) fn note_target(&self, key: &str) -> bool {
         const MAX_HOT_TARGETS: u64 = 4096;
-        match self.hot.entry(key.to_owned()) {
-            Entry::Occupied(mut entry) => {
-                let value = entry.get_mut();
-                if value.1.elapsed() > HOT_WINDOW {
-                    *value = (0, Instant::now());
-                }
-                value.0 += 1;
-                value.0 >= HOT_THRESHOLD
+        let mut state = self.state.lock();
+        if let Some(value) = state.hot.get_mut(key) {
+            if value.1.elapsed() > HOT_WINDOW {
+                *value = (0, Instant::now());
             }
-            Entry::Vacant(entry) => {
-                if self
-                    .hot_entries
-                    .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                        (current < MAX_HOT_TARGETS).then_some(current + 1)
-                    })
-                    .is_err()
-                {
-                    return false;
-                }
-                entry.insert((1, Instant::now()));
-                false
+            value.0 += 1;
+            value.0 >= HOT_THRESHOLD
+        } else {
+            if (state.hot.len() as u64) < MAX_HOT_TARGETS {
+                state.hot.insert(key.to_owned(), (1, Instant::now()));
             }
+            false
         }
     }
 
     /// Claim one background warming dial for this ready key. The returned
     /// guard clears the claim on drop, including cancellation and failures.
     pub(crate) fn try_begin_warm(&self, key: &str) -> Option<WarmDialGuard<'_>> {
-        match self.warm_dials.entry(key.to_owned()) {
-            Entry::Vacant(entry) => {
-                entry.insert(());
-                Some(WarmDialGuard {
-                    pool: self,
-                    key: key.to_owned(),
-                })
-            }
-            Entry::Occupied(_) => None,
+        let mut state = self.state.lock();
+        if state.warm_dials.contains(key) {
+            return None;
         }
+        state.warm_dials.insert(key.to_owned());
+        Some(WarmDialGuard {
+            pool: self,
+            key: key.to_owned(),
+        })
     }
 
     #[cfg(any(test, feature = "clash-api"))]
     pub(crate) fn ready_metrics(&self) -> ReadyPoolMetrics {
+        let state = self.state.lock();
         ReadyPoolMetrics {
             hits: self.ready_hits.load(Ordering::Relaxed),
             misses: self.ready_misses.load(Ordering::Relaxed),
-            entries: self.total_entries.load(Ordering::Relaxed),
+            entries: state.total,
         }
     }
 
@@ -257,60 +327,41 @@ impl ConnectionPool {
     }
 
     async fn acquire_entry(&self, addr: &str, want_ready: bool) -> Option<PooledStream> {
-        let arc = Arc::clone(&*self.entries.get(addr)?);
-        let mut list = arc.lock();
-
+        #[cfg(test)]
+        {
+            self.pause_at("checkout_after_clone");
+            self.pause_at("checkout_after_drop");
+        }
+        let mut removed = Vec::new();
+        let mut state = self.state.lock();
+        let list = state.entries.get_mut(addr)?;
         let now = Instant::now();
-        let mut found_idx: Option<usize> = None;
-        for (i, entry) in list.iter().rev().enumerate() {
-            let idx = list.len() - 1 - i;
-            if !Self::entry_matches(entry, want_ready) {
-                continue;
-            }
-            if self.entry_expired(entry, now) {
-                continue;
-            }
-            if Self::is_entry_alive(entry) {
-                found_idx = Some(idx);
-                break;
-            }
-        }
-
-        match found_idx {
-            Some(idx) => {
-                let entry = list.swap_remove(idx);
-                self.total_entries.fetch_sub(1, Ordering::Relaxed);
-                trace!(
-                    "Pool hit ({}): {} ({} idle remaining)",
-                    if want_ready { "ready" } else { "bare" },
-                    addr,
-                    list.len()
-                );
-                if list.is_empty() {
-                    drop(list);
-                    if self.entries.remove(addr).is_some() && want_ready {
-                        self.release_ready_target(&Self::ready_node(addr));
-                    }
-                }
-                Some(entry.stream)
-            }
-            None => {
-                let before = list.len();
-                list.retain(|e| !self.entry_expired(e, now) && Self::is_entry_alive(e));
-                let removed = before - list.len();
-                if removed > 0 {
-                    self.total_entries
-                        .fetch_sub(removed as u64, Ordering::Relaxed);
-                }
-                if list.is_empty() {
-                    drop(list);
-                    if self.entries.remove(addr).is_some() && want_ready {
-                        self.release_ready_target(&Self::ready_node(addr));
-                    }
-                }
-                None
-            }
-        }
+        let found = list.iter().rposition(|entry| {
+            Self::entry_matches(entry, want_ready)
+                && !self.entry_expired(entry, now)
+                && Self::is_entry_alive(entry)
+        });
+        let acquired = if let Some(index) = found {
+            let entry = list.swap_remove(index);
+            trace!(
+                "Pool hit ({}): {} ({} idle remaining)",
+                if want_ready { "ready" } else { "bare" },
+                addr,
+                list.len()
+            );
+            state.total -= 1;
+            Some(entry.stream)
+        } else {
+            removed.extend(list.extract_if(.., |entry| {
+                self.entry_expired(entry, now) || !Self::is_entry_alive(entry)
+            }));
+            state.total -= removed.len() as u64;
+            None
+        };
+        state.remove_empty_key(addr);
+        drop(state);
+        drop(removed);
+        acquired
     }
 
     pub(crate) async fn deposit_tcp(&self, addr: &str, stream: TcpStream) {
@@ -322,24 +373,24 @@ impl ConnectionPool {
     /// expired entries are removed here so a long-lived warm owner can
     /// replace them instead of eventually filling the per-host vector.
     pub(crate) fn has_live_bare_entry(&self, addr: &str) -> bool {
+        let mut removed = Vec::new();
+        let mut state = self.state.lock();
         let now = Instant::now();
-        let Some(entries) = self.entries.get(addr) else {
+        let Some(entries) = state.entries.get_mut(addr) else {
             return false;
         };
-        let mut entries = entries.lock();
-        let before = entries.len();
-        entries.retain(|entry| {
-            !matches!(entry.stream, PooledStream::Bare(_))
-                || (!self.entry_expired(entry, now) && Self::is_entry_alive(entry))
-        });
-        let removed = before - entries.len();
-        if removed > 0 {
-            self.total_entries
-                .fetch_sub(removed as u64, Ordering::Relaxed);
-        }
-        entries
+        removed.extend(entries.extract_if(.., |entry| {
+            matches!(entry.stream, PooledStream::Bare(_))
+                && (self.entry_expired(entry, now) || !Self::is_entry_alive(entry))
+        }));
+        let live = entries
             .iter()
-            .any(|entry| matches!(entry.stream, PooledStream::Bare(_)))
+            .any(|entry| matches!(entry.stream, PooledStream::Bare(_)));
+        state.total -= removed.len() as u64;
+        state.remove_empty_key(addr);
+        drop(state);
+        drop(removed);
+        live
     }
 
     /// Deposit a fully-dialed stream under `key` (see [`ready_key`]).
@@ -351,114 +402,69 @@ impl ConnectionPool {
     }
 
     async fn deposit_entry(&self, addr: &str, stream: PooledStream) {
-        let ready_node = matches!(stream, PooledStream::Ready(_)).then(|| Self::ready_node(addr));
-        if !self.reserve_total() {
+        #[cfg(test)]
+        self.pause_at("deposit_before_lock");
+        let mut state = self.state.lock();
+        if state.total >= self.capacity_limit {
             debug!(
                 "Pool global cap reached ({}); dropping deposit for {}",
                 self.capacity_limit, addr
             );
             return;
         }
-
-        let mut target_reserved = false;
-        let arc = match self.entries.entry(addr.to_string()) {
-            Entry::Occupied(entry) => Arc::clone(entry.get()),
-            Entry::Vacant(entry) => {
-                if let Some(node) = ready_node.as_deref() {
-                    target_reserved = self.reserve_ready_target(node);
-                    if !target_reserved {
-                        self.total_entries.fetch_sub(1, Ordering::AcqRel);
-                        debug!(
-                            "Ready target cardinality cap reached for {} (max={}); dropping deposit",
-                            node, MAX_READY_TARGETS_PER_NODE
-                        );
-                        return;
-                    }
-                }
-                let arc = Arc::new(Mutex::new(Vec::new()));
-                entry.insert(Arc::clone(&arc));
-                arc
-            }
-        };
-        let mut list = arc.lock();
-        if list.len() >= MAX_PER_HOST {
-            self.total_entries.fetch_sub(1, Ordering::AcqRel);
-            if target_reserved {
-                self.release_ready_target(ready_node.as_deref().expect("ready node"));
-            }
+        let list = state.entries.get_mut(addr);
+        if list.as_ref().is_some_and(|list| list.len() >= MAX_PER_HOST) {
             debug!("Pool cap reached for {} (max={})", addr, MAX_PER_HOST);
             return;
         }
+        if list.is_none() && matches!(stream, PooledStream::Ready(_)) {
+            let node = Self::ready_node(addr);
+            let count = state.ready_targets.get(node).copied().unwrap_or(0);
+            if count >= MAX_READY_TARGETS_PER_NODE as u32 {
+                debug!(
+                    "Ready target cardinality cap reached for {} (max={}); dropping deposit",
+                    node, MAX_READY_TARGETS_PER_NODE
+                );
+                return;
+            }
+            state.ready_targets.insert(node.to_owned(), count + 1);
+        }
         let now = Instant::now();
-        let kind = match &stream {
-            PooledStream::Bare(_) => "bare",
-            PooledStream::Ready(_) => "ready",
-        };
-        list.push(TimedStream {
+        let entry = TimedStream {
             stream,
             created: now,
             last_used: now,
-        });
-        debug!(
-            "Pool deposit ({}): {} ({} total pooled)",
-            kind,
-            addr,
-            self.total_entries.load(Ordering::Relaxed)
-        );
-    }
-
-    fn reserve_total(&self) -> bool {
-        self.total_entries
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                (current < self.capacity_limit).then_some(current + 1)
-            })
-            .is_ok()
-    }
-
-    fn ready_node(key: &str) -> String {
-        key.strip_prefix("ready|")
-            .and_then(|rest| rest.split_once('|').map(|(node, _)| node.to_owned()))
-            .unwrap_or_default()
-    }
-
-    fn reserve_ready_target(&self, node: &str) -> bool {
-        let counter = Arc::clone(
-            &*self
-                .ready_targets
-                .entry(node.to_owned())
-                .or_insert_with(|| Arc::new(AtomicU64::new(0))),
-        );
-        counter
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                current
-                    .checked_add(1)
-                    .filter(|next| *next <= MAX_READY_TARGETS_PER_NODE as u64)
-            })
-            .is_ok()
-    }
-
-    fn release_ready_target(&self, node: &str) {
-        if let Some(counter) = self.ready_targets.get(node) {
-            let _ = counter.try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                current.checked_sub(1)
-            });
+        };
+        if let Some(list) = state.entries.get_mut(addr) {
+            list.push(entry);
+        } else {
+            state.entries.insert(addr.to_owned(), vec![entry]);
         }
+        state.total += 1;
+        debug!("Pool deposit: {} ({} total pooled)", addr, state.total);
+    }
+
+    fn ready_node(key: &str) -> &str {
+        key.strip_prefix("ready|")
+            .and_then(|rest| rest.split_once('|').map(|(node, _)| node))
+            .unwrap_or_default()
     }
 
     /// Drop only the bare preconnect for a node. Ready streams may belong to
     /// active traffic policy and are not selector warm ownership.
     pub(crate) fn purge_bare(&self, node_addr: &str) {
-        let Some((_, entries)) = self.entries.remove(node_addr) else {
-            return;
-        };
-        let removed = entries.lock().len() as u64;
-        if removed > 0 {
-            self.total_entries.fetch_sub(removed, Ordering::Relaxed);
+        let mut state = self.state.lock();
+        let removed = state.entries.remove(node_addr);
+        if let Some(entries) = &removed {
+            state.total -= entries.len() as u64;
             debug!(
                 "Purged {} selector-warm bare connections for {}",
-                removed, node_addr
+                entries.len(),
+                node_addr
             );
         }
+        drop(state);
+        drop(removed);
     }
 
     /// Drop every pooled connection tied to a proxy node: the bare
@@ -468,54 +474,55 @@ impl ConnectionPool {
     /// serving it for up to 60s).
     pub(crate) fn purge_node(&self, node_addr: &str) {
         let ready_prefix = format!("ready|{}|", node_addr);
-        let mut removed = 0u64;
-        self.entries.retain(|key, arc| {
-            if key == node_addr || key.starts_with(&ready_prefix) {
-                removed += arc.lock().len() as u64;
+        let mut removed = Vec::new();
+        let mut state = self.state.lock();
+        state.remove_matching(
+            |key| key == node_addr || key.starts_with(&ready_prefix),
+            &mut removed,
+        );
+        drop(state);
+        debug!(
+            "Purged {} pooled connections for dead node {}",
+            removed.len(),
+            node_addr
+        );
+        drop(removed);
+    }
+
+    pub(crate) async fn prune_expired(&self) -> usize {
+        #[cfg(test)]
+        self.pause_at("janitor_before_store");
+        let mut removed = Vec::new();
+        let mut state = self.state.lock();
+        let now = Instant::now();
+        let PoolState {
+            entries,
+            total,
+            ready_targets,
+            ..
+        } = &mut *state;
+        entries.retain(|key, list| {
+            let before = removed.len();
+            removed.extend(list.extract_if(.., |entry| {
+                self.entry_expired(entry, now) || !Self::is_entry_alive(entry)
+            }));
+            *total -= (removed.len() - before) as u64;
+            if list.is_empty() {
+                PoolState::decrement_ready_target(ready_targets, key);
                 false
             } else {
                 true
             }
         });
-        if removed > 0 {
-            self.total_entries.fetch_sub(removed, Ordering::Relaxed);
-            self.ready_targets.remove(node_addr);
-            debug!(
-                "Purged {} pooled connections for dead node {}",
-                removed, node_addr
-            );
-        }
-    }
-
-    pub(crate) async fn prune_expired(&self) -> usize {
-        let now = Instant::now();
-        let mut total_removed = 0usize;
-        let total_remaining = AtomicU64::new(0);
-
-        self.entries.retain(|addr, arc| {
-            let mut list = arc.lock();
-            list.retain(|e| {
-                if self.entry_expired(e, now) || !Self::is_entry_alive(e) {
-                    total_removed += 1;
-                    false
-                } else {
-                    true
-                }
-            });
-            if list.is_empty() && addr.starts_with("ready|") {
-                self.release_ready_target(&Self::ready_node(addr));
-            }
-            total_remaining.fetch_add(list.len() as u64, Ordering::Relaxed);
-            !list.is_empty()
-        });
-
-        let remaining = total_remaining.load(Ordering::Relaxed);
-        self.total_entries.store(remaining, Ordering::Relaxed);
+        let remaining = state.total;
+        drop(state);
+        let count = removed.len();
+        drop(removed);
         debug!(
             "Pruned {} expired pooled connections ({} remaining)",
-            total_removed, remaining
+            count, remaining
         );
-        total_removed
+        count
     }
 
     pub(crate) fn spawn_janitor(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
@@ -596,6 +603,33 @@ impl ConnectionPool {
             Err(_) => true,
         }
     }
+    #[cfg(test)]
+    pub(crate) fn check_invariants(&self) {
+        let state = self.state.lock();
+        assert!(state.total <= self.capacity_limit);
+        let mut sum = 0;
+        let mut targets = HashMap::new();
+        for (key, list) in &state.entries {
+            assert!(!list.is_empty(), "empty pool key {key}");
+            assert!(list.len() <= MAX_PER_HOST);
+            sum += list.len() as u64;
+            let ready = key.starts_with("ready|");
+            assert!(list.iter().all(|entry| Self::entry_matches(entry, ready)));
+            if ready {
+                *targets
+                    .entry(Self::ready_node(key).to_owned())
+                    .or_insert(0u32) += 1;
+            }
+        }
+        assert_eq!(state.total, sum, "pool total disagrees with entry vectors");
+        assert_eq!(state.ready_targets, targets);
+        assert!(
+            targets
+                .values()
+                .all(|count| (1..=MAX_READY_TARGETS_PER_NODE as u32).contains(count))
+        );
+        assert!(state.hot.len() <= 4096);
+    }
 }
 
 impl Default for ConnectionPool {
@@ -611,7 +645,7 @@ mod tests {
     use honk_config::types::NodeProtocol;
     use honk_outbound::proxy::TcpOutbound;
     use honk_outbound::proxy::socks5::Socks5Handler;
-    use std::sync::atomic::AtomicUsize;
+    use std::thread;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -640,6 +674,224 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn race_last_checkout_vs_deposit() {
+        let pool = Arc::new(ConnectionPool::new());
+        let server = spawn_hold_open_listener().await;
+        let key = server.to_string();
+
+        let first = TcpStream::connect(server).await.unwrap();
+        let first_id = first.local_addr().unwrap();
+        pool.deposit_tcp(&key, first).await;
+        pool.check_invariants();
+
+        let second = TcpStream::connect(server).await.unwrap();
+        let second_id = second.local_addr().unwrap();
+        let hook = pool.install_pause_hook("checkout_after_drop");
+
+        let checkout_pool = Arc::clone(&pool);
+        let checkout_key = key.clone();
+        let checkout = thread::spawn(move || {
+            futures::executor::block_on(checkout_pool.acquire_tcp(&checkout_key))
+        });
+        hook.reached.wait();
+
+        let deposit_pool = Arc::clone(&pool);
+        let deposit_key = key.clone();
+        let deposit = thread::spawn(move || {
+            futures::executor::block_on(deposit_pool.deposit_tcp(&deposit_key, second))
+        });
+        deposit.join().expect("deposit thread panicked");
+        hook.resume.wait();
+
+        let checked_out = checkout
+            .join()
+            .expect("checkout thread panicked")
+            .expect("initial stream must be checked out");
+        pool.check_invariants();
+        assert_eq!(
+            pool.ready_metrics().entries,
+            1,
+            "one deposited stream remains after the two operations"
+        );
+        let drained = pool
+            .acquire_tcp(&key)
+            .await
+            .expect("the deposited stream must remain reachable");
+        pool.check_invariants();
+        assert!(
+            pool.acquire_tcp(&key).await.is_none(),
+            "the drain must leave no third stream"
+        );
+
+        let mut returned = [
+            checked_out.local_addr().unwrap(),
+            drained.local_addr().unwrap(),
+        ];
+        returned.sort_unstable();
+        let mut expected = [first_id, second_id];
+        expected.sort_unstable();
+        assert_eq!(
+            returned, expected,
+            "checkout and drain must return each stream exactly once"
+        );
+        pool.check_invariants();
+    }
+
+    #[tokio::test]
+    async fn race_deposit_vs_purge() {
+        let pool = Arc::new(ConnectionPool::new());
+        let server = spawn_hold_open_listener().await;
+        let key = server.to_string();
+
+        let first = TcpStream::connect(server).await.unwrap();
+        pool.deposit_tcp(&key, first).await;
+        pool.check_invariants();
+        let second = TcpStream::connect(server).await.unwrap();
+        let second_id = second.local_addr().unwrap();
+        let hook = pool.install_pause_hook("deposit_before_lock");
+
+        let deposit_pool = Arc::clone(&pool);
+        let deposit_key = key.clone();
+        let deposit = thread::spawn(move || {
+            futures::executor::block_on(deposit_pool.deposit_tcp(&deposit_key, second))
+        });
+        hook.reached.wait();
+
+        let purge_pool = Arc::clone(&pool);
+        let purge_key = key.clone();
+        let purge = thread::spawn(move || purge_pool.purge_node(&purge_key));
+        purge.join().expect("purge thread panicked");
+        hook.resume.wait();
+        deposit.join().expect("deposit thread panicked");
+
+        pool.check_invariants();
+        let entries = pool.ready_metrics().entries;
+        match pool.acquire_tcp(&key).await {
+            Some(stream) => {
+                pool.check_invariants();
+                assert_eq!(
+                    entries, 1,
+                    "a reachable deposited stream must be reflected in total"
+                );
+                assert_eq!(stream.local_addr().unwrap(), second_id);
+                assert!(
+                    pool.acquire_tcp(&key).await.is_none(),
+                    "the stream must be consumed exactly once"
+                );
+            }
+            None => {
+                pool.check_invariants();
+                assert_eq!(entries, 0, "a purge that wins must leave no counted stream");
+                let replacement = TcpStream::connect(server).await.unwrap();
+                pool.deposit_tcp(&key, replacement).await;
+                pool.check_invariants();
+                assert!(
+                    pool.acquire_tcp(&key).await.is_some(),
+                    "a subsequent deposit must succeed after a winning purge"
+                );
+                pool.check_invariants();
+                assert!(
+                    pool.acquire_tcp(&key).await.is_none(),
+                    "the replacement must be consumed exactly once"
+                );
+            }
+        }
+        pool.check_invariants();
+    }
+
+    #[tokio::test]
+    async fn race_checkout_vs_purge() {
+        let pool = Arc::new(ConnectionPool::new());
+        let server = spawn_hold_open_listener().await;
+        let key = server.to_string();
+        let stream = TcpStream::connect(server).await.unwrap();
+        let stream_id = stream.local_addr().unwrap();
+        pool.deposit_tcp(&key, stream).await;
+        pool.check_invariants();
+
+        let hook = pool.install_pause_hook("checkout_after_clone");
+        let checkout_pool = Arc::clone(&pool);
+        let checkout_key = key.clone();
+        let checkout = thread::spawn(move || {
+            futures::executor::block_on(checkout_pool.acquire_tcp(&checkout_key))
+        });
+        hook.reached.wait();
+
+        let purge_pool = Arc::clone(&pool);
+        let purge_key = key.clone();
+        let purge = thread::spawn(move || {
+            let before = purge_pool.ready_metrics().entries;
+            purge_pool.purge_node(&purge_key);
+            before > purge_pool.ready_metrics().entries
+        });
+        let purged = purge.join().expect("purge thread panicked");
+        hook.resume.wait();
+
+        let checked_out = checkout.join().expect("checkout thread panicked");
+        assert_ne!(
+            checked_out.is_some(),
+            purged,
+            "exactly one of checkout and purge must own the stream"
+        );
+        pool.check_invariants();
+        assert_eq!(
+            pool.ready_metrics().entries,
+            0,
+            "checkout and purge must account for the stream exactly once"
+        );
+        if let Some(stream) = checked_out {
+            assert_eq!(
+                stream.local_addr().unwrap(),
+                stream_id,
+                "a successful checkout must return the original stream"
+            );
+        }
+        assert!(
+            pool.acquire_tcp(&key).await.is_none(),
+            "the stream must not remain reachable after checkout or purge"
+        );
+        pool.check_invariants();
+    }
+
+    #[tokio::test]
+    async fn race_janitor_vs_deposit() {
+        let pool = Arc::new(ConnectionPool::new());
+        let server = spawn_hold_open_listener().await;
+        let key = server.to_string();
+        pool.check_invariants();
+        let hook = pool.install_pause_hook("janitor_before_store");
+
+        let janitor_pool = Arc::clone(&pool);
+        let janitor =
+            thread::spawn(move || futures::executor::block_on(janitor_pool.prune_expired()));
+        hook.reached.wait();
+
+        let stream = TcpStream::connect(server).await.unwrap();
+        let deposit_pool = Arc::clone(&pool);
+        let deposit_key = key.clone();
+        let deposit = thread::spawn(move || {
+            futures::executor::block_on(deposit_pool.deposit_tcp(&deposit_key, stream))
+        });
+        deposit.join().expect("deposit thread panicked");
+        hook.resume.wait();
+        janitor.join().expect("janitor thread panicked");
+
+        assert_eq!(
+            pool.ready_metrics().entries,
+            1,
+            "janitor must publish the competitor's deposited stream"
+        );
+        pool.check_invariants();
+        pool.purge_node(&key);
+        assert_eq!(
+            pool.ready_metrics().entries,
+            0,
+            "purging the only stream must restore an empty total"
+        );
+        pool.check_invariants();
+    }
+
+    #[tokio::test]
     async fn test_pool_acquire_deposit() {
         let pool = ConnectionPool::new();
         let addr = spawn_hold_open_listener().await.to_string();
@@ -662,43 +914,53 @@ mod tests {
         let first = TcpStream::connect(&addr).await.unwrap();
         pool.deposit_tcp(&addr, first).await;
         assert!(pool.has_live_bare_entry(&addr));
-        assert_eq!(pool.total_entries.load(Ordering::Relaxed), 1);
+        assert_eq!(pool.ready_metrics().entries, 1);
+        pool.check_invariants();
 
         tokio::time::sleep(Duration::from_millis(30)).await;
         assert!(!pool.has_live_bare_entry(&addr));
-        assert_eq!(pool.total_entries.load(Ordering::Relaxed), 0);
+        assert_eq!(pool.ready_metrics().entries, 0);
+        pool.check_invariants();
 
         let replacement = TcpStream::connect(&addr).await.unwrap();
         pool.deposit_tcp(&addr, replacement).await;
         assert!(pool.has_live_bare_entry(&addr));
-        assert_eq!(pool.total_entries.load(Ordering::Relaxed), 1);
+        assert_eq!(pool.ready_metrics().entries, 1);
+        pool.check_invariants();
     }
 
-    /// Phase 5: deposits past the global FD budget are refused.
     #[tokio::test]
     async fn test_pool_global_cap_refused() {
-        let pool = ConnectionPool::new();
+        let pool = ConnectionPool::with_capacity_limit(1);
         let addr = spawn_hold_open_listener().await.to_string();
-        pool.total_entries
-            .store(MAX_TOTAL_ENTRIES as u64, Ordering::Relaxed);
         pool.deposit_tcp(&addr, TcpStream::connect(&addr).await.unwrap())
             .await;
-        assert!(pool.acquire_tcp(&addr).await.is_none());
-        assert_eq!(
-            pool.total_entries.load(Ordering::Relaxed),
-            MAX_TOTAL_ENTRIES as u64,
-            "a refused deposit must not bump the counter"
-        );
+        pool.check_invariants();
+        pool.deposit_tcp("other:443", TcpStream::connect(&addr).await.unwrap())
+            .await;
+        pool.check_invariants();
+        assert!(pool.acquire_tcp("other:443").await.is_none());
+        pool.check_invariants();
+        assert!(pool.acquire_tcp(&addr).await.is_some());
+        pool.check_invariants();
     }
 
-    #[test]
-    fn explicit_pool_capacity_is_enforced() {
+    #[tokio::test]
+    async fn explicit_pool_capacity_is_enforced() {
         let pool = ConnectionPool::with_capacity_limit(3);
-        assert!(pool.reserve_total());
-        assert!(pool.reserve_total());
-        assert!(pool.reserve_total());
-        assert!(!pool.reserve_total());
-        assert_eq!(pool.total_entries.load(Ordering::Acquire), 3);
+        let addr = spawn_hold_open_listener().await.to_string();
+        for _ in 0..4 {
+            pool.deposit_tcp(&addr, TcpStream::connect(&addr).await.unwrap())
+                .await;
+            pool.check_invariants();
+        }
+        assert_eq!(pool.ready_metrics().entries, 3);
+        for _ in 0..3 {
+            assert!(pool.acquire_tcp(&addr).await.is_some());
+            pool.check_invariants();
+        }
+        assert!(pool.acquire_tcp(&addr).await.is_none());
+        pool.check_invariants();
     }
 
     /// Phase 5: hot-target gating — the first flow is cold, the second
@@ -1052,61 +1314,51 @@ mod tests {
                     .await;
             });
         }
-        while tasks.join_next().await.is_some() {}
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap();
+            pool.check_invariants();
+        }
         assert_eq!(
-            pool.ready_targets
-                .get("node:443")
-                .map(|count| count.load(Ordering::Acquire)),
-            Some(MAX_READY_TARGETS_PER_NODE as u64),
-            "parallel distinct deposits must never exceed the ready-target cap"
-        );
-        assert_eq!(
-            pool.total_entries.load(Ordering::Acquire),
+            pool.ready_metrics().entries,
             MAX_READY_TARGETS_PER_NODE as u64
         );
+        pool.purge_node("node:443");
+        pool.check_invariants();
+        assert_eq!(pool.ready_metrics().entries, 0);
+        let key = "ready|node:443|198.51.100.1:443";
+        let tcp = TcpStream::connect(server).await.unwrap();
+        pool.deposit_ready(key, make_ready_stream(tcp, target))
+            .await;
+        pool.check_invariants();
+        assert!(pool.acquire_ready(key).await.is_some());
+        pool.check_invariants();
     }
 
-    #[test]
-    fn stale_ready_target_release_does_not_poison_counter() {
-        let pool = ConnectionPool::new();
-        let node = "node:443";
-
-        assert!(pool.reserve_ready_target(node));
-        pool.release_ready_target(node);
-        // A concurrent miss may finish after the checkout that removed the key.
-        pool.release_ready_target(node);
-
-        assert!(pool.reserve_ready_target(node));
-        assert_eq!(
-            pool.ready_targets
-                .get(node)
-                .map(|count| count.load(Ordering::Acquire)),
-            Some(1)
-        );
-    }
-
-    #[tokio::test]
-    async fn test_total_cap_cas_never_overshoots_under_parallel_reservations() {
-        let pool = Arc::new(ConnectionPool::new());
-        pool.total_entries
-            .store(MAX_TOTAL_ENTRIES as u64 - 4, Ordering::Release);
-        let accepted = Arc::new(AtomicUsize::new(0));
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_total_cap_never_overshoots_under_parallel_deposits() {
+        let pool = Arc::new(ConnectionPool::with_capacity_limit(4));
+        let server = spawn_hold_open_listener().await;
         let mut tasks = tokio::task::JoinSet::new();
-        for _ in 0..32 {
+        for i in 0..32 {
             let pool = Arc::clone(&pool);
-            let accepted = Arc::clone(&accepted);
             tasks.spawn(async move {
-                if pool.reserve_total() {
-                    accepted.fetch_add(1, Ordering::AcqRel);
-                }
+                let stream = TcpStream::connect(server).await.unwrap();
+                pool.deposit_tcp(&format!("node-{i}:443"), stream).await;
+                pool.check_invariants();
             });
         }
-        while tasks.join_next().await.is_some() {}
-        assert_eq!(accepted.load(Ordering::Acquire), 4);
-        assert_eq!(
-            pool.total_entries.load(Ordering::Acquire),
-            MAX_TOTAL_ENTRIES as u64
-        );
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap();
+            pool.check_invariants();
+        }
+        assert_eq!(pool.ready_metrics().entries, 4);
+        let mut acquired = 0;
+        for i in 0..32 {
+            acquired += usize::from(pool.acquire_tcp(&format!("node-{i}:443")).await.is_some());
+            pool.check_invariants();
+        }
+        assert_eq!(acquired, 4);
+        assert_eq!(pool.ready_metrics().entries, 0);
     }
 
     #[test]
@@ -1128,11 +1380,16 @@ mod tests {
     #[test]
     fn test_hot_map_refuses_new_keys_at_bound_without_scan() {
         let pool = ConnectionPool::new();
-        pool.hot_entries.store(4096, Ordering::Release);
-        assert!(!pool.note_target("ready|node:443|new:443"));
-        assert!(
-            pool.hot.is_empty(),
-            "a full hot map must not insert or scan"
-        );
+        for i in 0..4096 {
+            assert!(!pool.note_target(&format!("ready|node:443|target-{i}:443")));
+            pool.check_invariants();
+        }
+        let new_key = "ready|node:443|new:443";
+        assert!(!pool.note_target(new_key));
+        pool.check_invariants();
+        assert!(!pool.note_target(new_key));
+        pool.check_invariants();
+        assert!(pool.note_target("ready|node:443|target-0:443"));
+        pool.check_invariants();
     }
 }
