@@ -91,7 +91,7 @@ Score 首先运行与其他策略相同的存活性过滤。过滤所用的 heal
 
 `Group.groups` 指定子组。每个子组只贡献一个候选：该子组自己的策略针对当前网络和地址族选出的叶节点。父组把它作为一个成员进行排名或固定，而不是把所有后代合并进父策略。
 
-解析受 `MAX_GROUP_DEPTH = 8` 和每次遍历的 visited set 限制。构造阶段还会对组边执行 DFS，并切断每条闭环边，同时打印告警。这些检查可防止异常组图卡住选择或内省。
+解析受 `MAX_GROUP_DEPTH = 8` 和每次遍历的 visited set 限制。构造阶段还会对组边执行 DFS，并切断每条形成环的边，同时打印告警。这些检查可防止异常组图卡住选择或内省。
 
 即使物理拨号落到更深的叶节点，身份仍然是成员 tag：
 
@@ -172,7 +172,7 @@ Selector 与 UDP 所有权是可复用节点 runtime 上相互独立的 bit。�
 
 `max_concurrent_dials` 默认为 64，并为物理代理连接和协议握手创建 generation-local semaphore。配置值会被启动时计算出的不可变进程级描述符 gate 限制。重载可以改变替代 generation 的本地上限，但重叠的新旧 generation 仍共享同一个进程 gate。
 
-Ready 池命中、已热 generation transport 上打开的逻辑流，以及内置 `direct`/`block` 拨号不占额度。裸 TCP 池命中仍需执行协议握手，因此仍受拨号预算准入。
+Ready 池命中和已预热 generation 传输上的逻辑流不占额度。`block` 不会拨号；用户态 `direct` 拨号不享有豁免，`DirectHandler::dial` 与其他物理连接一样经过 `admit_physical_dial`。只有已卸载到数据路径的直连流量因不进入用户态而避开该限制。裸 TCP 池命中仍需执行协议握手，因此仍受拨号预算准入。
 
 ## 相关文档
 
