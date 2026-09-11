@@ -101,6 +101,16 @@ impl DetailedConfigError {
         };
         if let Some(text) = text {
             let reason = match text {
+                "conflicting TLS server name parameters" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes").field("sni"),
+                    "conflicting TLS server name aliases",
+                )),
+                "conflicting VLESS flow parameters" | "unsupported VLESS flow" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes").field("flow"),
+                    "VLESS flow must be absent or exactly xtls-rprx-vision; aliases must agree",
+                )),
                 "node section: standalone 'mux' is unsupported; set vless_mode on each VLESS share link" => {
                     Some((
                         "unsupported-node-mux",

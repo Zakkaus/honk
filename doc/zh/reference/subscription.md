@@ -118,12 +118,12 @@ vless://00000000-0000-4000-8000-000000000000@example.com:443?security=tls#edge
 | `server`, `port` | `host`, `port`, `address` | 必需的地址和非零 `u16` 端口；接受数字形式的端口字符串。 |
 | `username` | `username` | 可选 string。 |
 | `password` | `password` | 可选 string；VLESS 使用下文优先级。 |
-| `cipher` | `encryption` | 可选 string；VLESS 使用下文优先级。 |
+| `cipher` | `encryption` | 可选加密算法；VLESS 的字段优先级见下文。 |
 | `plugin`, `plugin-opts` | — | 不支持；任一字段具有非空值时，条目会在发布节点前被跳过，mapping 类型的 options 也会被拒绝。 |
 | `network` | `transport` | 可选 transport string。 |
 | `tls` | `tls` | 可选 bool。Trojan、AnyTLS、Hysteria2、TUIC 和 Juicity 默认启用 TLS，并拒绝显式关闭。 |
-| `servername`, `sni` | `sni` | `servername` 优先，`sni` 作为回退。 |
-| `skip-cert-verify` | `skip_cert_verify` | 可选 bool。 |
+| `servername`、`server-name`、`sni` | `sni` | 空值或纯空白名称视为未指定；非空别名必须逐字节一致。 |
+| `skip-cert-verify` | `skip_cert_verify` | 布尔值；决定是否跳过证书校验。 |
 | `alpn` | `tls_alpn` | AnyTLS 与普通裸 TCP Trojan/VMess/VLESS TLS 的有序字符串列表（或逗号分隔字符串）；显式值在 `tls` 与 `utls` 模式下都会用于实际 TLS 握手。QUIC 继续使用下文的协议专属规则。 |
 
 #### 协议专属选项
@@ -142,7 +142,7 @@ VLESS 字段会在派生节点身份前应用：
 | --- | --- |
 | `uuid`, then `password` | 凭据；`uuid` 优先，旧 `password` 作为回退。 |
 | `encryption`, then `cipher` | VLESS Encryption；`encryption` 优先。 |
-| `flow` | 非空 VLESS flow。 |
+| `flow` | 空值或纯空白视为未指定；否则必须为 `xtls-rprx-vision`。 |
 | `network` | Transport。 |
 | `reality-opts.public-key` | 启用 REALITY TLS 承载；必须是非空 string。 |
 | `reality-opts.short-id` | 可选 REALITY short ID。 |
@@ -163,7 +163,7 @@ VLESS 字段会在派生节点身份前应用：
 | `udp-over-tcp: true` | `uot-v2` | Boolean 简写。 |
 | `udp-over-tcp: { enabled: true, version: 0|2 }` | `uot-v2` | 缺失 `version` 按 `0` 处理；也接受 `_` 别名。 |
 | `packet-encoding: xudp` | `xudp` | `packet_encoding` 是扁平别名。 |
-| `xudp: true` | `xudp` | Boolean 简写。 |
+| `xudp: true` | `xudp` | 以布尔值显式选择 XUDP。 |
 | 未声明其他 packet 设置时的 `udp: true` | `xudp` | 对齐常见 Clash VLESS UDP 默认行为；显式 mode 优先。 |
 | 规范分享链接 `vless_mode=mux-cool` | `mux-cool` | Clash packet/mux 别名不接受 `mux-cool`。 |
 

@@ -23,6 +23,7 @@ use base64::Engine as _;
 
 use crate::error::ConfigError;
 use crate::node::{Node, OutboundConfig, ShadowsocksConfig};
+use crate::options::vocab::optional_text;
 
 mod options;
 
@@ -255,15 +256,20 @@ impl VmessLinkJson {
             enabled: self.tls.as_deref() == Some("tls"),
             ..Default::default()
         };
-        if let Some(value) = self.host.filter(|value| !value.is_empty()) {
+        let host_claim = self.host;
+        let host_sni_claim = optional_text([host_claim.as_deref()])
+            .map_err(|_| ConfigError::Parse("invalid VMess TLS server name".into()))?;
+        let sni_claim = optional_text([self.sni.as_deref()])
+            .map_err(|_| ConfigError::Parse("invalid VMess TLS server name".into()))?;
+        if let Some(value) = host_claim.as_deref() {
             if transport == "ws" {
-                stream.ws_host = Some(value);
-            } else {
-                tls.sni = Some(value);
+                stream.ws_host = Some(value.to_string());
+            } else if let Some(value) = host_sni_claim {
+                tls.sni = Some(value.to_string());
             }
         }
-        if let Some(value) = self.sni.filter(|value| !value.is_empty()) {
-            tls.sni = Some(value);
+        if let Some(value) = sni_claim {
+            tls.sni = Some(value.to_string());
         }
         if let Some(value) = self.path.filter(|value| !value.is_empty()) {
             match transport.as_str() {

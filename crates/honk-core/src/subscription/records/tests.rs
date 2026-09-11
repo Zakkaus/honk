@@ -240,3 +240,146 @@ fn reality_does_not_override_explicit_tls_disable() {
     assert_eq!(nodes.len(), 1);
     assert_eq!(nodes[0].name, "survivor");
 }
+
+const C07_RECORD_TLS_ALIASES: &str = r#"named-all=trojan,example.com,443,fixture-password,servername=tls.example,server-name=tls.example,sni=tls.example,tls-name=tls.example,tls-host=tls.example,tag=named-all
+named-baseline=trojan,example.com,443,fixture-password,sni=tls.example,tag=named-baseline
+named-empty=trojan,empty.example,443,fixture-password,servername=,server-name=,sni=,tls-name=,tls-host=,tag=named-empty
+named-conflict=trojan,conflict.example,443,fixture-password,servername=first.example,server-name=second.example,tag=named-conflict
+named-off=trojan,off.example,443,fixture-password,sni=off,tag=named-off
+vless=ws.example:443,password=11111111-1111-4111-8111-111111111111,obfs=wss,obfs-host=ws.example,tag=qx-wss-fallback
+vless=explicit.example:443,password=22222222-2222-4222-8222-222222222222,obfs=wss,obfs-host=ws.example,sni=explicit.example,tag=qx-wss-explicit"#;
+
+#[test]
+fn c07_record_tls_aliases_coalesce_and_preserve_qx_wss_fallback() {
+    let nodes = parse_records_subscription(C07_RECORD_TLS_ALIASES, None).unwrap();
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "named-all",
+            "named-baseline",
+            "named-empty",
+            "qx-wss-fallback",
+            "qx-wss-explicit"
+        ]
+    );
+
+    let all = &nodes[0];
+    let baseline = &nodes[1];
+    let empty = &nodes[2];
+    let fallback = &nodes[3];
+    let explicit = &nodes[4];
+    assert_eq!(all.tls().unwrap().sni.as_deref(), Some("tls.example"));
+    assert_eq!(
+        all.trojan().unwrap().password.as_deref(),
+        Some("fixture-password")
+    );
+    assert_eq!(all.id, baseline.id);
+    assert_eq!(empty.tls().unwrap().sni, None);
+    assert_eq!(fallback.tls().unwrap().sni.as_deref(), Some("ws.example"));
+    assert_eq!(fallback.transport().unwrap().transport, "ws");
+    assert_eq!(
+        fallback.transport().unwrap().ws_host.as_deref(),
+        Some("ws.example")
+    );
+    assert_eq!(
+        explicit.tls().unwrap().sni.as_deref(),
+        Some("explicit.example")
+    );
+    assert_eq!(
+        explicit.transport().unwrap().ws_host.as_deref(),
+        Some("ws.example")
+    );
+}
+
+const C07_RECORD_FLOW_ALIASES: &str = r#"named-both=vless,flow.example,443,33333333-3333-4333-8333-333333333333,flow=xtls-rprx-vision,vless-flow=xtls-rprx-vision,tls=true
+named-flow-only=vless,flow.example,443,33333333-3333-4333-8333-333333333333,flow=xtls-rprx-vision,tls=true
+named-vless-flow-only=vless,flow.example,443,33333333-3333-4333-8333-333333333333,vless-flow=xtls-rprx-vision,tls=true
+vless=flow-qx.example:443,password=44444444-4444-4444-8444-444444444444,flow=xtls-rprx-vision,vless-flow=xtls-rprx-vision,tls=true,tag=qx-both
+vless=flow-qx.example:443,password=44444444-4444-4444-8444-444444444444,flow=xtls-rprx-vision,tls=true,tag=qx-flow-only
+vless=flow-qx.example:443,password=44444444-4444-4444-8444-444444444444,vless-flow=xtls-rprx-vision,tls=true,tag=qx-vless-flow-only
+named-empty=vless,empty-flow.example,443,55555555-5555-4555-8555-555555555555,flow=,vless-flow=,tls=true,tag=named-empty
+named-empty-baseline=vless,empty-flow.example,443,55555555-5555-4555-8555-555555555555,tls=true,tag=named-empty-baseline
+vless=empty-qx.example:443,password=66666666-6666-4666-8666-666666666666,flow=,vless-flow=,tls=true,tag=qx-empty
+vless=empty-qx.example:443,password=66666666-6666-4666-8666-666666666666,tls=true,tag=qx-empty-baseline
+named-positional=vless,positional.example,443,77777777-7777-4777-8777-777777777777,xtls-rprx-vision,tls=true
+named-conflict=vless,conflict-flow.example,443,88888888-8888-4888-8888-888888888888,flow=xtls-rprx-vision,vless-flow=other-flow,tls=true
+vless=conflict-qx.example:443,password=99999999-9999-4999-8999-999999999999,flow=xtls-rprx-vision,vless-flow=other-flow,tls=true,tag=qx-conflict"#;
+#[test]
+fn c07_record_flow_aliases_resolve_by_dialect_without_positional_fallback() {
+    let nodes = parse_records_subscription(C07_RECORD_FLOW_ALIASES, None).unwrap();
+    assert_eq!(nodes.len(), 11);
+    assert!(nodes.iter().all(|node| node.vless().is_some()));
+
+    let named_both = nodes.iter().find(|node| node.name == "named-both").unwrap();
+    let named_flow_only = nodes
+        .iter()
+        .find(|node| node.name == "named-flow-only")
+        .unwrap();
+    let named_vless_flow_only = nodes
+        .iter()
+        .find(|node| node.name == "named-vless-flow-only")
+        .unwrap();
+    let qx_both = nodes.iter().find(|node| node.name == "qx-both").unwrap();
+    let qx_flow_only = nodes
+        .iter()
+        .find(|node| node.name == "qx-flow-only")
+        .unwrap();
+    let qx_vless_flow_only = nodes
+        .iter()
+        .find(|node| node.name == "qx-vless-flow-only")
+        .unwrap();
+    let named_empty = nodes
+        .iter()
+        .find(|node| node.name == "named-empty")
+        .unwrap();
+    let named_empty_baseline = nodes
+        .iter()
+        .find(|node| node.name == "named-empty-baseline")
+        .unwrap();
+    let qx_empty = nodes.iter().find(|node| node.name == "qx-empty").unwrap();
+    let qx_empty_baseline = nodes
+        .iter()
+        .find(|node| node.name == "qx-empty-baseline")
+        .unwrap();
+    let named_positional = nodes
+        .iter()
+        .find(|node| node.name == "named-positional")
+        .unwrap();
+
+    for node in [
+        named_both,
+        named_flow_only,
+        named_vless_flow_only,
+        qx_both,
+        qx_flow_only,
+        qx_vless_flow_only,
+    ] {
+        assert_eq!(
+            node.vless().unwrap().flow.as_deref(),
+            Some("xtls-rprx-vision")
+        );
+    }
+    for node in [
+        named_empty,
+        named_empty_baseline,
+        qx_empty,
+        qx_empty_baseline,
+        named_positional,
+    ] {
+        assert_eq!(node.vless().unwrap().flow.as_deref(), None);
+    }
+
+    for (left, right) in [
+        (named_both, named_flow_only),
+        (named_both, named_vless_flow_only),
+        (qx_both, qx_flow_only),
+        (qx_both, qx_vless_flow_only),
+        (named_empty, named_empty_baseline),
+        (qx_empty, qx_empty_baseline),
+    ] {
+        assert_eq!(left.id, right.id);
+    }
+}

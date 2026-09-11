@@ -1,12 +1,37 @@
 //! Apply share-link query fields before validating and deriving node identity.
 
-use std::collections::HashMap;
-
 use crate::error::ConfigError;
 use crate::node::{Hysteria2Config, Node, OutboundConfig, QuicOptions, VlessConfig};
+use crate::options::vocab::{optional_flow, optional_text};
 use crate::types::{NodeProtocol, parse_duration_secs};
 
-type Query = HashMap<String, String>;
+#[derive(Default)]
+pub(super) struct Query(Vec<(String, String)>);
+
+impl Query {
+    fn push(&mut self, key: String, value: String) {
+        self.0.push((key, value));
+    }
+
+    pub(super) fn get(&self, key: &str) -> Option<&String> {
+        self.0
+            .iter()
+            .rev()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value)
+    }
+
+    fn values<'a>(&'a self, key: &str) -> impl Iterator<Item = &'a str> {
+        self.0
+            .iter()
+            .filter(move |(candidate, _)| candidate == key)
+            .map(|(_, value)| value.as_str())
+    }
+
+    fn contains_key(&self, key: &str) -> bool {
+        self.0.iter().any(|(candidate, _)| candidate == key)
+    }
+}
 
 pub(super) fn parse_query(
     url: &url::Url,
@@ -14,7 +39,7 @@ pub(super) fn parse_query(
     shadowrocket: bool,
 ) -> Result<Query, ConfigError> {
     let shadowrocket_vmess = shadowrocket && protocol == NodeProtocol::VMess;
-    let mut query = HashMap::new();
+    let mut query = Query::default();
     let mut mode_seen = false;
     for (key, value) in url.query_pairs() {
         let key = key.into_owned();
@@ -33,7 +58,7 @@ pub(super) fn parse_query(
             }
             mode_seen = true;
         }
-        query.insert(key, value.into_owned());
+        query.push(key, value.into_owned());
     }
     if protocol != NodeProtocol::VLess
         && (query.contains_key("vless_mode")
@@ -157,11 +182,14 @@ pub(super) fn apply_tls(
             NodeProtocol::VMess => security.is_some_and(|value| value != "none"),
             _ => tls.enabled,
         };
-        tls.sni = query
-            .get("sni")
-            .filter(|value| !value.is_empty())
-            .or_else(|| query.get("peer").filter(|value| !value.is_empty()))
-            .cloned();
+        tls.sni = optional_text(
+            query
+                .values("sni")
+                .map(Some)
+                .chain(query.values("peer").map(Some)),
+        )
+        .map_err(|_| ConfigError::Parse("conflicting TLS server name parameters".into()))?
+        .map(str::to_string);
         if let Some(value) = query
             .get("allowInsecure")
             .or_else(|| query.get("allow_insecure"))
@@ -201,6 +229,14 @@ pub(super) fn apply_transport(
     shadowrocket: bool,
 ) -> Result<(), ConfigError> {
     let protocol = node.protocol();
+    let host_fallback = query.get("host").map(String::as_str);
+    let host_sni_fallback = optional_text([host_fallback])
+        .map_err(|_| ConfigError::Parse("invalid share-link host parameter".into()))?;
+    let obfs_host = if matches!(protocol, NodeProtocol::VLess | NodeProtocol::VMess) {
+        query.get("obfsParam").map(String::as_str)
+    } else {
+        None
+    };
     let shadowrocket_vmess = shadowrocket && protocol == NodeProtocol::VMess;
     let mut host_consumed = false;
     if let Some(transport) = node.transport_mut() {
@@ -246,12 +282,8 @@ pub(super) fn apply_transport(
         }
         match transport.transport.as_str() {
             "ws" => {
-                if let Some(value) = query.get("host").or_else(|| {
-                    (matches!(protocol, NodeProtocol::VLess | NodeProtocol::VMess))
-                        .then(|| query.get("obfsParam"))
-                        .flatten()
-                }) {
-                    transport.ws_host = Some(value.clone());
+                if let Some(value) = host_fallback.or(obfs_host) {
+                    transport.ws_host = Some(value.to_string());
                     host_consumed = true;
                 }
                 transport.ws_path = query.get("path").cloned();
@@ -273,10 +305,10 @@ pub(super) fn apply_transport(
     }
     if !host_consumed
         && node.tls().is_some_and(|tls| tls.sni.is_none())
-        && let Some(value) = query.get("host").filter(|value| !value.is_empty())
+        && let Some(value) = host_sni_fallback
         && let Some(tls) = node.tls_mut()
     {
-        tls.sni = Some(value.clone());
+        tls.sni = Some(value.to_string());
     }
     if shadowrocket_vmess {
         let network = node
@@ -470,7 +502,11 @@ fn apply_vless(config: &mut VlessConfig, query: &Query) -> Result<(), ConfigErro
             }
         }
     }
-    config.flow = query.get("flow").filter(|value| !value.is_empty()).cloned();
+    let flow = optional_text(query.values("flow").map(Some))
+        .map_err(|_| ConfigError::Parse("conflicting VLESS flow parameters".into()))?;
+    config.flow = optional_flow(flow)
+        .map_err(|_| ConfigError::Validation("unsupported VLESS flow".into()))?
+        .map(str::to_string);
     // Shadowrocket's exporter maps 1 to retired XTLS Direct and 2 to Vision.
     if let Some(xtls) = query.get("xtls") {
         let flow = match xtls.as_str() {

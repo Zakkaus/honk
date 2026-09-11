@@ -10,6 +10,9 @@ use honk_config::types::NodeProtocol;
 fn b64(s: &str) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s)
 }
+fn vmess_link(json: &str) -> String {
+    format!("vmess://{}", b64(json))
+}
 
 fn serialization_golden_node() -> Node {
     Node {
@@ -332,6 +335,107 @@ fn test_vmess_grpc_service_from_path() {
     assert!(node.transport().unwrap().ws_host.is_none());
     assert_eq!(node.tls().unwrap().sni.as_deref(), Some("sni.example.com"));
     assert!(node.tls().unwrap().enabled);
+}
+
+#[test]
+fn test_share_link_tls_name_aliases_resolve_before_loss() {
+    let canonical = Node::from_share_link("trojan://pw@example.com:443?sni=edge.example").unwrap();
+    let empty_sni =
+        Node::from_share_link("trojan://pw@example.com:443?sni=&peer=edge.example").unwrap();
+    let equal_aliases =
+        Node::from_share_link("trojan://pw@example.com:443?sni=edge.example&peer=edge.example")
+            .unwrap();
+    let repeated_equal =
+        Node::from_share_link("trojan://pw@example.com:443?sni=edge.example&sni=edge.example")
+            .unwrap();
+    for equivalent in [empty_sni, equal_aliases, repeated_equal] {
+        assert_eq!(
+            equivalent.tls().unwrap().sni.as_deref(),
+            Some("edge.example")
+        );
+        assert_eq!(equivalent.derive_id(), canonical.derive_id());
+    }
+
+    for link in [
+        "trojan://pw@example.com:443?sni=one.example&peer=two.example",
+        "trojan://pw@example.com:443?sni=one.example&sni=two.example",
+    ] {
+        assert!(Node::from_share_link(link).is_err(), "{link}");
+    }
+
+    let raw_tcp =
+        Node::from_share_link("trojan://pw@example.com:443?host=fallback.example").unwrap();
+    assert_eq!(
+        raw_tcp.tls().unwrap().sni.as_deref(),
+        Some("fallback.example")
+    );
+    assert!(raw_tcp.transport().unwrap().ws_host.is_none());
+    let ws =
+        Node::from_share_link("trojan://pw@example.com:443?type=ws&host=header.example").unwrap();
+    assert_eq!(
+        ws.transport().unwrap().ws_host.as_deref(),
+        Some("header.example")
+    );
+    assert!(ws.tls().unwrap().sni.is_none());
+    let raw_tcp = Node::from_share_link(&vmess_link(
+        r#"{"add":"vmess.example","port":"443","id":"b831381d-6324-4d53-ad4f-8cda48b30811","net":"tcp","host":"fallback.example","sni":" \t ","tls":"tls"}"#,
+    ))
+    .unwrap();
+    assert_eq!(
+        raw_tcp.tls().unwrap().sni.as_deref(),
+        Some("fallback.example")
+    );
+
+    let ws = Node::from_share_link(&vmess_link(
+        r#"{"add":"vmess.example","port":"443","id":"b831381d-6324-4d53-ad4f-8cda48b30811","net":"ws","host":"header.example","sni":" \t ","tls":"tls"}"#,
+    ))
+    .unwrap();
+    assert_eq!(
+        ws.transport().unwrap().ws_host.as_deref(),
+        Some("header.example")
+    );
+    assert!(ws.tls().unwrap().sni.is_none());
+}
+
+#[test]
+fn test_flat_optional_sni_and_flow_normalize_like_url_inputs() {
+    let flat: Node = serde_json::from_value(serde_json::json!({
+        "name": "flat",
+        "protocol": "vless",
+        "address": "example.com:443",
+        "host": "example.com",
+        "port": 443,
+        "password": "b831381d-6324-4d53-ad4f-8cda48b30811",
+        "tls": true,
+        "sni": " \t ",
+        "flow": "\n ",
+    }))
+    .unwrap();
+    let url = Node::from_share_link(
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?security=tls&flow=",
+    )
+    .unwrap();
+
+    assert!(flat.tls().unwrap().sni.is_none());
+    assert!(flat.vless().unwrap().flow.is_none());
+    assert_eq!(flat.tls().unwrap().sni, url.tls().unwrap().sni);
+    assert_eq!(flat.vless().unwrap().flow, url.vless().unwrap().flow);
+    assert_eq!(flat.derive_id(), url.derive_id());
+}
+
+#[test]
+fn test_share_link_flow_empty_is_absent_and_invalid_is_rejected() {
+    let empty = Node::from_share_link(
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?security=tls&flow=",
+    )
+    .unwrap();
+    assert!(empty.vless().unwrap().flow.is_none());
+    assert!(
+        Node::from_share_link(
+            "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?security=tls&flow=invalid"
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -838,7 +942,7 @@ fn shadowrocket_hysteria2_peer_preserves_sni_and_identity() {
         "hysteria2://secret@example.com:8443?sni=tls.example&insecure=1#edge",
     )
     .unwrap();
-    for query in ["peer=tls.example", "peer=ignored.example&sni=tls.example"] {
+    for query in ["peer=tls.example", "peer=tls.example&sni=tls.example"] {
         let node = Node::from_share_link(&format!(
             "hysteria2://secret@example.com:8443?{query}&insecure=1#edge"
         ))
@@ -1146,7 +1250,7 @@ fn shadowrocket_vless_reality_matches_canonical_link() {
         b64(authority),
     ] {
         let node = Node::from_share_link(&format!(
-            "vless://{encoded}?tls=1&xtls=2&peer=ignored.example&sni=tls.example&pbk=jHkr1EmJCyQxjU0HXJlNblVdXB4Z7yODHJhgJ5lqmzc&sid=0123456789abcdef&remark=Hong%20Kong"
+            "vless://{encoded}?tls=1&xtls=2&peer=tls.example&sni=tls.example&pbk=jHkr1EmJCyQxjU0HXJlNblVdXB4Z7yODHJhgJ5lqmzc&sid=0123456789abcdef&remark=Hong%20Kong"
         ))
         .unwrap();
         assert_eq!(node.host, canonical.host);
@@ -1328,10 +1432,11 @@ fn test_validate_flow_requires_tls_or_reality() {
 
 #[test]
 fn test_validate_flow_rejects_unknown_value() {
-    let node = Node::from_share_link(
-        "vless://uuid@example.com:443?flow=xtls-rprx-vision-udp443#flow-bad-value",
+    let mut node = Node::from_share_link(
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443#flow-bad-value",
     )
     .unwrap();
+    node.vless_mut().unwrap().flow = Some("xtls-rprx-vision-udp443".into());
     let mut config = Config::default();
     config.nodes.push(node);
     assert!(config.validate().is_err());

@@ -1,5 +1,6 @@
 //! Normalize sing-box outbounds into the shared Clash-shaped vocabulary.
 
+use honk_config::options::vocab::optional_text;
 use honk_config::types::NodeProtocol;
 use serde_yaml::{Mapping, Value};
 
@@ -513,7 +514,10 @@ fn normalize_tls(source: &mut Mapping, proxy: &mut Mapping) -> Result<(), &'stat
         return Err("sing-box TLS settings must be an object");
     };
     let enabled = take_bool(&mut tls, "enabled")?.unwrap_or(false);
-    let server_name = take_optional_string(&mut tls, "server_name")?;
+    let mut server_name = take_optional_string(&mut tls, "server_name")?;
+    if optional_text([server_name.as_deref()])?.is_none() {
+        server_name = None;
+    }
     let insecure = take_bool(&mut tls, "insecure")?.unwrap_or(false);
     let reality = tls.remove("reality");
     let alpn = tls.remove("alpn");
@@ -526,9 +530,7 @@ fn normalize_tls(source: &mut Mapping, proxy: &mut Mapping) -> Result<(), &'stat
     // the negotiated proxy protocol. honk selects fingerprints process-wide.
     tls.remove("utls");
     if !enabled
-        && (server_name
-            .as_ref()
-            .is_some_and(|value| !value.trim().is_empty())
+        && (server_name.is_some()
             || insecure
             || reality.as_ref().is_some_and(active)
             || alpn.as_ref().is_some_and(active))
@@ -538,7 +540,7 @@ fn normalize_tls(source: &mut Mapping, proxy: &mut Mapping) -> Result<(), &'stat
     reject_active_remainder(&tls, "unsupported sing-box TLS settings")?;
 
     put(proxy, "tls", Value::Bool(enabled));
-    if let Some(server_name) = server_name.filter(|value| !value.trim().is_empty()) {
+    if let Some(server_name) = server_name {
         put(proxy, "servername", Value::String(server_name));
     }
     if insecure {

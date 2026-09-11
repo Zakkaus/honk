@@ -122,7 +122,7 @@ Accepted `type` values are `socks5`, `ss`/`shadowsocks`, `trojan`, `vmess`, `vle
 | `plugin`, `plugin-opts` | — | Unsupported. An entry with either non-empty value is skipped before node publication; mapping-valued options are rejected too. |
 | `network` | `transport` | Optional transport string. |
 | `tls` | `tls` | Optional boolean. Trojan, AnyTLS, Hysteria2, TUIC, and Juicity default to TLS and reject explicit disabling. |
-| `servername`, `sni` | `sni` | `servername` wins; `sni` is the fallback. |
+| `servername`, `server-name`, `sni` | `sni` | Empty or whitespace-only names are absent; nonempty aliases must agree byte for byte. |
 | `skip-cert-verify` | `skip_cert_verify` | Optional boolean. |
 | `alpn` | `tls_alpn` | Ordered string list (or comma-separated string) for AnyTLS and ordinary raw-TCP Trojan/VMess/VLESS TLS; explicit values reach the TLS handshake in both `tls` and `utls` modes. QUIC retains the protocol-specific rules below. |
 
@@ -142,7 +142,7 @@ VLESS fields are applied before node identity is derived:
 | --- | --- |
 | `uuid`, then `password` | Credential; `uuid` wins and legacy `password` is the fallback. |
 | `encryption`, then `cipher` | VLESS Encryption; `encryption` wins. |
-| `flow` | Non-empty VLESS flow. |
+| `flow` | Empty or whitespace-only is absent; otherwise exactly `xtls-rprx-vision`. |
 | `network` | Transport. |
 | `reality-opts.public-key` | Enables the REALITY TLS carrier. It must be a non-empty string. |
 | `reality-opts.short-id` | Optional REALITY short ID. |

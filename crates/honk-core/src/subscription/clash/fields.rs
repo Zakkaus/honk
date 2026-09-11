@@ -1,3 +1,4 @@
+use honk_config::options::vocab::optional_text;
 use serde_yaml::{Mapping, Value};
 
 use super::super::yaml_value;
@@ -56,6 +57,20 @@ pub(super) fn text(value: &Value) -> Result<Option<String>, &'static str> {
 
 pub(super) fn text_alias(mapping: &Mapping, keys: &[&str]) -> Result<Option<String>, &'static str> {
     parsed_alias(mapping, keys, text)
+}
+
+pub(super) fn optional_text_alias(
+    mapping: &Mapping,
+    keys: &[&str],
+) -> Result<Option<String>, &'static str> {
+    parsed_alias(mapping, keys, |value| {
+        let value = text(value)?;
+        if optional_text([value.as_deref()])?.is_some() {
+            Ok(value)
+        } else {
+            Ok(None)
+        }
+    })
 }
 
 pub(super) fn bool_alias(mapping: &Mapping, keys: &[&str]) -> Result<Option<bool>, &'static str> {

@@ -5,6 +5,7 @@
 //! Clash key vocabulary so the common parser owns Node
 //! construction and validation.
 
+use honk_config::options::vocab::{optional_flow, optional_text};
 use std::collections::HashMap;
 
 use serde_yaml::{Mapping, Value};
@@ -420,14 +421,8 @@ fn apply_protocol(
                     take_option(options, &["method", "encryption"]),
                 );
             }
-            set_optional(
-                map,
-                "flow",
-                match dialect {
-                    Dialect::Named => take_option(options, &["flow", "vless-flow"]),
-                    Dialect::QuantumultX => take_option(options, &["vless-flow", "flow"]),
-                },
-            );
+            let flow = take_optional_flow_alias(options, dialect)?;
+            set_optional(map, "flow", flow);
             if dialect == Dialect::Named {
                 apply_transport(map, options, positions)?;
             }
@@ -685,10 +680,10 @@ fn apply_security(
         return Err("record requires unsupported TLS behavior");
     }
 
-    let servername = take_option(
+    let servername = take_optional_text_alias(
         options,
         &["servername", "server-name", "sni", "tls-name", "tls-host"],
-    )
+    )?
     .or(obfs_sni);
     if servername
         .as_deref()
@@ -800,6 +795,33 @@ fn take_raw(options: &mut HashMap<String, String>, keys: &[&str]) -> Option<Stri
         options.remove(*key);
     }
     value
+}
+
+fn take_optional_text_alias(
+    options: &mut HashMap<String, String>,
+    keys: &[&str],
+) -> RecordResult<Option<String>> {
+    let selected = optional_text(keys.iter().map(|key| options.get(*key).map(String::as_str)))?
+        .map(str::to_owned);
+    for key in keys {
+        options.remove(*key);
+    }
+    Ok(selected)
+}
+
+fn take_optional_flow_alias(
+    options: &mut HashMap<String, String>,
+    dialect: Dialect,
+) -> RecordResult<Option<String>> {
+    let keys = match dialect {
+        Dialect::Named => &["flow", "vless-flow"][..],
+        Dialect::QuantumultX => &["vless-flow", "flow"][..],
+    };
+    let Some(value) = take_optional_text_alias(options, keys)? else {
+        return Ok(None);
+    };
+    optional_flow(Some(value.as_str()))?;
+    Ok(Some(value))
 }
 
 fn take_option(options: &mut HashMap<String, String>, keys: &[&str]) -> Option<String> {

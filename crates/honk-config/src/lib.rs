@@ -12,6 +12,7 @@ pub mod error;
 pub mod experimental;
 pub mod group;
 pub mod node;
+pub mod options;
 pub mod parser;
 pub mod paths;
 pub mod routing;

@@ -178,7 +178,7 @@ proxies:
     uuid: b831381d-6324-4d53-ad4f-8cda48b30811
     password: legacy-password
     servername: mask.example
-    sni: ignored.example
+    sni: mask.example
     flow: xtls-rprx-vision
     network: tcp
     client-fingerprint: chrome
@@ -753,4 +753,51 @@ fn clash_rejects_legacy_vless_udp_and_nondefault_juicity_windows() {
     );
     assert_eq!(nodes[1].name, "default-window");
     assert_eq!(nodes[1].juicity().unwrap().quic.mtu, Some(1400));
+}
+
+const C07_CLASH_SERVERNAME_ALIASES: &str = r#"proxies:
+  - name: empty
+    type: trojan
+    server: empty.example
+    port: 443
+    password: fixture-password
+    servername: ""
+    server-name: " \t"
+    sni: null
+  - name: equal
+    type: trojan
+    server: equal.example
+    port: 443
+    password: fixture-password
+    servername: tls.example
+    server-name: tls.example
+    sni: tls.example
+  - name: baseline
+    type: trojan
+    server: equal.example
+    port: 443
+    password: fixture-password
+    sni: tls.example
+  - name: conflict
+    type: trojan
+    server: conflict.example
+    port: 443
+    password: fixture-password
+    servername: first.example
+    server-name: second.example
+"#;
+
+#[test]
+fn c07_clash_tls_name_aliases_normalize_empty_equal_and_conflict() {
+    let nodes = parse_clash_subscription(C07_CLASH_SERVERNAME_ALIASES, None).unwrap();
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>(),
+        ["empty", "equal", "baseline"]
+    );
+    assert_eq!(nodes[0].tls().unwrap().sni, None);
+    assert_eq!(nodes[1].tls().unwrap().sni.as_deref(), Some("tls.example"));
+    assert_eq!(nodes[1].id, nodes[2].id);
 }

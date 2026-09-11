@@ -4,13 +4,14 @@ mod fields;
 pub(super) mod options;
 
 use honk_config::node::{Node, OutboundConfig};
+use honk_config::options::vocab::optional_flow;
 use honk_config::types::NodeProtocol;
 use serde_yaml::Mapping;
 
 use self::fields::{
     active as yaml_active, active_for_key as yaml_active_for_key, bool_alias as yaml_bool_alias,
-    duration_alias as yaml_duration_alias, list_alias as yaml_list_alias, ports as yaml_ports,
-    rate_alias as yaml_rate_alias, raw_alias as yaml_alias, text as yaml_text,
+    duration_alias as yaml_duration_alias, list_alias as yaml_list_alias, optional_text_alias,
+    ports as yaml_ports, rate_alias as yaml_rate_alias, raw_alias as yaml_alias, text as yaml_text,
     text_alias as yaml_text_alias, u64_alias as yaml_u64_alias,
 };
 use super::yaml_value;
@@ -325,8 +326,10 @@ fn apply_protocol(mapping: &Mapping, node: &mut Node) -> Result<(), &'static str
         OutboundConfig::Vless(config) => {
             config.uuid = yaml_text_alias(mapping, &["uuid"])?.or(password);
             config.encryption = yaml_text_alias(mapping, &["encryption"])?.or(cipher);
-            config.flow =
-                yaml_text_alias(mapping, &["flow"])?.filter(|flow| !flow.trim().is_empty());
+            let flow = optional_text_alias(mapping, &["flow"])?;
+            config.flow = optional_flow(flow.as_deref())
+                .map_err(|_| "VLESS flow is unsupported")?
+                .map(str::to_owned);
             config.mode = options::parse_vless_external_mode(mapping)?;
         }
         OutboundConfig::Hysteria2(config) => {
@@ -509,8 +512,7 @@ fn apply_tls(
     }
     if let Some(tls) = node.tls_mut() {
         tls.enabled = tls_enabled;
-        tls.sni = yaml_text_alias(mapping, &["servername", "server-name"])?
-            .or(yaml_text_alias(mapping, &["sni"])?);
+        tls.sni = optional_text_alias(mapping, &["servername", "server-name", "sni"])?;
         tls.skip_cert_verify = yaml_bool_alias(
             mapping,
             &["skip-cert-verify", "skip_cert_verify", "insecure"],

@@ -59,7 +59,7 @@ Node 模型包含下列字段。分享链接从 scheme、userinfo、authority、
 | `plugin` / `plugin_opts` | string? | null | 解析后的 SIP002 插件元数据；代理插件不受支持，订阅导入会拒绝非空值 |
 | `transport` | string | `"tcp"` | 流 transport；校验只接受空值/`tcp`、`ws` 或 `grpc` |
 | `tls` | bool | `false` | 流 TLS 标志；Trojan/AnyTLS 链接开启，规范 VLESS 链接历史默认开启 |
-| `sni` | string? | null | TLS 服务端名称；依次采用非空的 `sni`、`peer`、未被传输层使用的 `host` 查询参数 |
+| `sni` | string? | null | TLS 服务端名称；非空的 `sni` 与 `peer` 必须一致，未被传输层使用的 `host` 作为回退值 |
 | `tls_alpn` | string[] | `[]` | 结构化配置/订阅导入的普通裸 TCP TLS ALPN；空列表保留 TLS profile 默认值。非空值支持 AnyTLS 与 TCP Trojan/VMess/VLESS，不支持关闭 TLS、REALITY、WS/gRPC 或 QUIC。TUIC 继续使用 `tuic_alpn`；这不是分享链接 query。 |
 | `skip_cert_verify` | bool | `false` | `allowInsecure`、`allow_insecure` 或 `insecure` 等于 `1`/`true` |
 | `ech_enabled` | bool | `false` | 存在静态 ECH 配置，或 `ech=1`/`true` |
@@ -161,11 +161,13 @@ query 映射遵循 [Shadowrocket 导出器](https://github.com/cedar2025/Xboard/
 | 未指定 `security` 时的 `pbk`、`sid`、`spx` | 选择 REALITY，必须提供非空 `pbk`。仍支持显式 `security=reality`。 |
 | `xtls=0` / `xtls=2` | 无 flow / `xtls-rprx-vision`。拒绝已淘汰的 XTLS Direct（`xtls=1`）及未知值。 |
 | `remark` | 没有非空 fragment 时用作显示名称，作为 query 值只解码一次。 |
-| `peer` | 缺少 `sni` 时的 SNI 回退值；Hysteria2 和其他 URL 形 TLS 链接也支持。 |
+| `peer` | 显式 SNI 别名；非空的 `sni` 与 `peer` 必须一致。空值或纯空白名称视为未指定。 |
 | `obfs=websocket`、`obfsParam`、`path` | WebSocket transport、Host header 回退值和路径。 |
 | `obfs=grpc`、`path` | gRPC transport 和 service name 回退值。 |
 
-TLS/REALITY、flow 或 transport 声明相互冲突时会拒绝链接，不会静默降级。VLESS 的 `obfs` 仅接受空值/`none`、`websocket` 或 `grpc`，不会把未支持的传输方式当作 TCP。规范 `host`、`serviceName`/`service_name`、`sni` 字段优先于对应别名。规范化发生在派生节点 ID 之前，因此等价的规范链接与 Shadowrocket 链接拥有相同身份。
+TLS/REALITY、flow 或传输声明相互冲突时会拒绝链接，不会静默降级。VLESS 的 `obfs` 仅接受空值/`none`、`websocket` 或 `grpc`，不会把不支持的传输方式当作 TCP。`host` 和 `serviceName`/`service_name` 保留原有回退顺序。显式 SNI 别名在赋值前按原始字节比较：相同值合并，不同值报错，不转换大小写。空值或纯空白的 SNI 和 flow 在派生节点 ID 前规范化为未指定；非空 flow 必须为 `xtls-rprx-vision`。
+
+Clash 导入会比较 `servername`、`server-name` 和 `sni`；记录格式还会比较 `tls-name` 和 `tls-host`，并保留较低优先级的 `obfs_sni` 回退值，包括 Quantumult X 的 WSS Host。记录中的 `off` 仍为无效值。分享链接和 VMess JSON 的 WebSocket `host` 仅用作 Host 请求头；非 WebSocket 传输则将其作为较低优先级的 SNI 回退值。TLS 使用方最终仍可回退到节点主机名。
 
 ### Hysteria2
 
@@ -181,7 +183,7 @@ TLS/REALITY、flow 或 transport 声明相互冲突时会拒绝链接，不会�
 | `initStreamReceiveWindow` / `initConnReceiveWindow` | QUIC 接收窗口覆盖值 |
 | `disablePathMTUDiscovery` | 值为 `1`/`true` 时关闭 QUIC PMTU 发现 |
 | `mtu` | 共用 QUIC UDP-payload 上限；只接受 1200–65527 |
-| `sni` / `peer`、insecure 别名、ECH 参数 | 共用 TLS 行为；显式 `sni` 优先于 `peer` |
+| `sni` / `peer`、insecure 别名、ECH 参数 | 共用 TLS 行为；非空的显式 SNI 别名必须一致 |
 
 ```dae
 node {

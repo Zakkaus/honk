@@ -6,6 +6,7 @@ use crate::diagnostic::{
     DetailedDiagnostic, DiagnosticSources, SafeValue, SettingPath, SourceRef,
     report_detailed_diagnostics,
 };
+use crate::options::vocab::optional_flow;
 use crate::types::NodeProtocol;
 
 use super::{
@@ -383,6 +384,14 @@ impl FlatNode {
         setting: &SettingPath,
     ) -> Result<Node, crate::ConfigError> {
         self.strip_protocol_incompatible_fields(diagnostics, source, setting);
+        if self.protocol == NodeProtocol::VLess
+            && optional_flow(self.flow.as_deref())
+                .map_err(|_| crate::ConfigError::Validation("unsupported VLESS flow".into()))?
+                .is_none()
+        {
+            self.flow = None;
+        }
+        self.sni = self.sni.take().filter(|value| !value.trim().is_empty());
         let mut flat = self;
         let outbound = match flat.protocol {
             NodeProtocol::SS => OutboundConfig::Shadowsocks(ShadowsocksConfig {

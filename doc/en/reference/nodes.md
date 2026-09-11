@@ -59,7 +59,7 @@ The Node model exposes the fields below. Share links populate operator-facing fi
 | `plugin` / `plugin_opts` | string? | null | Parsed SIP002 plugin metadata; subscription import rejects non-empty values because proxy plugins are unsupported |
 | `transport` | string | `"tcp"` | Stream transport; validated as empty/`tcp`, `ws`, or `grpc` |
 | `tls` | bool | `false` | Stream TLS flag; Trojan/AnyTLS links enable it, canonical VLESS links historically default on |
-| `sni` | string? | null | TLS server name from the first nonempty `sni`, then `peer`, then an unconsumed `host` query |
+| `sni` | string? | null | TLS server name; nonempty `sni` and `peer` claims must agree, then an unconsumed `host` supplies the fallback |
 | `tls_alpn` | string[] | `[]` | Structured/imported ordinary raw-TCP TLS ALPN; empty preserves the TLS profile default. Nonempty values are supported for AnyTLS and TCP Trojan/VMess/VLESS, not disabled TLS, REALITY, WS/gRPC, or QUIC. TUIC retains `tuic_alpn`; this is not a share-link query. |
 | `skip_cert_verify` | bool | `false` | `allowInsecure`, `allow_insecure`, or `insecure` equal to `1`/`true` |
 | `ech_enabled` | bool | `false` | Static ECH config present, or `ech=1`/`true` |
@@ -161,11 +161,13 @@ The query mapping follows the [Shadowrocket exporter](https://github.com/cedar20
 | `pbk`, `sid`, `spx` without `security` | Select REALITY; a non-empty `pbk` is mandatory. Explicit `security=reality` remains supported. |
 | `xtls=0` / `xtls=2` | No flow / `xtls-rprx-vision`. Retired XTLS Direct (`xtls=1`) and unknown values are rejected. |
 | `remark` | Display name when a non-empty fragment is absent; decoded once as a query value. |
-| `peer` | SNI fallback when `sni` is absent, also supported by Hysteria2 and the other URL-shaped TLS links. |
+| `peer` | Explicit SNI alias; nonempty `sni` and `peer` must agree. Empty or whitespace-only names are absent. |
 | `obfs=websocket`, `obfsParam`, `path` | WebSocket transport, Host header fallback, and path. |
 | `obfs=grpc`, `path` | gRPC transport and service-name fallback. |
 
-Conflicting TLS/REALITY, flow, or transport declarations are rejected rather than silently downgraded. `obfs` accepts only empty/`none`, `websocket`, or `grpc` for VLESS; unsupported transports are not reinterpreted as TCP. Canonical `host`, `serviceName`/`service_name`, and `sni` fields take precedence over their aliases. Normalization precedes node-ID derivation, so equivalent canonical and Shadowrocket links share identity.
+Conflicting TLS/REALITY, flow, or transport declarations are rejected rather than silently downgraded. `obfs` accepts only empty/`none`, `websocket`, or `grpc` for VLESS; unsupported transports are not reinterpreted as TCP. Canonical `host` and `serviceName`/`service_name` fields retain their existing fallback precedence. Explicit SNI aliases are compared before assignment; equal bytes coalesce, unequal names reject without case rewriting. Empty or whitespace-only SNI and flow normalize to absent before node-ID derivation. Nonempty flow must be exactly `xtls-rprx-vision`.
+
+Clash imports compare `servername`, `server-name`, and `sni`; record imports additionally compare `tls-name` and `tls-host`, retaining `obfs_sni` as a lower-priority fallback, including Quantumult X WSS Host. Record `off` remains invalid. In share links and VMess JSON, WebSocket `host` is only the Host header; outside WebSocket it is a lower-priority SNI fallback. The endpoint hostname remains the final TLS consumer fallback.
 
 ### Hysteria2
 
@@ -181,7 +183,7 @@ Both `hysteria2://` and `hy2://` are accepted. The entire percent-decoded userin
 | `initStreamReceiveWindow` / `initConnReceiveWindow` | QUIC receive-window overrides |
 | `disablePathMTUDiscovery` | Disables QUIC PMTU discovery when `1`/`true` |
 | `mtu` | Shared QUIC UDP-payload cap, accepted only in 1200–65527 |
-| `sni` / `peer`, insecure aliases, ECH parameters | Shared TLS behavior; explicit `sni` takes precedence over `peer` |
+| `sni` / `peer`, insecure aliases, ECH parameters | Shared TLS behavior; nonempty explicit SNI aliases must agree |
 
 ```dae
 node {
