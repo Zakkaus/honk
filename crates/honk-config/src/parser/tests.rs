@@ -1494,8 +1494,6 @@ group {
     );
 }
 
-// Stripping turns `group(hk#suffix)` into `group(hk`; the failed extraction must
-// neither select every node nor leave the comment behind as a subgroup name.
 #[test]
 fn test_group_filter_unquoted_hash() {
     let input = r#"
@@ -1509,22 +1507,14 @@ group {
 }
 "#;
     let mut config = parse_dae_config(input).unwrap();
-    assert!(
-        config.groups[0].groups.is_empty(),
-        "the comment must not survive as a nested group name"
-    );
-    assert!(
-        config.groups[0].nodes.is_empty(),
-        "comment-truncated group filter must not select all nodes"
-    );
+    assert_eq!(config.groups[0].groups, ["hk#suffix"]);
+    assert!(config.groups[0].nodes.is_empty());
     config
         .nodes
         .push(crate::node::Node::from_share_link("socks5://127.0.0.1:1081#new").unwrap());
     crate::parser::resolve_group_filters(&mut config.groups, &config.nodes, &config.subscriptions);
-    assert!(
-        config.groups[0].nodes.is_empty(),
-        "comment-truncated group filter must remain empty after adding a node"
-    );
+    assert_eq!(config.groups[0].groups, ["hk#suffix"]);
+    assert!(config.groups[0].nodes.is_empty());
 }
 
 #[test]

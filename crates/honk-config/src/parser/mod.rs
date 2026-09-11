@@ -2,6 +2,7 @@ pub mod cursor;
 mod diagnostics;
 mod dns;
 mod entries;
+mod groups;
 pub mod lexer;
 mod routing;
 
@@ -9,6 +10,7 @@ mod read;
 mod scalars;
 mod structure;
 use entries::{parse_node_section, parse_subscription_section};
+use groups::{parse_group_section, resolve_group_filters_inner};
 use scalars::{parse_experimental_section, parse_global_section};
 
 #[cfg(test)]
@@ -25,8 +27,7 @@ use std::path::{Path, PathBuf};
 
 use self::diagnostics::ParserDiagnostics;
 use crate::diagnostic::{
-    DetailedDiagnostic, DiagnosticSources, SafeValue, SettingPath, finish_attempt,
-    report_detailed_diagnostics,
+    DetailedDiagnostic, DiagnosticSources, finish_attempt, report_detailed_diagnostics,
 };
 use crate::error::DetailedConfigError;
 use crate::group::Group;
@@ -34,7 +35,6 @@ use crate::node::Node;
 use crate::subscription::Subscription;
 use crate::{Config, ConfigDiagnostic};
 use lexer::quoted_end;
-use regex::Regex;
 use structure::Block;
 enum ParseFailure {
     Legacy(crate::ConfigError),
@@ -537,199 +537,6 @@ pub fn resolve_group_filters(groups: &mut [Group], nodes: &[Node], subscriptions
     resolve_group_filters_inner(groups, nodes, subscriptions, None);
 }
 
-fn resolve_group_filters_inner(
-    groups: &mut [Group],
-    nodes: &[Node],
-    subscriptions: &[Subscription],
-    mut diagnostics: Option<&mut ParserDiagnostics<'_>>,
-) {
-    let mut subscription_tags: HashMap<uuid::Uuid, Vec<&str>> = HashMap::new();
-    for subscription in subscriptions {
-        subscription_tags
-            .entry(subscription.id)
-            .or_default()
-            .push(subscription.name.as_str());
-    }
-
-    for (group_index, group) in groups.iter_mut().enumerate() {
-        if let Some(diagnostics) = diagnostics.as_deref_mut() {
-            diagnostics.select_group(group_index + 1);
-        }
-        let filters: Vec<(usize, &str)> = group
-            .filters
-            .iter()
-            .enumerate()
-            .map(|(index, filter)| (index, filter.trim()))
-            .filter(|(_, filter)| {
-                standalone_group_reference(filter).is_none_or(|args| {
-                    split_unquoted(args, ",")
-                        .map(unquote_filter_argument)
-                        .flat_map(|tag| tag.split(['|', ',']))
-                        .all(|tag| tag.trim().is_empty())
-                })
-            })
-            .collect();
-
-        if filters.is_empty() {
-            if group.groups.is_empty() {
-                for node in nodes {
-                    if !group.nodes.contains(&node.id) {
-                        group.nodes.push(node.id);
-                    }
-                }
-            }
-            continue;
-        }
-
-        let mut parsed_filters = Vec::new();
-        for (index, filter) in filters {
-            if standalone_group_reference(filter).is_some() {
-                continue;
-            }
-            if let Some(parsed) = parse_group_filter_expression(filter) {
-                parsed_filters.push(parsed);
-            } else if let Some(diagnostics) = diagnostics.as_deref_mut() {
-                diagnostics.push(ConfigDiagnostic {
-                    setting: format!("group.{}.filter", group.name),
-                    value: (index + 1).to_string(),
-                    message:
-                        if filter.starts_with("group(") && find_unquoted(filter, ")").is_none() {
-                            "group(...) is unterminated; ignored"
-                        } else if filter.starts_with("group(") {
-                            "group(...) must be the whole filter line; ignored"
-                        } else {
-                            "honk could not parse this filter; ignored"
-                        }
-                        .to_string(),
-                });
-            }
-        }
-        group.nodes.clear();
-        for node in nodes {
-            if parsed_filters.iter().any(|filter| {
-                filter
-                    .iter()
-                    .all(|term| term.matches(node, &subscription_tags))
-            }) && !group.nodes.contains(&node.id)
-            {
-                group.nodes.push(node.id);
-            }
-        }
-    }
-}
-
-struct GroupFilterTerm {
-    matcher: GroupFilterMatcher,
-    negated: bool,
-}
-
-enum GroupFilterMatcher {
-    Name(Regex),
-    SubscriptionTag(Regex),
-}
-
-impl GroupFilterTerm {
-    fn matches(&self, node: &Node, subscription_tags: &HashMap<uuid::Uuid, Vec<&str>>) -> bool {
-        let matched = match &self.matcher {
-            GroupFilterMatcher::Name(pattern) => pattern.is_match(&node.name),
-            GroupFilterMatcher::SubscriptionTag(pattern) => node
-                .subscription_id
-                .and_then(|id| subscription_tags.get(&id))
-                .is_some_and(|tags| tags.iter().any(|tag| pattern.is_match(tag))),
-        };
-        if self.negated { !matched } else { matched }
-    }
-}
-
-fn parse_group_filter_expression(filter: &str) -> Option<Vec<GroupFilterTerm>> {
-    let mut terms = Vec::new();
-    for raw_term in split_unquoted(filter, "&&") {
-        let raw_term = raw_term.trim();
-        let (negated, predicate) = match raw_term.strip_prefix('!') {
-            Some(predicate) => (true, predicate.trim()),
-            None => (false, raw_term),
-        };
-        let matcher = if predicate.starts_with("name(") {
-            GroupFilterMatcher::Name(parse_text_filter(predicate, "name")?)
-        } else if predicate.starts_with("subtag(") {
-            GroupFilterMatcher::SubscriptionTag(parse_text_filter(predicate, "subtag")?)
-        } else {
-            return None;
-        };
-        terms.push(GroupFilterTerm { matcher, negated });
-    }
-    (!terms.is_empty()).then_some(terms)
-}
-
-fn parse_text_filter(filter: &str, function: &str) -> Option<Regex> {
-    let body = filter
-        .strip_prefix(function)?
-        .strip_prefix('(')?
-        .strip_suffix(')')?
-        .trim();
-    let mut patterns = Vec::new();
-    for argument in split_filter_arguments(body)? {
-        let argument = argument.trim();
-        let pattern = if let Some(value) = argument.strip_prefix("keyword:") {
-            let value = unquote_filter_argument(value);
-            if value.is_empty() {
-                continue;
-            }
-            regex::escape(value)
-        } else if let Some(value) = argument.strip_prefix("regex:") {
-            let value = unquote_filter_argument(value);
-            if value.is_empty() {
-                continue;
-            }
-            format!("(?:{value})")
-        } else {
-            let value = unquote_filter_argument(argument);
-            if value.is_empty() {
-                continue;
-            }
-            format!("^(?:{})$", regex::escape(value))
-        };
-        patterns.push(pattern);
-    }
-    if patterns.is_empty() {
-        return None;
-    }
-    Regex::new(&patterns.join("|")).ok()
-}
-
-fn split_filter_arguments(body: &str) -> Option<Vec<&str>> {
-    let bytes = body.as_bytes();
-    let mut arguments = Vec::new();
-    let mut start = 0usize;
-    let mut quote = None;
-    let mut escaped = false;
-    for (index, byte) in bytes.iter().copied().enumerate() {
-        if let Some(delimiter) = quote {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == delimiter {
-                quote = None;
-            }
-            continue;
-        }
-        match byte {
-            b'\'' | b'"' => quote = Some(byte),
-            b',' => {
-                arguments.push(&body[start..index]);
-                start = index + 1;
-            }
-            _ => {}
-        }
-    }
-    if quote.is_some() {
-        return None;
-    }
-    arguments.push(&body[start..]);
-    Some(arguments)
-}
-
 fn unquote_filter_argument(value: &str) -> &str {
     let value = value.trim();
     if value.len() >= 2 {
@@ -810,14 +617,6 @@ fn split_unquoted<'a>(input: &'a str, delimiter: &'a str) -> impl Iterator<Item 
     })
 }
 
-/// Returns the raw argument text of a standalone `group(...)` filter line.
-fn standalone_group_reference(val: &str) -> Option<&str> {
-    let body = strip_unquoted_comment(val.trim().strip_prefix("group(")?);
-    let end = find_unquoted(body, ")")?;
-    let args = &body[..end];
-    (body[end + 1..].trim().is_empty() && find_unquoted(args, "(").is_none()).then_some(args)
-}
-
 fn extract_fn_args(expr: &str, fn_name: &str) -> Option<Vec<String>> {
     let body = expr.strip_prefix(fn_name)?.strip_prefix('(')?;
     let end = find_unquoted(body, ")")?;
@@ -848,120 +647,6 @@ fn normalize_geosite_code(code: &str) -> String {
     // name — remapping it to `-` silently mismatched into a nonexistent
     // category.
     code.trim().to_string()
-}
-
-fn parse_group_section(
-    section: &Block,
-    diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<Vec<Group>, crate::ConfigError> {
-    let mut groups = Vec::new();
-
-    for grp in section.blocks_any() {
-        diagnostics.begin_group(grp, groups.len() + 1);
-        let mut group = Group {
-            name: grp.name.clone(),
-            ..Default::default()
-        };
-        let lines = grp.lines_except(&[]);
-        let kv = parse_kv_pairs(lines.iter().copied());
-        if let Some(policy) = kv.get("policy") {
-            group.policy = parse_group_policy(policy, &group.name, diagnostics)?;
-        }
-        if let Some(final_outbound) = kv.get("final") {
-            group.final_outbound = Some(final_outbound.to_string());
-        }
-        // sing-box SelectorOutboundOptions.Default: explicit initial member.
-        if let Some(default) = kv.get("default") {
-            group.default = Some(default.trim_matches(|c| c == '\'' || c == '"').to_string());
-        }
-        // sing-box URLTestOutboundOptions.URL: per-group health check target
-        // (overrides global tcp_check_url for this group's URLTest selection).
-        if let Some(check_url) = kv.get("check_url") {
-            group.check_url = Some(
-                check_url
-                    .trim_matches(|c| c == '\'' || c == '"')
-                    .to_string(),
-            );
-        }
-
-        let filter_lines = lines
-            .iter()
-            .copied()
-            .filter(|line| line.trim().starts_with("filter:"));
-        for line in filter_lines {
-            let val = line
-                .split_once(':')
-                .map(|(_, v)| strip_unquoted_comment(v.trim()).trim())
-                .unwrap_or("");
-            if let Some(args) = standalone_group_reference(val) {
-                let mut has_tag = false;
-                for tag in split_unquoted(args, ",")
-                    .map(unquote_filter_argument)
-                    .flat_map(|tag| tag.split(['|', ',']).map(str::trim))
-                    .map(str::to_string)
-                {
-                    has_tag |= !tag.is_empty();
-                    if !tag.is_empty() && !group.groups.contains(&tag) {
-                        group.groups.push(tag);
-                    }
-                }
-                if !has_tag {
-                    diagnostics.remember_filter(line);
-                    diagnostics.at_line(line);
-                    group.filters.push(val.to_string());
-                    diagnostics.emit(DetailedDiagnostic::warning(
-                        "empty-subgroup",
-                        diagnostics.source(),
-                        SettingPath::new("groups").index(groups.len() + 1).field("filter").index(group.filters.len()),
-                        SafeValue::Ordinal(group.filters.len()),
-                        "empty subgroup contribution selects no nodes; remove the filter to select all nodes",
-                    ));
-                }
-            } else {
-                diagnostics.remember_filter(line);
-                group.filters.push(val.to_string());
-            }
-        }
-
-        groups.push(group);
-    }
-
-    Ok(groups)
-}
-
-fn parse_group_policy(
-    policy: &str,
-    group_name: &str,
-    diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<crate::group::GroupPolicy, crate::ConfigError> {
-    let base = policy
-        .trim()
-        .split_once('(')
-        .map(|(name, _)| name.trim())
-        .unwrap_or_else(|| policy.trim())
-        .to_ascii_lowercase();
-    match base.as_str() {
-        "select" | "selector" | "fixed" => Ok(crate::group::GroupPolicy::Selector),
-        "urltest" | "min_moving_avg" | "min_avg10" | "min_last_delay" => {
-            Ok(crate::group::GroupPolicy::URLTest)
-        }
-        "roundrobin" | "round_robin" | "loadbalance" | "balance" => {
-            Ok(crate::group::GroupPolicy::LoadBalance)
-        }
-        "fallback" => Ok(crate::group::GroupPolicy::Fallback),
-        "score" => Ok(crate::group::GroupPolicy::Score),
-        "honk" => Err(crate::ConfigError::UnsupportedPolicy(
-            "group policy 'honk' was renamed to 'score'".into(),
-        )),
-        _ => {
-            diagnostics.push(ConfigDiagnostic {
-                setting: format!("group.{group_name}.policy"),
-                value: String::new(),
-                message: "policy is not recognised; using fallback selector".to_string(),
-            });
-            Ok(crate::group::GroupPolicy::Selector)
-        }
-    }
 }
 
 fn parse_checked_bool(s: &str, setting: &str) -> Result<bool, crate::ConfigError> {

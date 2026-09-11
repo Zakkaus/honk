@@ -243,24 +243,6 @@ impl<'a> ParserDiagnostics<'a> {
         }
     }
 
-    pub fn begin_group(&mut self, block: &Block, index: usize) {
-        self.at_section(block, &[]);
-        self.group = Some(index);
-        self.groups.push(GroupLocation {
-            location: self.current.clone(),
-            filters: Vec::new(),
-        });
-    }
-
-    pub fn remember_filter(&mut self, line: &str) {
-        let location = self.location(line);
-        self.groups
-            .last_mut()
-            .expect("group context")
-            .filters
-            .push(location);
-    }
-
     pub fn select_group(&mut self, index: usize) {
         self.group = Some(index);
         self.subscription = None;
