@@ -1,5 +1,6 @@
 mod diagnostics;
 mod dns;
+mod lexer;
 mod routing;
 
 mod structure;
@@ -22,8 +23,9 @@ use crate::group::Group;
 use crate::node::Node;
 use crate::subscription::Subscription;
 use crate::{Config, ConfigDiagnostic};
+use lexer::quoted_end;
 use regex::Regex;
-use structure::{Block, Item, quoted_end, scan};
+use structure::{Block, Item, scan};
 enum ParseFailure {
     Legacy(crate::ConfigError),
     Detailed(crate::error::DetailedConfigError),

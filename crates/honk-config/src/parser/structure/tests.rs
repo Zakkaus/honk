@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use super::{Block, Item, quoted_end, scan};
+use super::super::lexer::quoted_end;
+use super::{Block, Item, scan};
 use crate::{ConfigDiagnostic, ConfigError};
 
 fn scanned(input: &str) -> Vec<Block> {

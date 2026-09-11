@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use super::lexer::quoted_end;
+
 use crate::{ConfigDiagnostic, ConfigError};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -96,21 +98,6 @@ pub fn scan(
         )));
     }
     Ok(scanner.roots)
-}
-
-/// Return the byte index immediately after the matching quote.  A backslash
-/// skips the next byte, exactly as the old parser helper did.
-pub fn quoted_end(bytes: &[u8], start: usize) -> Option<usize> {
-    let quote = bytes[start];
-    let mut index = start + 1;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'\\' => index += 2,
-            byte if byte == quote => return Some(index + 1),
-            _ => index += 1,
-        }
-    }
-    None
 }
 
 #[derive(Debug)]
