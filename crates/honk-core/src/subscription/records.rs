@@ -638,15 +638,20 @@ fn apply_security(
         put_bool(map, "tls", enabled);
     }
 
-    let explicit_skip = take_option(options, &["skip-cert-verify", "allow-insecure", "insecure"])
-        .map(|value| parse_bool(&value).ok_or("record boolean option is invalid"))
-        .transpose()?;
+    let explicit_skip =
+        take_bool_alias(options, &["skip-cert-verify", "allow-insecure", "insecure"])?;
     let verification = take_bool(options, &["tls-verification"])?;
     if verification == Some(true) && !tls_capable(protocol) {
         return Err("TLS verification is unsupported for this protocol");
     }
     let skip = if tls_capable(protocol) {
-        verification.map(|verify| !verify).or(explicit_skip)
+        match (verification.map(|verify| !verify), explicit_skip) {
+            (Some(verification), Some(explicit)) if verification != explicit => {
+                return Err("record TLS verification aliases conflict");
+            }
+            (Some(verification), _) => Some(verification),
+            (None, explicit) => explicit,
+        }
     } else {
         explicit_skip
     };
@@ -832,6 +837,28 @@ fn take_bool(options: &mut HashMap<String, String>, keys: &[&str]) -> RecordResu
     take_raw(options, keys)
         .map(|value| parse_bool(&value).ok_or("record boolean option is invalid"))
         .transpose()
+}
+
+fn take_bool_alias(
+    options: &mut HashMap<String, String>,
+    keys: &[&str],
+) -> RecordResult<Option<bool>> {
+    let mut found = None;
+    for key in keys {
+        let Some(value) = options.get(*key) else {
+            continue;
+        };
+        let value = parse_bool(value).ok_or("record boolean option is invalid")?;
+        match found {
+            None => found = Some(value),
+            Some(previous) if previous == value => {}
+            Some(_) => return Err("record boolean aliases conflict"),
+        }
+    }
+    for key in keys {
+        options.remove(*key);
+    }
+    Ok(found)
 }
 
 fn take_any_matching(

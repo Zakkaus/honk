@@ -2,7 +2,7 @@
 
 use crate::error::ConfigError;
 use crate::node::{Hysteria2Config, Node, OutboundConfig, QuicOptions, VlessConfig};
-use crate::options::vocab::{optional_flow, optional_text};
+use crate::options::vocab::{optional_flow, optional_text, verification_text};
 use crate::types::{NodeProtocol, parse_duration_secs};
 
 #[derive(Default)]
@@ -28,6 +28,19 @@ impl Query {
             .map(|(_, value)| value.as_str())
     }
 
+    fn verification_values_with_indices<'a>(&'a self) -> impl Iterator<Item = (usize, &'a str)> {
+        self.0
+            .iter()
+            .enumerate()
+            .filter(|(_, (key, _))| {
+                matches!(
+                    key.as_str(),
+                    "allowInsecure" | "allow_insecure" | "insecure"
+                )
+            })
+            .map(|(index, (_, value))| (index, value.as_str()))
+    }
+
     fn contains_key(&self, key: &str) -> bool {
         self.0.iter().any(|(candidate, _)| candidate == key)
     }
@@ -43,7 +56,13 @@ pub(super) fn parse_query(
     let mut mode_seen = false;
     for (key, value) in url.query_pairs() {
         let key = key.into_owned();
-        if shadowrocket_vmess && query.get(&key).is_some_and(|previous| previous != &value) {
+        if shadowrocket_vmess
+            && !matches!(
+                key.as_str(),
+                "sni" | "peer" | "allowInsecure" | "allow_insecure" | "insecure"
+            )
+            && query.get(&key).is_some_and(|previous| previous != &value)
+        {
             return Err(ConfigError::Parse(
                 "duplicate VMess share-link parameter".into(),
             ));
@@ -90,20 +109,6 @@ pub(super) fn parse_query(
                 "unsupported VMess share-link option".into(),
             ));
         }
-        if query
-            .get("allowInsecure")
-            .or_else(|| query.get("allow_insecure"))
-            .is_some_and(|value| {
-                value != "0"
-                    && value != "1"
-                    && !value.eq_ignore_ascii_case("true")
-                    && !value.eq_ignore_ascii_case("false")
-            })
-        {
-            return Err(ConfigError::Parse(
-                "unsupported VMess allowInsecure value".into(),
-            ));
-        }
     }
     Ok(query)
 }
@@ -112,6 +117,8 @@ pub(super) fn apply_tls(
     node: &mut Node,
     query: &Query,
     shadowrocket: bool,
+    source: &crate::diagnostic::SourceRef,
+    emit: &mut impl FnMut(crate::diagnostic::DetailedDiagnostic),
 ) -> Result<(), ConfigError> {
     let protocol = node.protocol();
     let shadowrocket_vless = shadowrocket && protocol == NodeProtocol::VLess;
@@ -190,12 +197,34 @@ pub(super) fn apply_tls(
         )
         .map_err(|_| ConfigError::Parse("conflicting TLS server name parameters".into()))?
         .map(str::to_string);
-        if let Some(value) = query
-            .get("allowInsecure")
-            .or_else(|| query.get("allow_insecure"))
-            .or_else(|| query.get("insecure"))
-        {
-            tls.skip_cert_verify = value == "1" || value.eq_ignore_ascii_case("true");
+        let mut verification = None;
+        for (ordinal, value) in query.verification_values_with_indices() {
+            let parsed = verification_text(value).map_err(|_| {
+                ConfigError::Parse("invalid certificate verification boolean".into())
+            })?;
+            if let Some(previous) = verification {
+                if previous != parsed {
+                    return Err(ConfigError::Parse(
+                        "conflicting certificate verification aliases".into(),
+                    ));
+                }
+            } else {
+                verification = Some(parsed);
+            }
+            if value.trim().eq_ignore_ascii_case("yes") || value.trim().eq_ignore_ascii_case("on") {
+                let mut warning = crate::diagnostic::DetailedDiagnostic::warning(
+                    "legacy-config-warning",
+                    source.clone(),
+                    crate::diagnostic::SettingPath::new("nodes").field("skip_cert_verify"),
+                    crate::diagnostic::SafeValue::Redacted,
+                    "yes/on now disables certificate verification; use true or false explicitly",
+                );
+                warning.entry_index = Some(ordinal + 1);
+                emit(warning);
+            }
+        }
+        if let Some(value) = verification {
+            tls.skip_cert_verify = value;
         }
         tls.pin_sha256 = query
             .get("pinSHA256")

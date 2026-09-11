@@ -383,3 +383,38 @@ fn c07_record_flow_aliases_resolve_by_dialect_without_positional_fallback() {
         assert_eq!(left.id, right.id);
     }
 }
+
+fn c08_record_verification_fixture(pin: &str) -> String {
+    format!(
+        r#"named-equal=trojan,plain.example,443,password,skip-cert-verify=true,allow-insecure=true,insecure=true
+inverse-agree=trojan,inverse.example,443,password,tls-verification=false,insecure=true
+inverse-conflict=trojan,inverse-conflict.example,443,password,tls-verification=true,insecure=true
+plain-conflict=trojan,plain-conflict.example,443,password,skip-cert-verify=true,insecure=false
+invalid-t=trojan,invalid-t.example,443,password,skip-cert-verify=true,allow-insecure=t
+invalid-y=trojan,invalid-y.example,443,password,skip-cert-verify=true,allow-insecure=y
+invalid-f=trojan,invalid-f.example,443,password,skip-cert-verify=true,allow-insecure=f
+invalid-n=trojan,invalid-n.example,443,password,skip-cert-verify=true,allow-insecure=n
+invalid-empty=trojan,invalid-empty.example,443,password,skip-cert-verify=true,allow-insecure=
+trojan=qx-agree.example:443,password=password,tls-verification=false,insecure=true,tls-cert-sha256={pin},tag=qx-pins-agree
+trojan=qx-reject.example:443,password=password,tls-verification=true,insecure=false,tls-cert-sha256={pin},tag=qx-pins-reject"#
+    )
+}
+
+#[test]
+fn c08_record_verification_aliases_resolve_before_qx_pin_controls() {
+    let pin = "ab".repeat(32);
+    let nodes = parse_records_subscription(&c08_record_verification_fixture(&pin), None).unwrap();
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>(),
+        ["named-equal", "inverse-agree", "qx-pins-agree"]
+    );
+
+    for node in &nodes {
+        assert!(node.tls().unwrap().skip_cert_verify);
+    }
+    assert_eq!(nodes[0].tls().unwrap().pin_sha256, None);
+    assert_eq!(nodes[2].tls().unwrap().pin_sha256, None);
+}

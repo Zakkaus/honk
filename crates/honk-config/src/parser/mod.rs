@@ -1041,7 +1041,7 @@ fn parse_node_section(
             None if value.contains(':') => (String::new(), value.to_string()),
             None => (String::new(), unquote(value)),
         };
-        match Node::parse_share_link(&uri) {
+        match diagnostics.parse_share_link(&uri) {
             Ok(mut node) => {
                 if !tag.is_empty() {
                     node.name = tag;

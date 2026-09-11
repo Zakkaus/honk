@@ -3,6 +3,7 @@
 
 use base64::Engine as _;
 use honk_config::Config;
+use honk_config::diagnostic::{SafeValue, Severity};
 use honk_config::node::Node;
 use honk_config::types::NodeProtocol;
 
@@ -1683,4 +1684,84 @@ fn empty_share_link_reality_key_still_conflicts_with_plaintext() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn c08_share_link_verification_yes_on_warn_and_enable() {
+    for spelling in ["yes", "on"] {
+        let mut diagnostics = Vec::new();
+        let node = Node::from_share_link_with_detailed_diagnostics(
+            &format!("trojan://secret-password@secret.example:443?insecure={spelling}"),
+            &mut diagnostics,
+        )
+        .unwrap();
+        assert!(node.tls().unwrap().skip_cert_verify);
+        assert_eq!(diagnostics.len(), 1, "{spelling}: {diagnostics:?}");
+        let warning = &diagnostics[0];
+        assert_eq!(warning.code, "legacy-config-warning");
+        assert_eq!(warning.severity, Severity::Warning);
+        assert_eq!(warning.setting.to_string(), "nodes.skip_cert_verify");
+        assert_eq!(warning.value, SafeValue::Redacted);
+        assert!(!format!("{warning:?}").contains("secret-password"));
+        assert!(!format!("{warning:?}").contains("secret.example"));
+    }
+
+    let dae = "node {\n    edge: 'trojan://secret-password@secret.example:443?insecure=yes'\n}\nrouting {\n    fallback: direct\n}";
+    let mut diagnostics = Vec::new();
+    let config =
+        honk_config::parser::parse_dae_config_with_detailed_diagnostics(dae, &mut diagnostics)
+            .unwrap();
+    assert_eq!(config.nodes.len(), 1);
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "legacy-config-warning")
+        .expect("dae share-link warning");
+    assert_eq!(warning.setting.to_string(), "nodes[1].skip_cert_verify");
+    assert_eq!(warning.entry_index, Some(1));
+    assert_eq!(warning.line, Some(2));
+    assert_eq!(warning.value, SafeValue::Redacted);
+    assert!(!format!("{diagnostics:?}").contains("secret-password"));
+    assert!(!format!("{diagnostics:?}").contains("secret.example"));
+}
+
+#[test]
+fn c08_share_link_verification_aliases_resolve_and_reject_invalid() {
+    let equal = Node::from_share_link(
+        "trojan://pw@example.com:443?allowInsecure=true&allow_insecure=1&insecure=true",
+    )
+    .unwrap();
+    assert!(equal.tls().unwrap().skip_cert_verify);
+    let authority = b64("auto:b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443");
+    let encoded = Node::from_share_link(&format!(
+        "vmess://{authority}?tls=1&allowInsecure=true&allowInsecure=1"
+    ))
+    .unwrap();
+    assert!(encoded.tls().unwrap().skip_cert_verify);
+
+    for link in [
+        "trojan://pw@example.com:443?allowInsecure=true&insecure=false",
+        "trojan://pw@example.com:443?insecure=unknown",
+        "trojan://pw@example.com:443?insecure=",
+    ] {
+        assert!(Node::from_share_link(link).is_err(), "{link}");
+    }
+    for spelling in ["t", "y"] {
+        let node =
+            Node::from_share_link(&format!("trojan://pw@example.com:443?insecure={spelling}"))
+                .unwrap();
+        assert!(!node.tls().unwrap().skip_cert_verify, "{spelling}");
+    }
+
+    let typed: Node = serde_json::from_value(serde_json::json!({
+        "name": "typed",
+        "protocol": "trojan",
+        "address": "example.com:443",
+        "host": "example.com",
+        "port": 443,
+        "password": "password",
+        "tls": true,
+        "skip_cert_verify": false,
+    }))
+    .unwrap();
+    assert!(!typed.tls().unwrap().skip_cert_verify);
 }

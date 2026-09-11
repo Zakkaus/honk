@@ -48,6 +48,22 @@ impl<'a> ParserDiagnostics<'a> {
         self.current.source.clone()
     }
 
+    pub fn parse_share_link(
+        &mut self,
+        link: &str,
+    ) -> Result<crate::node::Node, crate::ConfigError> {
+        let source = self.source();
+        crate::node::Node::parse_share_link(link, &source, &mut |mut diagnostic| {
+            if let Some(index) = self.entry {
+                diagnostic
+                    .setting
+                    .0
+                    .insert(1, crate::diagnostic::SettingSegment::Index(index));
+            }
+            self.emit(diagnostic);
+        })
+    }
+
     pub fn set_source(&mut self, source: SourceRef) {
         self.current = Location { source, line: None };
         self.fields.clear();

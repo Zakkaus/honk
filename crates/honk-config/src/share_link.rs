@@ -43,8 +43,11 @@ impl Node {
         diagnostics: &mut Vec<crate::diagnostic::DetailedDiagnostic>,
     ) -> Result<Node, crate::error::DetailedConfigError> {
         let source = crate::diagnostic::DiagnosticSources::new(None).root();
-        let result = Self::parse_share_link(link)
-            .map_err(|error| crate::error::DetailedConfigError::from_legacy(error, source));
+        let result = {
+            let mut emit = |diagnostic| diagnostics.push(diagnostic);
+            Self::parse_share_link(link, &source, &mut emit)
+        }
+        .map_err(|error| crate::error::DetailedConfigError::from_legacy(error, source));
         crate::diagnostic::finish_attempt(result, diagnostics)
     }
 
@@ -62,7 +65,11 @@ impl Node {
         result.map_err(crate::error::DetailedConfigError::into_legacy)
     }
 
-    pub(crate) fn parse_share_link(link: &str) -> Result<Node, ConfigError> {
+    pub(crate) fn parse_share_link(
+        link: &str,
+        source: &crate::diagnostic::SourceRef,
+        emit: &mut impl FnMut(crate::diagnostic::DetailedDiagnostic),
+    ) -> Result<Node, ConfigError> {
         let first = link.split("->").next().unwrap_or("").trim();
         let mut ss_config = None;
         let (decoded, shadowrocket) = match first.split_once("://") {
@@ -103,7 +110,7 @@ impl Node {
             .or_else(|| query.get("remark").filter(|name| !name.is_empty()).cloned())
             .unwrap_or_else(|| format!("{}-{}", url.scheme(), node.host));
 
-        options::apply_tls(&mut node, &query, shadowrocket)?;
+        options::apply_tls(&mut node, &query, shadowrocket, source, emit)?;
         options::apply_transport(&mut node, &query, shadowrocket)?;
         options::apply_protocol(&mut node, &query, embedded_hop_ports, shadowrocket)?;
         node.validate_protocol()?;

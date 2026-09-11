@@ -123,7 +123,7 @@ vless://00000000-0000-4000-8000-000000000000@example.com:443?security=tls#edge
 | `network` | `transport` | 可选 transport string。 |
 | `tls` | `tls` | 可选 bool。Trojan、AnyTLS、Hysteria2、TUIC 和 Juicity 默认启用 TLS，并拒绝显式关闭。 |
 | `servername`、`server-name`、`sni` | `sni` | 空值或纯空白名称视为未指定；非空别名必须逐字节一致。 |
-| `skip-cert-verify` | `skip_cert_verify` | 布尔值；决定是否跳过证书校验。 |
+| `skip-cert-verify`、`skip_cert_verify`、`insecure` | `skip_cert_verify` | 须使用原生布尔值；已提供的别名必须一致。 |
 | `alpn` | `tls_alpn` | AnyTLS 与普通裸 TCP Trojan/VMess/VLESS TLS 的有序字符串列表（或逗号分隔字符串）；显式值在 `tls` 与 `utls` 模式下都会用于实际 TLS 握手。QUIC 继续使用下文的协议专属规则。 |
 
 #### 协议专属选项
@@ -196,6 +196,8 @@ sing-box 配置从 `outbounds` 导入受支持的 Shadowsocks、SOCKS5、VMess�
 受支持的记录把凭据、TLS/SNI、WebSocket/gRPC、REALITY 和已实现的协议选项映射到同一节点模型。Quantumult X 的 `obfs=wss` 同时使用 `obfs-host` 作为 WebSocket Host 和默认 TLS SNI；显式 TLS 主机名优先。SSR、不支持的插件/混淆及传输方式会被跳过，不会冒充另一种协议导入。
 
 Surge `server-cert-fingerprint-sha256` 映射到 honk 的叶证书 pin：两者都替代标准 X.509 验证。独立的 `server-cert-verify-name`、客户端证书、`sni=off` 和 Shadow TLS 无法表达，会被拒绝，不会静默丢弃（[Surge TLS 参考](https://manual.nssurge.com/policies/tls.html)）。
+
+记录格式会在赋值前比较 `skip-cert-verify`、`allow-insecure`、`insecure`，以及取反后的 `tls-verification`。`tls-verification=false,insecure=true` 一致；`tls-verification=true,insecure=true` 则拒绝该条目。记录文本仅接受不区分大小写的 `true/yes/1/on` 和 `false/no/0/off`；空文本及 `t/y/f/n` 仍为无效值。证书固定规则的限制不变。
 
 有效的 Quantumult X `tls-cert-sha256` / `tls-pubkey-sha256` 固定证书设置会被拒绝：honk 的叶证书 pin 会替代 PKI，不能拿它替换尚未确认等价的外部验证约定。显式设置 `tls-verification=false` 时，QX 会忽略两类 pin，导入会保留该禁用验证行为。有效的 QX REALITY 会按[官方配置](https://github.com/crossutility/Quantumult-X/blob/master/sample.conf)忽略自定义 `tls-alpn` 和 session-ticket 设置；普通 TLS 不适用该例外。旧 VMess `aead=false`、启用的 Shadowsocks UoT/SSR、不支持的 TLS ALPN 和禁用 TLS session 复用会被拒绝，不会静默丢弃。
 

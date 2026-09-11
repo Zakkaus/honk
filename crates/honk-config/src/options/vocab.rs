@@ -38,3 +38,28 @@ pub fn optional_flow(value: Option<&str>) -> Result<Option<&str>, &'static str> 
         Err("unsupported VLESS flow")
     }
 }
+
+/// Decode share-link certificate-verification text into the skip-verification
+/// boolean used by the canonical TLS options.
+pub fn verification_text(value: &str) -> Result<bool, &'static str> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("true")
+        || value.eq_ignore_ascii_case("yes")
+        || value == "1"
+        || value.eq_ignore_ascii_case("on")
+    {
+        return Ok(true);
+    }
+    if value.eq_ignore_ascii_case("false")
+        || value.eq_ignore_ascii_case("f")
+        || value.eq_ignore_ascii_case("no")
+        || value.eq_ignore_ascii_case("n")
+        || value == "0"
+        || value.eq_ignore_ascii_case("off")
+        || value.eq_ignore_ascii_case("t")
+        || value.eq_ignore_ascii_case("y")
+    {
+        return Ok(false);
+    }
+    Err("invalid certificate verification boolean")
+}

@@ -101,6 +101,12 @@ impl DetailedConfigError {
         };
         if let Some(text) = text {
             let reason = match text {
+                "invalid certificate verification boolean"
+                | "conflicting certificate verification aliases" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes").field("skip_cert_verify"),
+                    "certificate verification aliases must be valid agreeing booleans",
+                )),
                 "conflicting TLS server name parameters" => Some((
                     "invalid-config-value",
                     SettingPath::new("nodes").field("sni"),
