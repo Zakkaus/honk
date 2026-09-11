@@ -539,13 +539,8 @@ fn open_log_file(path: &std::path::Path) -> anyhow::Result<std::fs::File> {
 }
 
 #[cfg(feature = "clash-api")]
-fn api_exposed_without_secret(listen: std::net::SocketAddr, secret: &str) -> bool {
-    !listen.ip().is_loopback() && secret.is_empty()
-}
-
-#[cfg(feature = "clash-api")]
 fn warn_api_exposure(listen: std::net::SocketAddr, secret: &str) {
-    if api_exposed_without_secret(listen, secret) {
+    if !listen.ip().is_loopback() && secret.is_empty() {
         warn!(
             listen = %listen,
             "Clash API authentication is disabled on a non-loopback address; the API has no TLS"
@@ -2087,19 +2082,6 @@ mod startup_lifecycle_tests {
         ),
         ("wildcard_ipv4_whitespace", "0.0.0.0:9099", " ", false),
     ];
-
-    #[cfg(feature = "clash-api")]
-    #[test]
-    fn api_exposed_without_secret_covers_bind_and_secret_matrix() {
-        for &(name, address, secret, expected) in API_WARNING_CASES {
-            let listen = address.parse().expect("parse warning case address");
-            assert_eq!(
-                super::api_exposed_without_secret(listen, secret),
-                expected,
-                "{name}"
-            );
-        }
-    }
 
     #[cfg(feature = "clash-api")]
     #[test]
