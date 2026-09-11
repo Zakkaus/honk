@@ -252,8 +252,9 @@ impl<'a> ParserDiagnostics<'a> {
             .diagnostic
             .setting
             .0
-            .last()
-            .and_then(|segment| match segment {
+            .iter()
+            .rev()
+            .find_map(|segment| match segment {
                 crate::diagnostic::SettingSegment::Field(field) => Some(*field),
                 _ => None,
             });

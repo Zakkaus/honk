@@ -947,6 +947,7 @@ fn parse_global_section(
             .map_err(|_| crate::ConfigError::Parse(format!("invalid max_concurrent_dials: {v}")))?;
     }
 
+    crate::check::validate_dns_check_targets(&cfg.udp_check_dns)?;
     Ok(cfg)
 }
 

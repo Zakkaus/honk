@@ -29,9 +29,7 @@ pub(crate) fn restart_required_changes(
     if old_http.map(|input| input.1) != new_http.map(|input| input.1) {
         changed.push("global.tcp_check_http_method");
     }
-    if configured_udp_check_target(&old_global.udp_check_dns).unwrap_or_default()
-        != configured_udp_check_target(&new_global.udp_check_dns).unwrap_or_default()
-    {
+    if udp_probe_input_changed(&old_global.udp_check_dns, &new_global.udp_check_dns) {
         changed.push("global.udp_check_dns");
     }
     if old_global.tls_implementation.eq_ignore_ascii_case("utls")
@@ -115,4 +113,28 @@ fn http_probe_inputs(global: &honk_config::config::GlobalConfig) -> Option<(&str
         &global.tcp_check_http_method
     };
     Some((url, method))
+}
+
+fn udp_probe_input_changed(current: &[String], candidate: &[String]) -> bool {
+    use honk_config::check::{DnsCheckTarget, select_dns_check_target};
+
+    let target = |values| {
+        select_dns_check_target(values)
+            .ok()
+            .flatten()
+            .unwrap_or(DnsCheckTarget::Literal(DEFAULT_UDP_CHECK_DNS))
+    };
+    match (target(current), target(candidate)) {
+        (
+            DnsCheckTarget::Domain { host: a, port: p },
+            DnsCheckTarget::Domain { host: b, port: q },
+        ) => {
+            p != q
+                || !a
+                    .strip_suffix('.')
+                    .unwrap_or(a)
+                    .eq_ignore_ascii_case(b.strip_suffix('.').unwrap_or(b))
+        }
+        (a, b) => a != b,
+    }
 }

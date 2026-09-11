@@ -463,6 +463,39 @@ async fn test_resolve_udp_check_target() {
 }
 
 #[tokio::test]
+async fn c24_dns_target_resolution_and_score_identity_agree() {
+    use honk_outbound::group::ScoreTarget;
+    for (value, address) in [
+        ("[::1]", "[::1]:53"),
+        ("[::1]:5353", "[::1]:5353"),
+        ("::1", "[::1]:53"),
+    ] {
+        let raws = vec!["resolver.test".into(), value.into()];
+        let hook: crate::outbound::ResolveHook = Arc::new(|_, _| Box::pin(async { Vec::new() }));
+        let resolved = resolve_udp_check_target(&raws, Some(hook)).await;
+        let expected: SocketAddr = address.parse().unwrap();
+        assert_eq!(resolved, expected);
+        assert_eq!(
+            super::probers::udp_probe_identity(&raws, resolved),
+            ScoreTarget::from(expected)
+        );
+    }
+    let raws = vec!["resolver.test".into()];
+    let hook: crate::outbound::ResolveHook = Arc::new(|host, port| {
+        Box::pin(async move {
+            assert_eq!((host.as_str(), port), ("resolver.test", 53));
+            vec![SocketAddr::from(([127, 0, 0, 1], port))]
+        })
+    });
+    let resolved = resolve_udp_check_target(&raws, Some(hook)).await;
+    assert_eq!(resolved, SocketAddr::from(([127, 0, 0, 1], 53)));
+    assert_eq!(
+        super::probers::udp_probe_identity(&raws, resolved),
+        ScoreTarget::domain("resolver.test", 53)
+    );
+}
+
+#[tokio::test]
 async fn quic_failure_trains_score_without_failing_dns_udp_health() {
     use honk_config::node::{Group, GroupPolicy};
     use honk_outbound::group::{ScoreTarget, SelectionNetwork};

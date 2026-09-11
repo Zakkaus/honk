@@ -681,6 +681,7 @@ impl Config {
     }
 
     fn validate_globals(&self) -> Result<(), crate::ConfigError> {
+        crate::check::validate_dns_check_targets(&self.global.udp_check_dns)?;
         if self.global.dial_mode.parse::<DialMode>().is_err() {
             return Err(crate::ConfigError::Validation(format!(
                 "global.dial_mode must be one of: ip, domain, domain+, domain++ (got '{}')",

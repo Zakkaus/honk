@@ -23,12 +23,12 @@
 | `store_subscribe` | `store_subscribe` | `true` | 将每个订阅最近一次有效正文持久化到 `data_dir/.sub`，供启动和重载恢复；修改后需重启。 |
 | `tcp_check_url` | `tcp_check_url` | `["https://www.gstatic.com/generate_204"]` | TCP/HTTP 健康检查 URL，逗号分隔。当前健康检查循环使用第一个值；空列表退回普通 TCP 检查。 |
 | `tcp_check_http_method` | `tcp_check_http_method` | `"HEAD"` | URL 健康检查发送的 HTTP 方法；空值按 `HEAD` 处理。 |
-| `udp_check_dns` | `udp_check_dns` | `["dns.google:53", "8.8.8.8", "2001:4860:4860::8888"]` | UDP 健康检查的 DNS 目标，逗号分隔；省略端口时默认为 `53`。 |
+| `udp_check_dns` | `udp_check_dns` | `["dns.google:53", "8.8.8.8", "2001:4860:4860::8888"]` | UDP 健康检查的 DNS 目标，逗号分隔。裸 IPv4/IPv6、`[IPv6]` 和域名默认使用端口 `53`；显式端口必须为 `1..65535` 内的整数。无效括号或端口会使校验失败，并产生带位置的诊断。优先选择第一个 IP 字面量，否则解析第一个域名。解析与 Score 共用解码后的主机和端口，解析完成后仍保留域名身份。 |
 | `check_interval` | `check_interval_secs` | `30s` | 全局健康检查间隔。必须为正；解析失败的值会变成零并在校验时被拒绝。UDP 预热 coordinator 也使用该值，但实际下限为 10 秒。 |
 | `check_tolerance` | `check_tolerance_ms` | `50ms` | URLTest 切换所选成员前要求的延迟改善量。接受裸毫秒数、`ms` 或 `s`，其余写法沿用此默认值并记录一条警告。 |
 | `dial_mode` | `dial_mode` | `"domain"` | 目的域名发现和路由模式：`ip`、`domain`、`domain+` 或 `domain++`。参见[拨号模式](#拨号模式)。 |
 | `allow_insecure` | `allow_insecure` | `false` | 全局 TLS 校验回退兼容字段。当前 TLS connector 不读取该字段；跳过证书校验需在节点分享链接中按节点配置。 |
-| `sniffing_timeout` | `sniffing_timeout_ms` | `30ms` | 兼容嗅探超时字段，当前控制面不读取。单位及无效值处理方式同 `check_tolerance`。 |
+| `sniffing_timeout` | `sniffing_timeout_ms` | `30ms` | 嗅探超时兼容字段；当前控制面不读取它。解析规则同 `check_tolerance`，无效值产生警告并保留默认的 `30ms`。 |
 | `tls_implementation` | `tls_implementation` | `"tls"` | `tls` 使用常规 BoringSSL 客户端 profile；`utls` 启用 honk 的真实 Chrome ClientHello profile。 |
 | `utls_imitate` | `utls_imitate` | `"chrome_auto"` | 兼容指纹配置。uTLS 使用固定的 Chrome 指纹；此值不会切换指纹实现。 |
 | `tls_fragment` | `tls_fragment` | `false` | TLS ClientHello 分片兼容开关；当前 TLS connector 不读取该字段。 |

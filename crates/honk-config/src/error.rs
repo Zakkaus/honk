@@ -100,6 +100,23 @@ impl DetailedConfigError {
             _ => None,
         };
         if let Some(text) = text {
+            if let Some(index) = text
+                .strip_prefix("global.udp_check_dns[")
+                .and_then(|text| text.strip_suffix("]: invalid DNS check target"))
+                .and_then(|text| text.parse::<usize>().ok())
+            {
+                let mut error = Self::new(
+                    category,
+                    "invalid-dns-check-target",
+                    source,
+                    SettingPath::new("global")
+                        .field("udp_check_dns")
+                        .index(index),
+                    "DNS check target requires a host and a valid nonzero port; omitted port is 53",
+                );
+                error.diagnostic.entry_index = Some(index);
+                return error;
+            }
             let reason = match text {
                 "unknown traffic predicate" => Some((
                     "unknown-traffic-predicate",
