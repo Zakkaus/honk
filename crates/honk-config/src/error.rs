@@ -101,6 +101,36 @@ impl DetailedConfigError {
         };
         if let Some(text) = text {
             let reason = match text {
+                "invalid node endpoint" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes"),
+                    "node requires an effective host and nonzero explicit port; address-only IPv6 is unsupported",
+                )),
+                "missing node UUID" | "invalid node UUID" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes"),
+                    "protocol requires a valid UUID",
+                )),
+                "invalid node TLS server name" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes").field("sni"),
+                    "canonical TLS server name must not be empty",
+                )),
+                "VLESS flow requires TLS or REALITY" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes").field("flow"),
+                    "VLESS flow requires TLS or REALITY",
+                )),
+                "unsupported VLESS encryption" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes").field("encryption"),
+                    "unsupported VLESS encryption",
+                )),
+                "invalid builtin node" | "node name cannot be empty" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes"),
+                    "node name and builtin identity must satisfy the protocol contract",
+                )),
                 "invalid hysteria2 hop port list" => Some((
                     "invalid-config-value",
                     SettingPath::new("nodes").field("hy2_port_hopping"),

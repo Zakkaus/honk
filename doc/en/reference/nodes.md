@@ -19,6 +19,8 @@ node {
 
 The current parser accepts both tagged and untagged entries. A non-empty dae tag replaces the link's `#fragment` name. An untagged link keeps its decoded fragment; without one, it receives the credential-free fallback `{scheme}-{host}`.
 
+An absent or empty VMess JSON `ps` remark uses `vmess-{host}` before validation. A non-empty dae tag then replaces it.
+
 In quoted tags and links, a backslash escapes the next character when locating the closing quote; the source escape is retained in the parsed text.
 
 A malformed recognized link is dropped with an `invalid-node-entry` diagnostic using the original node-entry ordinal, never the link or node name. Data entrypoints return it without logging; plain entrypoints report it once. An unknown scheme is a hard configuration error. A standalone `mux:` or `mux=` line is also rejected; VLESS wire behavior belongs in each link's `vless_mode=` query.
@@ -92,7 +94,7 @@ The Node model exposes the fields below. Share links populate operator-facing fi
 | `subscription_id` / `group_id` | UUID? | null | Import/runtime ownership metadata |
 | `created_at` / `updated_at` | datetime | now | Runtime metadata |
 
-Validation requires every non-built-in node to have a non-empty name and either `address` or `host`.
+Intrinsic validation requires a nonempty node name, effective host, and explicit nonzero `port`. `address` does not supply a missing port; address-only IPv6 requires an explicit `host`. Only exact injected `direct`/`block` identities are endpoint-exempt.
 
 ### Structured-loader compatibility
 
@@ -113,6 +115,10 @@ Duration conversion rejects negative, nonfinite, and out-of-range values instead
 Sing-box `hop_interval`, `idle_session_timeout`, and `idle_session_check_interval` preserve native numeric zero as an explicit value; missing or null remains absent. Hysteria2 records compare every `mhop`, `hop-interval`, and `hop_interval` occurrence after conversion to seconds, rejecting conflicts and invalid values even beside a valid alias.
 
 Hysteria2 hopping sets reject repeated ports and overlapping ranges before dialing, including `443,443`. A singleton remains valid. Valid specifications retain their spelling; embedded authority lists retain their stricter empty-segment rule. The outbound constructor uses the same checked decoder for directly constructed nodes.
+
+Every canonical adapter completion applies intrinsic validation: ordinary share links, VMess JSON, standalone flat Node serde, and subscription imports. UUID-based protocols require valid UUIDs; unsupported cipher, transport, packet capability, flow, ALPN context, or hopping sets reject before identity derivation. Vision requires TLS or REALITY. Constructed nodes also reject empty SNI/flow/network values that adapters normalize away. Feed-only nonempty-password requirements remain format-specific; optional SOCKS authentication and handler-supported empty credentials remain valid. Invalid dae node lines and feed entries retain their existing skip policy; valid siblings survive. Parse-only Config fragments remain parse-only, except that invalid contained nodes now reject at construction. Standalone serde preserves a supplied ID; runtime identity admission is separate.
+
+Direct `Node::validate()` calls return the same static, redacted errors as adapter completion. Validation errors never include the supplied node name or credential values.
 
 ## Protocols
 

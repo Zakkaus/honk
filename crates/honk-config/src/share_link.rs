@@ -120,7 +120,7 @@ impl Node {
             source,
             emit,
         )?;
-        node.validate_protocol()?;
+        node.validate()?;
         node.id = node.derive_id();
         Ok(node)
     }
@@ -298,7 +298,10 @@ impl VmessLinkJson {
             host: host.clone(),
             address: format!("{}:{}", host, port),
             port,
-            name: self.ps.unwrap_or_else(|| format!("vmess-{}", host)),
+            name: self
+                .ps
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| format!("vmess-{}", host)),
             outbound: crate::node::OutboundConfig::Vmess(crate::node::VmessConfig {
                 uuid: Some(id),
                 encryption: vmess_cipher(
@@ -315,6 +318,7 @@ impl VmessLinkJson {
             }),
             ..Default::default()
         };
+        node.validate()?;
         node.id = node.derive_id();
         Ok(node)
     }

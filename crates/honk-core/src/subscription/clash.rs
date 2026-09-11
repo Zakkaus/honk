@@ -599,13 +599,6 @@ fn apply_quic(mapping: &Mapping, node: &mut Node) -> Result<(), &'static str> {
                 return Err("Hysteria2 port hopping aliases conflict");
             }
             config.port_hopping = ports.or(mport);
-            if config
-                .port_hopping
-                .as_deref()
-                .is_some_and(|spec| honk_config::options::vocab::parse_port_hopping(spec).is_none())
-            {
-                return Err("invalid Hysteria2 hop port list");
-            }
             config.hop_interval =
                 yaml_duration_alias(mapping, &["hop-interval", "hop_interval", "mhop"])?;
             config.init_stream_recv_window = yaml_u64_alias(mapping, STREAM_WINDOW_KEYS)?;
@@ -666,47 +659,13 @@ fn validate_imported_node(node: &Node) -> Result<(), &'static str> {
         OutboundConfig::Trojan(config) => {
             nonempty(config.password.as_ref())?;
         }
-        OutboundConfig::Vmess(config) => {
-            let uuid = nonempty(config.uuid.as_ref())?;
-            uuid::Uuid::parse_str(uuid).map_err(|_| "VMess UUID is invalid")?;
-            let cipher = config.encryption.as_deref().unwrap_or("auto").trim();
-            if !cipher.eq_ignore_ascii_case("auto") && !cipher.eq_ignore_ascii_case("aes-128-gcm") {
-                return Err("VMess cipher is unsupported");
-            }
-        }
-        OutboundConfig::Vless(config) => {
-            let uuid = nonempty(config.uuid.as_ref())?;
-            uuid::Uuid::parse_str(uuid).map_err(|_| "VLESS UUID is invalid")?;
-            if config
-                .flow
-                .as_deref()
-                .is_some_and(|flow| !flow.trim().is_empty() && flow != "xtls-rprx-vision")
-            {
-                return Err("VLESS flow is unsupported");
-            }
-            if config.encryption.as_deref().is_some_and(|encryption| {
-                let encryption = encryption.trim();
-                !encryption.is_empty()
-                    && encryption != "none"
-                    && !encryption.starts_with("mlkem768x25519plus.")
-            }) {
-                return Err("VLESS encryption is unsupported");
-            }
-        }
-        OutboundConfig::Socks5(_) | OutboundConfig::Hysteria2(_) => {}
-        OutboundConfig::Tuic(config) => {
-            let uuid = nonempty(config.uuid.as_ref())?;
-            uuid::Uuid::parse_str(uuid).map_err(|_| "TUIC UUID is invalid")?;
-        }
         OutboundConfig::Juicity(config) => {
-            let uuid = nonempty(config.uuid.as_ref())?;
-            uuid::Uuid::parse_str(uuid).map_err(|_| "Juicity UUID is invalid")?;
             nonempty(config.password.as_ref())?;
         }
         OutboundConfig::AnyTls(config) => {
             nonempty(config.password.as_ref())?;
         }
-        OutboundConfig::Direct | OutboundConfig::Block => unreachable!(),
+        _ => {}
     }
     Ok(())
 }
@@ -739,7 +698,7 @@ pub(super) fn parse_clash_proxy(
     apply_tls(mapping, &mut node, protocol, tls_explicit, tls_enabled)?;
     apply_quic(mapping, &mut node)?;
     validate_imported_node(&node)?;
-    node.validate_protocol()
+    node.validate()
         .map_err(|_| "invalid imported node protocol settings")?;
     node.id = node.derive_id();
     Ok(node)

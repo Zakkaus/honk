@@ -71,6 +71,26 @@ fn test_parse_base64_subscription() {
 }
 
 #[test]
+fn uri_subscription_with_empty_vmess_remark_remains_usable() {
+    let payload = r#"{"ps":"","add":"vmess.example.com","port":443,"id":"b831381d-6324-4d53-ad4f-8cda48b30811"}"#;
+    let uri = format!(
+        "vmess://{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload)
+    );
+    let nodes = parse_subscription_content(
+        &Subscription {
+            sub_type: SubscriptionType::Simple,
+            ..Default::default()
+        },
+        &uri,
+    )
+    .unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].protocol(), NodeProtocol::VMess);
+    assert_eq!(nodes[0].name, "vmess-vmess.example.com");
+}
+
+#[test]
 fn test_parse_base64_without_padding() {
     let uris = "socks5://10.0.0.1:1080#NoPad";
     let encoded = base64::engine::general_purpose::STANDARD.encode(uris.as_bytes());
@@ -223,9 +243,9 @@ fn test_parse_subscription_keeps_unique_nodes_with_duplicates() {
 }
 
 #[test]
-fn test_parse_subscription_rejects_encrypted_vless_flow_before_deduplication() {
-    let invalid = "vless://u@h:443?encryption=e&type=ws&sni=ws&flow=xudp#a";
-    let valid = "vless://e@h:443?type=ws&sni=u&path=ws&vless_mode=xudp#b";
+fn test_parse_subscription_keeps_valid_sibling_after_intrinsic_rejection() {
+    let invalid = "vless://00000000-0000-4000-8000-000000000001@h:443?encryption=e&type=ws&sni=ws&flow=xudp#a";
+    let valid = "vless://00000000-0000-4000-8000-000000000001@h:443?type=ws&sni=u&path=ws&vless_mode=xudp#b";
     let sub = Subscription {
         sub_type: SubscriptionType::Simple,
         ..Default::default()

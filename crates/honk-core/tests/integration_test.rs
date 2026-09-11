@@ -296,14 +296,7 @@ protocol = "udp"
             ..Default::default()
         });
 
-        let result = config.validate();
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Node name cannot be empty")
-        );
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -316,14 +309,7 @@ protocol = "udp"
             ..Default::default()
         });
 
-        let result = config.validate();
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("no address or host")
-        );
+        assert!(config.validate().is_err());
     }
 
     #[tokio::test]

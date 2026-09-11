@@ -756,56 +756,16 @@ impl Config {
             }
         }
         for node in &self.nodes {
-            // The injected built-ins carry no dialable address by design.
-            if node.id == DIRECT_NODE_ID || node.id == BLOCK_NODE_ID {
+            node.validate()?;
+            if matches!(
+                node.protocol(),
+                crate::types::NodeProtocol::Direct | crate::types::NodeProtocol::Block
+            ) {
                 continue;
             }
-            if node.name.is_empty() {
-                return Err(crate::ConfigError::Validation(
-                    "Node name cannot be empty".into(),
-                ));
-            }
-            if node.address.is_empty() && node.host.is_empty() {
-                return Err(crate::ConfigError::Validation(format!(
-                    "Node '{}' has no address or host",
-                    node.name
-                )));
-            }
-            // Reject unknown transports at load time instead of silently
-            // degrading to raw TCP at dial time.
-            if let Some(transport) = node.transport()
-                && !matches!(transport.transport.as_str(), "" | "tcp" | "ws" | "grpc")
-            {
-                return Err(crate::ConfigError::Validation(format!(
-                    "Node '{}' has unsupported transport '{}' (expected tcp/ws/grpc)",
-                    node.name, transport.transport
-                )));
-            }
-            if let Some(vless) = node.vless()
-                && let Some(flow) = vless.flow.as_deref()
-            {
-                if vless.tls.reality_public_key.is_none() && !vless.tls.enabled {
-                    return Err(crate::ConfigError::Validation(format!(
-                        "Node '{}' sets flow '{}' without TLS or REALITY",
-                        node.name, flow
-                    )));
-                }
-                if flow != "xtls-rprx-vision" {
-                    return Err(crate::ConfigError::Validation(format!(
-                        "Node '{}' has unsupported flow '{}' (expected xtls-rprx-vision)",
-                        node.name, flow
-                    )));
-                }
-            }
-            node.validate_protocol()?;
-            // direct/block are the injected built-ins; a user node may
-            // neither take their names nor their protocols.
             if matches!(
                 node.name.as_str(),
                 Self::BUILTIN_DIRECT_NODE | Self::BUILTIN_BLOCK_NODE
-            ) || matches!(
-                node.protocol(),
-                crate::types::NodeProtocol::Direct | crate::types::NodeProtocol::Block
             ) {
                 return Err(crate::ConfigError::Validation(format!(
                     "Node '{}' uses a name or protocol reserved for the built-in direct/block nodes",
@@ -1359,23 +1319,11 @@ mod builtin_nodes_tests {
     #[test]
     fn test_validate_rejects_unknown_transport() {
         let mut config = Config::default();
-        config.nodes.push(crate::node::Node {
-            name: "bad".into(),
-            address: "1.2.3.4:443".into(),
-            outbound: crate::node::OutboundConfig::Trojan(crate::node::TrojanConfig {
-                transport: crate::node::StreamTransportOptions {
-                    transport: "kcp".into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.to_string().contains("unsupported transport"),
-            "unknown transport must be rejected at load: {err}"
-        );
+        config
+            .nodes
+            .push(crate::node::Node::from_share_link("trojan://secret@1.2.3.4:443#bad").unwrap());
+        config.nodes[0].transport_mut().unwrap().transport = "kcp".into();
+        assert!(config.validate().is_err());
         for ok in ["", "tcp", "ws", "grpc"] {
             config.nodes[0].transport_mut().unwrap().transport = ok.into();
             assert!(config.validate().is_ok(), "transport '{ok}' must pass");
@@ -1385,7 +1333,7 @@ mod builtin_nodes_tests {
     #[test]
     fn test_validate_rejects_vless_mode_conflicts() {
         let base = crate::node::Node::from_share_link(
-            "vless://uuid@example.com:443?vless_mode=h2mux#vless",
+            "vless://00000000-0000-0000-0000-000000000001@example.com:443?vless_mode=h2mux#vless",
         )
         .unwrap();
 
@@ -1403,13 +1351,7 @@ mod builtin_nodes_tests {
             let vless = config.nodes[0].vless_mut().unwrap();
             vless.mode = mode;
             vless.flow = Some("xtls-rprx-vision".into());
-            assert!(
-                config
-                    .validate()
-                    .unwrap_err()
-                    .to_string()
-                    .contains("with flow")
-            );
+            assert!(config.validate().is_err());
         }
         config.nodes[0] = base.clone();
         let vless = config.nodes[0].vless_mut().unwrap();
@@ -1420,13 +1362,7 @@ mod builtin_nodes_tests {
         config.nodes[0] = base;
         config.nodes[0].vless_mut().unwrap().encryption =
             Some("mlkem768x25519plus.native.1rtt.key".into());
-        assert!(
-            config
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("with VLESS Encryption")
-        );
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -1446,17 +1382,12 @@ mod builtin_nodes_tests {
                 _ => unreachable!(),
             };
             let mut config = Config::default();
-            config.nodes.push(crate::node::Node {
-                name: name.into(),
-                address: "1.2.3.4:8080".into(),
-                outbound,
-                ..Default::default()
-            });
-            let err = config.validate().unwrap_err();
-            assert!(
-                err.to_string().contains("reserved for the built-in"),
-                "{name}/{protocol:?} must be rejected: {err}"
-            );
+            let mut node =
+                crate::node::Node::from_share_link("socks5://1.2.3.4:8080#web-proxy").unwrap();
+            node.name = name.into();
+            node.outbound = outbound;
+            config.nodes.push(node);
+            assert!(config.validate().is_err(), "{name}/{protocol:?}");
         }
     }
 

@@ -5,6 +5,7 @@ use crate::parser::parse_dae_config_with_diagnostics;
 #[cfg(test)]
 mod parser_tests {
     use crate::parser::{parse_dae_config, parse_dae_config_with_diagnostics};
+    use base64::Engine as _;
 
     #[test]
     fn test_parse_example_dae() {
@@ -388,9 +389,21 @@ node {
     }
 
     #[test]
+    fn test_parse_tagged_vmess_with_empty_remark() {
+        let payload = r#"{"ps":"","add":"vmess.example.com","port":443,"id":"b831381d-6324-4d53-ad4f-8cda48b30811"}"#;
+        let link = format!(
+            "vmess://{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload)
+        );
+        let config = parse_dae_config(&format!("node {{\n edge: '{link}'\n}}")).unwrap();
+        assert_eq!(config.nodes.len(), 1);
+        assert_eq!(config.nodes[0].name, "edge");
+    }
+
+    #[test]
     fn test_parse_vless_mode_link() {
         let config = parse_dae_config(
-            "node {\n    xudp: 'vless://uuid@example.com:443?vless_mode=xudp#node'\n    cool: 'vless://uuid@example.com:443?vless_mode=mux-cool#node'\n}",
+            "node {\n    xudp: 'vless://00000000-0000-0000-0000-000000000001@example.com:443?vless_mode=xudp#node'\n    cool: 'vless://00000000-0000-0000-0000-000000000001@example.com:443?vless_mode=mux-cool#node'\n}",
         )
         .unwrap();
         assert_eq!(config.nodes.len(), 2);
@@ -1575,9 +1588,9 @@ fn test_group_name_filter_exact_multi_and_regex() {
     // regex: gives a raw pattern (Go dae filter.go parity).
     let input = r#"
 node {
-    juicity-1: 'juicity://u:p@1.1.1.1:443'
-    juicity-2: 'juicity://u:p@2.2.2.2:443'
-    other: 'juicity://u:p@3.3.3.3:443'
+    juicity-1: 'juicity://00000000-0000-0000-0000-000000000001:p@1.1.1.1:443'
+    juicity-2: 'juicity://00000000-0000-0000-0000-000000000001:p@2.2.2.2:443'
+    other: 'juicity://00000000-0000-0000-0000-000000000001:p@3.3.3.3:443'
 }
 group {
     exact {

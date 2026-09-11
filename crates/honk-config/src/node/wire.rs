@@ -564,9 +564,7 @@ impl FlatNode {
             created_at: flat.created_at,
             updated_at: flat.updated_at,
         };
-        if node.tls().is_some_and(|tls| !tls.alpn.is_empty()) {
-            node.validate_protocol()?;
-        }
+        node.validate()?;
         Ok(node)
     }
 }

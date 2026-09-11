@@ -30,7 +30,7 @@ impl Query {
             .map(|(_, value)| value.as_str())
     }
 
-    fn verification_values_with_indices<'a>(&'a self) -> impl Iterator<Item = (usize, &'a str)> {
+    fn verification_values_with_indices(&self) -> impl Iterator<Item = (usize, &str)> {
         self.0
             .iter()
             .enumerate()
@@ -72,7 +72,11 @@ pub(super) fn parse_query(
                     | "scy"
                     | "encryption"
             )
-            && query.get(&key).is_some_and(|previous| previous != &value)
+            && query.get(&key).is_some_and(|previous| {
+                previous != &value
+                    && !(key == "security"
+                        && vmess_cipher([previous.as_str(), value.as_ref()]).is_ok())
+            })
         {
             return Err(ConfigError::Parse(
                 "duplicate VMess share-link parameter".into(),
@@ -107,7 +111,7 @@ pub(super) fn parse_query(
         .map_err(|reason| ConfigError::Parse(reason.into()))?;
         if ["pbk", "sid", "spx"]
             .iter()
-            .any(|key| query.get(*key).is_some_and(|value| !value.is_empty()))
+            .any(|key| query.get(key).is_some_and(|value| !value.is_empty()))
         {
             return Err(ConfigError::Parse(
                 "REALITY parameters are unsupported in encoded VMess links".into(),
@@ -144,7 +148,7 @@ pub(super) fn apply_tls(
         };
         let reality_fields = ["pbk", "sid", "spx"]
             .iter()
-            .any(|key| query.contains_key(*key));
+            .any(|key| query.contains_key(key));
         if reality_fields && security.is_some_and(|value| value != "reality")
             || vless_tls.is_some_and(|enabled| {
                 security.is_some_and(|value| (value != "none") != enabled)
@@ -363,7 +367,7 @@ pub(super) fn apply_protocol(
     if node.protocol() != NodeProtocol::SS
         && ["plugin", "plugin-opts", "plugin_opts"]
             .iter()
-            .any(|key| query.contains_key(*key))
+            .any(|key| query.contains_key(key))
     {
         return Err(ConfigError::Parse(
             "plugin parameters are valid only for Shadowsocks links".into(),
@@ -506,13 +510,6 @@ fn apply_hysteria2(
         ));
     }
     config.port_hopping = mport.cloned().or(embedded_hop_ports);
-    if config
-        .port_hopping
-        .as_deref()
-        .is_some_and(|spec| crate::options::vocab::parse_port_hopping(spec).is_none())
-    {
-        return Err(ConfigError::Parse("invalid hysteria2 hop port list".into()));
-    }
     config.hop_interval = query.get("mhop").and_then(|value| value.parse().ok());
     config.init_stream_recv_window = query
         .get("initStreamReceiveWindow")
@@ -561,7 +558,7 @@ fn apply_vless(config: &mut VlessConfig, query: &Query) -> Result<(), ConfigErro
         "max_streams",
     ]
     .into_iter()
-    .find(|parameter| query.contains_key(*parameter))
+    .find(|parameter| query.contains_key(parameter))
     {
         return Err(ConfigError::Parse(format!(
             "unsupported VLESS share-link parameter '{parameter}'; use vless_mode"

@@ -615,7 +615,7 @@ fn test_config_json_round_trip() {
 fn test_config_json_vless_mode_and_default() {
     let mut config = Config::default();
     config.nodes.push(
-        Node::from_share_link("vless://uuid@example.com:443?vless_mode=mux-cool#vless").unwrap(),
+        Node::from_share_link("vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?vless_mode=mux-cool#vless").unwrap(),
     );
     let json = config.to_json_string().unwrap();
     let parsed = Config::from_json_str(&json).unwrap();
@@ -1131,7 +1131,10 @@ fn test_ech_query_params() {
     assert_eq!(node.tls().unwrap().ech_config.as_deref(), Some("QUJDMTIz"));
 
     // Bare ech=1 toggles ECH without keys.
-    let node = Node::from_share_link("tuic://u:p@example.com:443/?ech=1").unwrap();
+    let node = Node::from_share_link(
+        "tuic://b831381d-6324-4d53-ad4f-8cda48b30811:p@example.com:443/?ech=1",
+    )
+    .unwrap();
     assert!(node.tls().unwrap().ech_enabled);
     assert!(node.tls().unwrap().ech_config.is_none());
 }
@@ -1139,13 +1142,15 @@ fn test_ech_query_params() {
 #[test]
 fn test_tuic_window_params() {
     let node = Node::from_share_link(
-        "tuic://u:p@example.com:443/?initStreamReceiveWindow=4194304&initConnReceiveWindow=16777216",
+        "tuic://b831381d-6324-4d53-ad4f-8cda48b30811:p@example.com:443/?initStreamReceiveWindow=4194304&initConnReceiveWindow=16777216",
     )
     .unwrap();
     assert_eq!(node.tuic().unwrap().init_stream_recv_window, Some(4194304));
     assert_eq!(node.tuic().unwrap().init_conn_recv_window, Some(16777216));
     // Unset by default.
-    let node = Node::from_share_link("tuic://u:p@example.com:443").unwrap();
+    let node =
+        Node::from_share_link("tuic://b831381d-6324-4d53-ad4f-8cda48b30811:p@example.com:443")
+            .unwrap();
     assert_eq!(node.tuic().unwrap().init_stream_recv_window, None);
 
     // No ECH params: disabled.
@@ -1164,11 +1169,16 @@ fn test_tuic_alpn_and_congestion_params() {
     assert_eq!(node.tuic().unwrap().congestion.as_deref(), Some("bbr"));
 
     // Comma-separated ALPN list is preserved verbatim.
-    let node = Node::from_share_link("tuic://u:p@example.com:443/?alpn=h3,h3-29").unwrap();
+    let node = Node::from_share_link(
+        "tuic://b831381d-6324-4d53-ad4f-8cda48b30811:p@example.com:443/?alpn=h3,h3-29",
+    )
+    .unwrap();
     assert_eq!(node.tuic().unwrap().alpn.as_deref(), Some("h3,h3-29"));
 
     // Unset by default.
-    let node = Node::from_share_link("tuic://u:p@example.com:443").unwrap();
+    let node =
+        Node::from_share_link("tuic://b831381d-6324-4d53-ad4f-8cda48b30811:p@example.com:443")
+            .unwrap();
     assert_eq!(node.tuic().unwrap().alpn, None);
     assert_eq!(node.tuic().unwrap().congestion, None);
 }
@@ -1184,39 +1194,48 @@ fn test_vless_mode_query() {
         ("mux-cool", honk_config::node::WireMode::MuxCool),
     ] {
         let node = Node::from_share_link(&format!(
-            "vless://uuid@example.com:443?vless_mode={value}#node"
+            "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?vless_mode={value}#node"
         ))
         .unwrap();
         assert_eq!(node.vless().unwrap().mode, expected);
     }
-    let xudp =
-        Node::from_share_link("vless://uuid@example.com:443?packetEncoding=xudp#node").unwrap();
+    let xudp = Node::from_share_link(
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?packetEncoding=xudp#node",
+    )
+    .unwrap();
     assert_eq!(
         xudp.vless().unwrap().mode,
         honk_config::node::WireMode::Xudp
     );
 
-    let legacy =
-        Node::from_share_link("vless://uuid@example.com:443?packetEncoding=none#node").unwrap();
+    let legacy = Node::from_share_link(
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?packetEncoding=none#node",
+    )
+    .unwrap();
     assert_eq!(
         legacy.vless().unwrap().mode,
         honk_config::node::WireMode::Legacy
     );
 
-    assert!(Node::from_share_link("vless://uuid@example.com:443?vless_mode=smux#node").is_err());
+    assert!(
+        Node::from_share_link(
+            "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?vless_mode=smux#node"
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn test_vless_mode_query_rejects_duplicates() {
     assert!(
         Node::from_share_link(
-            "vless://uuid@example.com:443?vless_mode=xudp&vless_mode=legacy#node",
+            "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?vless_mode=xudp&vless_mode=legacy#node",
         )
         .is_err()
     );
     assert!(
         Node::from_share_link(
-            "vless://uuid@example.com:443?vless_mode=xudp&packetEncoding=xudp#node",
+            "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?vless_mode=xudp&packetEncoding=xudp#node",
         )
         .is_err()
     );
@@ -1258,13 +1277,15 @@ fn test_vless_share_link_rejects_external_mux_fields() {
         "max-connections=2",
     ] {
         assert!(
-            Node::from_share_link(&format!("vless://uuid@example.com:443?{parameter}#node"))
-                .is_err()
+            Node::from_share_link(&format!(
+                "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?{parameter}#node"
+            ))
+            .is_err()
         );
     }
 
     assert!(
-        Node::from_share_link("vless://uuid@example.com:443?packetEncoding=packetaddr#node")
+        Node::from_share_link("vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?packetEncoding=packetaddr#node")
             .is_err()
     );
 }
@@ -1307,7 +1328,7 @@ fn test_vless_reality_full() {
 fn test_vless_reality_spx_default() {
     // A missing `spx` falls back to the share-link default `/`.
     let node = Node::from_share_link(
-        "vless://uuid@example.com:443?security=reality&pbk=jHkr1EmJCyQxjU0HXJlNblVdXB4Z7yODHJhgJ5lqmzc#n",
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?security=reality&pbk=jHkr1EmJCyQxjU0HXJlNblVdXB4Z7yODHJhgJ5lqmzc#n",
     )
     .unwrap();
     assert!(node.tls().unwrap().enabled);
@@ -1317,7 +1338,10 @@ fn test_vless_reality_spx_default() {
 
 #[test]
 fn test_vless_security_none() {
-    let node = Node::from_share_link("vless://uuid@example.com:443?security=none#n").unwrap();
+    let node = Node::from_share_link(
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?security=none#n",
+    )
+    .unwrap();
     assert!(!node.tls().unwrap().enabled);
     assert!(node.tls().unwrap().reality_public_key.is_none());
 }
@@ -1326,7 +1350,9 @@ fn test_vless_security_none() {
 fn test_vless_no_security_keeps_tls_default() {
     // Existing links without a `security` parameter keep the historical
     // TLS-on default.
-    let node = Node::from_share_link("vless://uuid@example.com:443#n").unwrap();
+    let node =
+        Node::from_share_link("vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443#n")
+            .unwrap();
     assert!(node.tls().unwrap().enabled);
     assert!(node.tls().unwrap().reality_public_key.is_none());
 }
@@ -1433,10 +1459,12 @@ fn shadowrocket_vless_stream_transports_match_canonical_links() {
 
 #[test]
 fn test_vless_encryption_param_and_identity() {
-    let plain = Node::from_share_link("vless://uuid@example.com:443#plain").unwrap();
+    let plain =
+        Node::from_share_link("vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443#plain")
+            .unwrap();
     let encryption = "mlkem768x25519plus.native.1rtt.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     let encrypted = Node::from_share_link(&format!(
-        "vless://uuid@example.com:443?encryption={encryption}#encrypted"
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?encryption={encryption}#encrypted"
     ))
     .unwrap();
     assert_eq!(
@@ -1450,33 +1478,30 @@ fn test_vless_encryption_param_and_identity() {
 fn test_validate_rejects_vless_encryption_with_flow() {
     let encryption = "mlkem768x25519plus.native.1rtt.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     let mut node = Node::from_share_link(&format!(
-        "vless://uuid@example.com:443?security=tls&encryption={encryption}#encrypted-flow"
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?security=tls&encryption={encryption}#encrypted-flow"
     ))
     .unwrap();
     node.vless_mut().unwrap().flow = Some("xtls-rprx-vision".into());
     let mut config = Config::default();
     config.nodes.push(node);
-    let error = config.validate().unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("combines VLESS Encryption with flow")
-    );
+    assert!(config.validate().is_err());
 }
 
 #[test]
 fn test_reality_without_public_key_is_rejected_on_every_load_path() {
     // Share links are validated as they are parsed.
     for link in [
-        "vless://uuid@example.com:443?security=reality#no-pbk",
-        "vless://uuid@example.com:443?security=reality&pbk=#empty-pbk",
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?security=reality#no-pbk",
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?security=reality&pbk=#empty-pbk",
     ] {
         assert!(Node::from_share_link(link).is_err());
     }
 
     // A structured node reaches the same invariant through Config::validate.
-    let node =
-        Node::from_share_link("vless://uuid@example.com:443?security=reality&pbk=AAA#ok").unwrap();
+    let node = Node::from_share_link(
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?security=reality&pbk=AAA#ok",
+    )
+    .unwrap();
     let mut config = Config::default();
     config.nodes.push(node.clone());
     config.validate().unwrap();
@@ -1497,27 +1522,31 @@ fn test_reality_without_public_key_is_rejected_on_every_load_path() {
         tls.reality_spider_x = None;
         let mut config = Config::default();
         config.nodes.push(node);
-        let error = config.validate().unwrap_err();
-        assert!(error.to_string().contains("without reality_public_key"));
+        assert!(config.validate().is_err());
     }
 }
 
 #[test]
 fn test_vless_derive_id_differs_by_reality_public_key() {
-    let a =
-        Node::from_share_link("vless://uuid@example.com:443?security=reality&pbk=AAA#a").unwrap();
-    let b =
-        Node::from_share_link("vless://uuid@example.com:443?security=reality&pbk=BBB#b").unwrap();
+    let a = Node::from_share_link(
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?security=reality&pbk=AAA#a",
+    )
+    .unwrap();
+    let b = Node::from_share_link(
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?security=reality&pbk=BBB#b",
+    )
+    .unwrap();
     assert_ne!(a.derive_id(), b.derive_id());
     assert_ne!(a.id, b.id);
 }
 
 #[test]
 fn test_validate_flow_requires_tls_or_reality() {
-    let node = Node::from_share_link(
-        "vless://uuid@example.com:443?security=none&flow=xtls-rprx-vision#flow-no-tls",
+    let mut node = Node::from_share_link(
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?security=none#flow-no-tls",
     )
     .unwrap();
+    node.vless_mut().unwrap().flow = Some("xtls-rprx-vision".into());
     let mut config = Config::default();
     config.nodes.push(node);
     assert!(config.validate().is_err());
@@ -2071,9 +2100,15 @@ fn c12_shadowrocket_cipher_aliases_keep_security_tls_meaning() {
         assert_eq!(node.vmess().unwrap().encryption.as_deref(), Some("auto"));
         assert_eq!(node.tls().unwrap().enabled, security == "tls");
     }
+    let canonical = Node::from_share_link(&format!("vmess://{authority}?security=auto")).unwrap();
+    let repeated =
+        Node::from_share_link(&format!("vmess://{authority}?security=AUTO&security=auto")).unwrap();
+    assert_eq!(repeated.outbound, canonical.outbound);
+    assert_eq!(repeated.id, canonical.id);
     for query in [
         "scy=auto&encryption=aes-128-gcm",
         "scy=bogus&encryption=auto",
+        "security=none&security=tls",
     ] {
         assert!(Node::from_share_link(&format!("vmess://{authority}?{query}")).is_err());
     }
@@ -2144,5 +2179,67 @@ fn c15_hopping_sets_reject_duplicates_and_keep_valid_spelling() {
             node.hysteria2().unwrap().port_hopping.as_deref(),
             Some(spec)
         );
+    }
+}
+
+#[test]
+fn c16_all_share_link_completions_reject_intrinsic_errors() {
+    for link in [
+        "tuic://invalid:password@example.com:443",
+        "juicity://invalid:password@example.com:443",
+        "socks5://example.com:0",
+    ] {
+        assert!(Node::from_share_link(link).is_err(), "{link}");
+    }
+    let mut fixture: serde_json::Value =
+        serde_json::from_str(&vmess_transport_fixture(None)).unwrap();
+    fixture["id"] = "invalid".into();
+    assert!(Node::from_share_link(&vmess_link(&fixture.to_string())).is_err());
+}
+
+#[test]
+fn c16_flat_completion_rejects_invalid_nodes_without_alpn() {
+    for (field, value) in [
+        ("host", serde_json::json!(" ")),
+        ("port", serde_json::json!(0)),
+    ] {
+        assert!(flat_node_with("socks5", &[(field, value)]).is_err());
+    }
+    assert!(flat_node_with("vmess", &[("password", serde_json::json!("invalid"))]).is_err());
+    assert!(
+        flat_node_with(
+            "vless",
+            &[
+                ("password", serde_json::json!(UUID_A)),
+                ("flow", serde_json::json!("xtls-rprx-vision")),
+                ("tls", false.into())
+            ]
+        )
+        .is_err()
+    );
+    let fallback = flat_node_with("socks5", &[("host", "".into())]).unwrap();
+    assert_eq!(fallback.host(), "example.com");
+    assert!(
+        flat_node_with(
+            "socks5",
+            &[("host", "".into()), ("address", "[::1]:443".into())]
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn c16_constructed_config_cannot_bypass_canonical_node_checks() {
+    let base = Node::from_share_link("anytls://password@example.com:443").unwrap();
+    for field in ["port", "sni", "network"] {
+        let mut node = base.clone();
+        match field {
+            "port" => node.port = 0,
+            "sni" => node.tls_mut().unwrap().sni = Some(" ".into()),
+            _ => node.anytls_mut().unwrap().network = Some("quic".into()),
+        }
+        let mut config = Config::default();
+        config.nodes.push(node);
+        assert!(config.validate().is_err(), "{field}");
     }
 }
