@@ -92,6 +92,8 @@ SIGHUP 时，fetch 身份（URL + 配置的 `ua` + headers）相同的订阅保�
 
 所有接受的节点都会获得订阅 ID。重复的派生节点 ID 保留第一次出现的节点，即使正文只是重复同一个可用端点也可导入。完整客户端配置只提取节点，不导入其中的 DNS、路由、组或远程 provider 配置。
 
+Clash、SIP008 和 sing-box 的凭据标量保留字符串原始字节，并把原生有限数转换为来源格式的规范十进制文本。缺失或 null 表示未提供；布尔值、列表、映射和非有限数会使条目被拒绝。有效别名不能掩盖已提供的无效凭据。数字 UUID 仍无法通过 UUID 校验；空密码仍须满足对应协议的要求。
+
 ### 分享链接列表
 
 正文可以是纯文本，或 standard / URL-safe Base64；padding 可以省略，编码块之间允许 ASCII 空白。原始正文与解码正文均接受开头的 UTF-8 BOM。每行包含一个分享链接：
@@ -192,6 +194,10 @@ sing-box 配置从 `outbounds` 导入受支持的 Shadowsocks、SOCKS5、VMess�
 ### Surge、Surfboard、Loon 与 Quantumult X
 
 导入器接受 Surge/Surfboard/Loon 的具名逗号分隔记录，以及 Quantumult X 的 `protocol=endpoint,...,tag=name` 记录。完整配置使用 `[Proxy]` 或 `[server_local]`；其他 section 会被忽略。带引号的名称/密码可以包含逗号、等号、转义引号和有意保留的首尾空格。
+
+显式凭据和加密方法别名在转换前须一致。具名记录仅在对应具名值缺失时使用位置参数；有效的显式值不会因位置参数不同而冲突。Quantumult X 不使用位置参数回退。显式空凭据参与别名比较，不会触发回退。
+
+允许为空的可选记录凭据会逐字节保留空字符串和带引号的空白：SOCKS 用户名与密码、Hysteria2 认证值及 TUIC 密码。显式空值仍优先于位置参数；要求非空凭据的协议仍会拒绝空值。
 
 受支持的记录把凭据、TLS/SNI、WebSocket/gRPC、REALITY 和已实现的协议选项映射到同一节点模型。Quantumult X 的 `obfs=wss` 同时使用 `obfs-host` 作为 WebSocket Host 和默认 TLS SNI；显式 TLS 主机名优先。SSR、不支持的插件/混淆及传输方式会被跳过，不会冒充另一种协议导入。
 

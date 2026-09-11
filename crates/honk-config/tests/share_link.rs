@@ -15,6 +15,84 @@ fn vmess_link(json: &str) -> String {
     format!("vmess://{}", b64(json))
 }
 
+const UUID_A: &str = "b831381d-6324-4d53-ad4f-8cda48b30811";
+const UUID_B: &str = "00000000-0000-0000-0000-000000000001";
+
+fn flat_credential_fixture(protocol: &str) -> serde_json::Value {
+    let mut fixture = serde_json::json!({
+        "name": "credential-fixture",
+        "protocol": protocol,
+        "address": "example.com:443",
+        "host": "example.com",
+        "port": 443,
+    });
+    let object = fixture.as_object_mut().expect("object fixture");
+    match protocol {
+        "tuic" => {
+            object.insert("tuic_uuid".into(), serde_json::json!(UUID_A));
+        }
+        "juicity" => {
+            object.insert("juicity_uuid".into(), serde_json::json!(UUID_A));
+        }
+        _ => {}
+    }
+    fixture
+}
+
+fn flat_node_with(
+    protocol: &str,
+    fields: &[(&str, serde_json::Value)],
+) -> Result<Node, serde_json::Error> {
+    let mut fixture = flat_credential_fixture(protocol);
+    let object = fixture.as_object_mut().expect("object fixture");
+    for (field, value) in fields {
+        object.insert((*field).to_string(), value.clone());
+    }
+    serde_json::from_value(fixture)
+}
+
+fn assert_flat_credential_alias(
+    protocol: &str,
+    dedicated: &str,
+    generic: &str,
+    equal: &str,
+    conflict_a: &str,
+    conflict_b: &str,
+) {
+    let both = flat_node_with(
+        protocol,
+        &[
+            (dedicated, serde_json::json!(equal)),
+            (generic, serde_json::json!(equal)),
+        ],
+    )
+    .unwrap();
+    let dedicated_only =
+        flat_node_with(protocol, &[(dedicated, serde_json::json!(equal))]).unwrap();
+    assert_eq!(both.outbound, dedicated_only.outbound);
+
+    let conflict = flat_node_with(
+        protocol,
+        &[
+            (dedicated, serde_json::json!(conflict_a)),
+            (generic, serde_json::json!(conflict_b)),
+        ],
+    );
+    assert!(conflict.is_err(), "{protocol}: {dedicated}/{generic}");
+
+    let empty_with_nonempty = flat_node_with(
+        protocol,
+        &[
+            (dedicated, serde_json::json!("")),
+            (generic, serde_json::json!(equal)),
+        ],
+    );
+    assert!(
+        empty_with_nonempty.is_err(),
+        "{protocol}: empty {dedicated} must not hide {generic}"
+    );
+}
+
 fn serialization_golden_node() -> Node {
     Node {
         id: uuid::Uuid::parse_str("11111111-2222-5333-8444-555555555555").unwrap(),
@@ -1764,4 +1842,58 @@ fn c08_share_link_verification_aliases_resolve_and_reject_invalid() {
     }))
     .unwrap();
     assert!(!typed.tls().unwrap().skip_cert_verify);
+}
+
+#[test]
+fn c09_flat_credential_aliases_preserve_equal_conflicts_and_empty() {
+    assert_flat_credential_alias(
+        "hysteria2",
+        "hy2_auth",
+        "password",
+        "same",
+        "dedicated",
+        "generic",
+    );
+    assert_flat_credential_alias("tuic", "tuic_uuid", "username", UUID_A, UUID_A, UUID_B);
+    assert_flat_credential_alias(
+        "tuic",
+        "tuic_password",
+        "password",
+        "same",
+        "dedicated",
+        "generic",
+    );
+    assert_flat_credential_alias(
+        "juicity",
+        "juicity_uuid",
+        "username",
+        UUID_A,
+        UUID_A,
+        UUID_B,
+    );
+    assert_flat_credential_alias(
+        "juicity",
+        "juicity_password",
+        "password",
+        "same",
+        "dedicated",
+        "generic",
+    );
+    assert_flat_credential_alias(
+        "anytls",
+        "anytls_password",
+        "password",
+        "same",
+        "dedicated",
+        "generic",
+    );
+
+    let empty_tuic = flat_node_with("tuic", &[("tuic_password", serde_json::json!(""))]).unwrap();
+    assert_eq!(empty_tuic.tuic().unwrap().password.as_deref(), Some(""));
+
+    let numeric = flat_node_with("anytls", &[("password", serde_json::json!(123))]);
+    assert!(
+        numeric.is_err(),
+        "flat typed credentials must not coerce numbers"
+    );
 }

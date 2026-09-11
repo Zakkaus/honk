@@ -130,6 +130,42 @@ struct FlatNode {
 }
 
 impl FlatNode {
+    fn resolve_credential_aliases(&mut self) -> Result<(), crate::ConfigError> {
+        fn resolve(
+            dedicated: Option<String>,
+            generic: Option<String>,
+        ) -> Result<Option<String>, crate::ConfigError> {
+            match (dedicated, generic) {
+                (None, None) => Ok(None),
+                (Some(value), None) | (None, Some(value)) => Ok(Some(value)),
+                (Some(dedicated), Some(generic)) if dedicated == generic => Ok(Some(dedicated)),
+                (Some(_), Some(_)) => Err(crate::ConfigError::Validation(
+                    "conflicting credential aliases".into(),
+                )),
+            }
+        }
+
+        match self.protocol {
+            NodeProtocol::Hysteria2 => {
+                self.hy2_auth = resolve(self.hy2_auth.take(), self.password.take())?;
+            }
+            NodeProtocol::Tuic => {
+                self.tuic_uuid = resolve(self.tuic_uuid.take(), self.username.take())?;
+                self.tuic_password = resolve(self.tuic_password.take(), self.password.take())?;
+            }
+            NodeProtocol::Juicity => {
+                self.juicity_uuid = resolve(self.juicity_uuid.take(), self.username.take())?;
+                self.juicity_password =
+                    resolve(self.juicity_password.take(), self.password.take())?;
+            }
+            NodeProtocol::AnyTLS => {
+                self.anytls_password = resolve(self.anytls_password.take(), self.password.take())?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn strip_protocol_incompatible_fields(
         &mut self,
         diagnostics: &mut Vec<DetailedDiagnostic>,
@@ -383,6 +419,7 @@ impl FlatNode {
         source: &SourceRef,
         setting: &SettingPath,
     ) -> Result<Node, crate::ConfigError> {
+        self.resolve_credential_aliases()?;
         self.strip_protocol_incompatible_fields(diagnostics, source, setting);
         if self.protocol == NodeProtocol::VLess
             && optional_flow(self.flow.as_deref())
@@ -441,7 +478,7 @@ impl FlatNode {
             NodeProtocol::Hysteria2 => {
                 let tls = flat.take_tls();
                 OutboundConfig::Hysteria2(Hysteria2Config {
-                    auth: flat.hy2_auth.take().or_else(|| flat.password.take()),
+                    auth: flat.hy2_auth.take(),
                     obfs: flat.hy2_obfs.take(),
                     up_mbps: flat.hy2_up_mbps,
                     down_mbps: flat.hy2_down_mbps,
@@ -459,8 +496,8 @@ impl FlatNode {
             NodeProtocol::Tuic => {
                 let tls = flat.take_tls();
                 OutboundConfig::Tuic(TuicConfig {
-                    uuid: flat.tuic_uuid.take().or_else(|| flat.username.take()),
-                    password: flat.tuic_password.take().or_else(|| flat.password.take()),
+                    uuid: flat.tuic_uuid.take(),
+                    password: flat.tuic_password.take(),
                     congestion: flat.tuic_congestion.take(),
                     alpn: flat.tuic_alpn.take(),
                     init_stream_recv_window: flat.tuic_init_stream_recv_window,
@@ -474,11 +511,8 @@ impl FlatNode {
             NodeProtocol::Juicity => {
                 let tls = flat.take_tls();
                 OutboundConfig::Juicity(JuicityConfig {
-                    uuid: flat.juicity_uuid.take().or_else(|| flat.username.take()),
-                    password: flat
-                        .juicity_password
-                        .take()
-                        .or_else(|| flat.password.take()),
+                    uuid: flat.juicity_uuid.take(),
+                    password: flat.juicity_password.take(),
                     quic: QuicOptions {
                         tls,
                         mtu: flat.quic_mtu,
@@ -488,7 +522,7 @@ impl FlatNode {
             NodeProtocol::AnyTLS => {
                 let tls = flat.take_tls();
                 OutboundConfig::AnyTls(AnyTlsConfig {
-                    password: flat.password.take().or_else(|| flat.anytls_password.take()),
+                    password: flat.anytls_password.take(),
                     network: flat.network.take(),
                     min_idle_session: flat.anytls_min_idle_session,
                     idle_session_check_interval: flat.anytls_idle_session_check_interval,

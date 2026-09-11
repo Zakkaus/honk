@@ -50,7 +50,10 @@ pub(super) fn text(value: &Value) -> Result<Option<String>, &'static str> {
     match value {
         Value::Null => Ok(None),
         Value::String(value) => Ok(Some(value.clone())),
-        Value::Number(value) => Ok(Some(value.to_string())),
+        Value::Number(value) if value.as_f64().is_some_and(|value| value.is_finite()) => {
+            Ok(Some(value.to_string()))
+        }
+        Value::Number(_) => Err("field must be a finite scalar"),
         _ => Err("field must be a scalar"),
     }
 }

@@ -4,7 +4,7 @@ use honk_config::options::vocab::optional_text;
 use honk_config::types::NodeProtocol;
 use serde_yaml::{Mapping, Value};
 
-use super::{NodeResult, move_strings, put, take_optional_string};
+use super::{NodeResult, move_credential_strings, move_strings, put, take_optional_string};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PacketNetwork {
@@ -80,11 +80,11 @@ fn normalize_shadowsocks(mut source: Mapping, mut proxy: Mapping) -> Result<Mapp
         &mut proxy,
         &[
             ("method", "cipher"),
-            ("password", "password"),
             ("plugin", "plugin"),
             ("plugin_opts", "plugin-opts"),
         ],
     )?;
+    move_credential_strings(&mut source, &mut proxy, &[("password", "password")])?;
     reject_packet_network(&mut source)?;
     reject_enabled(
         &mut source,
@@ -107,7 +107,7 @@ fn normalize_socks5(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, 
             return Err("only SOCKS5 sing-box outbounds are supported");
         }
     }
-    move_strings(
+    move_credential_strings(
         &mut source,
         &mut proxy,
         &[("username", "username"), ("password", "password")],
@@ -122,7 +122,7 @@ fn normalize_socks5(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, 
 }
 
 fn normalize_vmess(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, &'static str> {
-    move_strings(&mut source, &mut proxy, &[("uuid", "uuid")])?;
+    move_credential_strings(&mut source, &mut proxy, &[("uuid", "uuid")])?;
     if let Some(security) = source.remove("security") {
         let Value::String(value) = &security else {
             return Err("sing-box VMess security must be a string");
@@ -174,11 +174,8 @@ fn normalize_vmess(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, &
 }
 
 fn normalize_vless(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, &'static str> {
-    move_strings(
-        &mut source,
-        &mut proxy,
-        &[("uuid", "uuid"), ("flow", "flow")],
-    )?;
+    move_credential_strings(&mut source, &mut proxy, &[("uuid", "uuid")])?;
+    move_strings(&mut source, &mut proxy, &[("flow", "flow")])?;
     let network = normalize_packet_network(&mut source, &mut proxy)?;
     let packet_encoding = source.remove("packet_encoding");
     let multiplex = normalize_vless_multiplex(&mut source, &mut proxy)?;
@@ -210,7 +207,7 @@ fn normalize_vless(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, &
 }
 
 fn normalize_trojan(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, &'static str> {
-    move_strings(&mut source, &mut proxy, &[("password", "password")])?;
+    move_credential_strings(&mut source, &mut proxy, &[("password", "password")])?;
     normalize_packet_network(&mut source, &mut proxy)?;
     reject_enabled(
         &mut source,
@@ -228,7 +225,7 @@ fn normalize_trojan(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, 
 }
 
 fn normalize_hysteria2(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, &'static str> {
-    move_strings(&mut source, &mut proxy, &[("password", "password")])?;
+    move_credential_strings(&mut source, &mut proxy, &[("password", "password")])?;
     reject_packet_network(&mut source)?;
     if source.remove("realm").is_some_and(|value| active(&value)) {
         return Err("sing-box Hysteria2 realm routing is unsupported");
@@ -258,7 +255,7 @@ fn normalize_tuic(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, &'
     if source.remove("token").is_some_and(|value| active(&value)) {
         return Err("legacy TUIC tokens are unsupported");
     }
-    move_strings(
+    move_credential_strings(
         &mut source,
         &mut proxy,
         &[("uuid", "uuid"), ("password", "password")],
@@ -289,7 +286,7 @@ fn normalize_tuic(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, &'
 }
 
 fn normalize_juicity(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, &'static str> {
-    move_strings(
+    move_credential_strings(
         &mut source,
         &mut proxy,
         &[("uuid", "uuid"), ("password", "password")],
@@ -301,7 +298,7 @@ fn normalize_juicity(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping,
 }
 
 fn normalize_anytls(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, &'static str> {
-    move_strings(&mut source, &mut proxy, &[("password", "password")])?;
+    move_credential_strings(&mut source, &mut proxy, &[("password", "password")])?;
     normalize_packet_network(&mut source, &mut proxy)?;
     for (source_key, target_key) in [
         ("min_idle_session", "min-idle-session"),

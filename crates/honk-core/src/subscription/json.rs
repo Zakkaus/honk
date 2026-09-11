@@ -74,12 +74,12 @@ fn normalize_sip008(value: Value) -> NodeResult {
         &[
             ("server", "server"),
             ("method", "cipher"),
-            ("password", "password"),
             ("remarks", "name"),
             ("plugin", "plugin"),
             ("plugin_opts", "plugin-opts"),
         ],
     )?;
+    move_credential_strings(&mut source, &mut proxy, &[("password", "password")])?;
     match source.remove("server_port") {
         None | Some(Value::Null) => {}
         Some(port) if matches!(port.as_u64(), Some(1..=65535)) => {
@@ -102,6 +102,20 @@ fn take_optional_string(mapping: &mut Mapping, key: &str) -> Result<Option<Strin
     }
 }
 
+fn take_optional_credential(
+    mapping: &mut Mapping,
+    key: &str,
+) -> Result<Option<String>, &'static str> {
+    match mapping.remove(key) {
+        Some(Value::String(value)) => Ok(Some(value)),
+        Some(Value::Number(value)) if value.as_f64().is_some_and(|value| value.is_finite()) => {
+            Ok(Some(value.to_string()))
+        }
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => Err("JSON credential setting has an invalid type"),
+    }
+}
+
 fn move_strings(
     source: &mut Mapping,
     target: &mut Mapping,
@@ -111,6 +125,19 @@ fn move_strings(
         if let Some(value) =
             take_optional_string(source, source_key)?.filter(|value| !value.trim().is_empty())
         {
+            put(target, target_key, Value::String(value));
+        }
+    }
+    Ok(())
+}
+
+fn move_credential_strings(
+    source: &mut Mapping,
+    target: &mut Mapping,
+    fields: &[(&str, &str)],
+) -> Result<(), &'static str> {
+    for &(source_key, target_key) in fields {
+        if let Some(value) = take_optional_credential(source, source_key)? {
             put(target, target_key, Value::String(value));
         }
     }
@@ -293,7 +320,7 @@ mod tests {
             Some("")
         );
         assert!(nodes[2].tuic().unwrap().password.is_none());
-        assert!(nodes[3].tuic().unwrap().password.is_none());
+        assert_eq!(nodes[3].tuic().unwrap().password.as_deref(), Some(""));
     }
 
     #[test]
@@ -362,5 +389,55 @@ mod tests {
             )
             .is_err()
         );
+    }
+    const C09_SIP008_CREDENTIALS: &str = r#"{"servers":[
+      {"remarks":"numeric","server":"sip.example","server_port":8388,"method":"aes-256-gcm","password":12345},
+      {"remarks":"fractional","server":"fractional.example","server_port":8388,"method":"aes-256-gcm","password":1.25},
+      {"remarks":"string-bytes","server":"string.example","server_port":8388,"method":"aes-256-gcm","password":" password-bytes "},
+      {"remarks":"bool","server":"bool.example","server_port":8388,"method":"aes-256-gcm","password":true},
+      {"remarks":"list","server":"list.example","server_port":8388,"method":"aes-256-gcm","password":[]},
+      {"remarks":"map","server":"map.example","server_port":8388,"method":"aes-256-gcm","password":{}}
+    ]}"#;
+    const C09_SING_BOX_CREDENTIALS: &str = r#"{"outbounds":[
+      {"type":"shadowsocks","tag":"numeric-password","server":"ss.example","server_port":8388,"method":"aes-256-gcm","password":54321},
+      {"type":"hysteria2","tag":"numeric-auth","server":"hy.example","server_port":443,"password":67890,"tls":{"enabled":true}},
+      {"type":"socks","tag":"null-password","server":"socks.example","server_port":1080,"password":null},
+      {"type":"shadowsocks","tag":"bool-password","server":"bool.example","server_port":8388,"method":"aes-256-gcm","password":true},
+      {"type":"shadowsocks","tag":"list-password","server":"list.example","server_port":8388,"method":"aes-256-gcm","password":[]},
+      {"type":"shadowsocks","tag":"map-password","server":"map.example","server_port":8388,"method":"aes-256-gcm","password":{}},
+      {"type":"vless","tag":"numeric-uuid","server":"uuid.example","server_port":443,"uuid":12345,"tls":{"enabled":true}}
+    ]}"#;
+
+    #[test]
+    fn c09_structured_credentials_coerce_native_numbers_and_reject_invalid_types() {
+        let sip = parse_json_subscription(json(C09_SIP008_CREDENTIALS), None).unwrap();
+        assert_eq!(sip.len(), 3);
+        assert_eq!(
+            sip[0].shadowsocks().unwrap().password.as_deref(),
+            Some("12345")
+        );
+        assert_eq!(
+            sip[1].shadowsocks().unwrap().password.as_deref(),
+            Some("1.25")
+        );
+        assert_eq!(
+            sip[2].shadowsocks().unwrap().password.as_deref(),
+            Some(" password-bytes ")
+        );
+
+        let nodes = parse_json_subscription(json(C09_SING_BOX_CREDENTIALS), None).unwrap();
+        assert_eq!(
+            nodes
+                .iter()
+                .map(|node| node.name.as_str())
+                .collect::<Vec<_>>(),
+            ["numeric-password", "numeric-auth", "null-password"]
+        );
+        assert_eq!(
+            nodes[0].shadowsocks().unwrap().password.as_deref(),
+            Some("54321")
+        );
+        assert_eq!(nodes[1].hysteria2().unwrap().auth.as_deref(), Some("67890"));
+        assert_eq!(nodes[2].socks5().unwrap().password, None);
     }
 }

@@ -92,6 +92,8 @@ Changing `global.store_subscribe` through SIGHUP is rejected as restart-required
 
 All accepted nodes receive the subscription ID. Duplicate derived node IDs retain the first occurrence, including a body that repeats one usable endpoint. Importing a full client profile extracts its nodes, not its DNS, routing, groups, or remote-provider configuration.
 
+Clash, SIP008, and sing-box credential scalars preserve string bytes and convert native finite numbers to the source format's canonical decimal text. Missing or null values are absent; booleans, lists, maps, and nonfinite numbers reject the entry. A valid alias cannot hide an invalid supplied credential. Numeric UUIDs still fail UUID validation; empty passwords remain subject to each protocol's requirements.
+
 ### Share-link lists
 
 A list can be plain text or standard/URL-safe Base64, with optional padding and ASCII whitespace between encoded chunks. A leading UTF-8 BOM is accepted in raw and decoded bodies. Each line contains one share link:
@@ -192,6 +194,10 @@ Explicit sing-box native VLESS UDP (`packet_encoding: ""` without TCP-only or an
 ### Surge, Surfboard, Loon, and Quantumult X
 
 The importer accepts named comma-separated records from Surge/Surfboard/Loon and `protocol=endpoint,...,tag=name` records from Quantumult X. Full profiles use `[Proxy]` or `[server_local]`; other sections are ignored. Quoted names/passwords may contain commas, equals signs, escaped quotes, and intentional edge spaces.
+
+Explicit credential and cipher aliases must agree before conversion. In named records, positional credentials are used only when the corresponding named claim is absent; a different positional value does not conflict with a valid explicit claim. Quantumult X has no positional fallback. Empty explicit credentials participate in alias comparison rather than selecting a fallback.
+
+Permitted optional record credentials retain empty strings and quoted whitespace byte for byte: SOCKS username/password, Hysteria2 authentication, and TUIC password. An explicit empty value still overrides a positional fallback; protocols requiring nonempty credentials continue to reject it.
 
 Supported records map credentials, TLS/SNI, WebSocket/gRPC, REALITY, and implemented protocol options to the same node model. Quantumult X `obfs=wss` uses `obfs-host` for both WebSocket Host and the default TLS SNI; an explicit TLS hostname wins. SSR, unsupported plugins/obfuscation, and unsupported transports are skipped rather than imported as another protocol.
 

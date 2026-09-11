@@ -39,29 +39,6 @@ fn public_parser_keeps_quoted_password_edge_spaces() {
 }
 
 #[test]
-fn dialect_credentials_keep_alias_order_and_empty_shadowing() {
-    let first = "11111111-1111-4111-8111-111111111111";
-    let second = "22222222-2222-4222-8222-222222222222";
-    let third = "33333333-3333-4333-8333-333333333333";
-    let nodes = parse_records_subscription(
-            &format!(
-                "named-vmess=vmess,example.com,443,username={first},uuid={second},password={third}\n\
-                 vmess=example.com:443,password={third},uuid={second},username={first},tag=qx-vmess\n\
-                 named-vless=vless,example.com,443,uuid={second},password={third}\n\
-                 vless=example.com:443,password={third},uuid={second},tag=qx-vless\n\
-                 vmess=example.com:443,password=,uuid={second},tag=empty-shadow"
-            ),
-            None,
-        )
-        .unwrap();
-    assert_eq!(nodes.len(), 4);
-    assert_eq!(nodes[0].vmess().unwrap().uuid.as_deref(), Some(first));
-    assert_eq!(nodes[1].vmess().unwrap().uuid.as_deref(), Some(third));
-    assert_eq!(nodes[2].vless().unwrap().uuid.as_deref(), Some(second));
-    assert_eq!(nodes[3].vless().unwrap().uuid.as_deref(), Some(third));
-}
-
-#[test]
 fn unsupported_wire_extensions_are_dropped_with_sibling_survival() {
     let nodes = parse_records_subscription(
         "ss=example.com:443,method=aes-128-gcm,password=pwd,udp-relay=true,udp-over-tcp=sp.v2\n\
@@ -417,4 +394,152 @@ fn c08_record_verification_aliases_resolve_before_qx_pin_controls() {
     }
     assert_eq!(nodes[0].tls().unwrap().pin_sha256, None);
     assert_eq!(nodes[2].tls().unwrap().pin_sha256, None);
+}
+
+const C09_RECORD_CREDENTIALS: &str = r#"ss-named-explicit=ss,ss-explicit.example,8388,positional-cipher,positional-password,encrypt-method=aes-128-gcm,method=aes-128-gcm,cipher=aes-128-gcm,password=explicit-password
+ss-named-positional=ss,ss-positional.example,8388,aes-128-gcm,positional-password
+ss=ss-qx.example:8388,method=aes-128-gcm,cipher=aes-128-gcm,encrypt-method=aes-128-gcm,password=qx-password,tag=ss-qx-equal
+socks-named-positional=socks5,socks-positional.example,1080,named-user,named-password
+socks5=socks-qx.example:1080,username=qx-user,password=qx-password,tag=socks-qx-explicit
+vmess-named-equal=vmess,vmess.example,443,positional-cipher,11111111-1111-4111-8111-111111111111,username=11111111-1111-4111-8111-111111111111,uuid=11111111-1111-4111-8111-111111111111,password=11111111-1111-4111-8111-111111111111,method=auto,encryption=auto,cipher=auto,tls=true
+vmess-named-positional=vmess,vmess-positional.example,443,auto,22222222-2222-4222-8222-222222222222,tls=true
+vmess=vmess-qx.example:443,password=33333333-3333-4333-8333-333333333333,uuid=33333333-3333-4333-8333-333333333333,username=33333333-3333-4333-8333-333333333333,method=auto,cipher=auto,tls=true,tag=vmess-qx-equal
+vless-named-equal=vless,vless.example,443,44444444-4444-4444-8444-444444444444,uuid=44444444-4444-4444-8444-444444444444,password=44444444-4444-4444-8444-444444444444,tls=true
+vless-named-positional=vless,vless-positional.example,443,55555555-5555-4555-8555-555555555555,tls=true
+vless=vless-qx.example:443,password=66666666-6666-4666-8666-666666666666,uuid=66666666-6666-4666-8666-666666666666,tls=true,tag=vless-qx-equal
+hysteria2-named-equal=hysteria2,hy2.example,443,password=hy2-password,auth=hy2-password,tls=true
+hysteria2-named-positional=hysteria2,hy2-positional.example,443,hy2-positional-auth,tls=true
+hysteria2=hy2-qx.example:443,password=qx-hy2-password,auth=qx-hy2-password,tls=true,tag=hy2-qx-equal
+tuic-named-equal=tuic,tuic.example,443,uuid=77777777-7777-4777-8777-777777777777,username=77777777-7777-4777-8777-777777777777,password=tuic-password,tls=true
+tuic-named-positional=tuic,tuic-positional.example,443,88888888-8888-4888-8888-888888888888,tuic-positional-password,tls=true
+tuic=tuic-qx.example:443,uuid=99999999-9999-4999-8999-999999999999,username=99999999-9999-4999-8999-999999999999,password=qx-tuic-password,tls=true,tag=tuic-qx-equal
+trojan-named-explicit=trojan,trojan-explicit.example,443,positional-password,password=explicit-password,tls=true
+trojan-named-positional=trojan,trojan-positional.example,443,positional-password,tls=true
+anytls-named-explicit=anytls,anytls-explicit.example,443,positional-password,password=explicit-password,tls=true
+anytls-named-positional=anytls,anytls-positional.example,443,positional-password,tls=true
+ss-named-repeated-equal=ss,ss-repeat.example,8388,aes-128-gcm,repeat,password=repeat,password=repeat
+ss-named-conflict=ss,ss-conflict.example,8388,method=aes-128-gcm,cipher=chacha20,password=secret
+ss-named-repeated-conflict=ss,ss-repeat-conflict.example,8388,aes-128-gcm,password=first,password=second
+vmess-named-conflict=vmess,vmess-conflict.example,443,username=11111111-1111-4111-8111-111111111111,uuid=22222222-2222-4222-8222-222222222222,tls=true
+vmess=vmess-qx-conflict.example:443,password=11111111-1111-4111-8111-111111111111,uuid=22222222-2222-4222-8222-222222222222,tls=true,tag=vmess-qx-conflict
+vless=vless-qx-conflict.example:443,password=11111111-1111-4111-8111-111111111111,uuid=22222222-2222-4222-8222-222222222222,tls=true,tag=vless-qx-conflict
+hysteria2=hy2-qx-conflict.example:443,password=first,auth=second,tls=true,tag=hy2-qx-conflict
+tuic=tuic-qx-conflict.example:443,uuid=11111111-1111-4111-8111-111111111111,username=22222222-2222-4222-8222-222222222222,password=password,tls=true,tag=tuic-qx-conflict
+hysteria2=hy2-qx-empty.example:443,password=,auth=usable,tls=true,tag=hy2-qx-empty"#;
+
+#[test]
+fn c09_record_credentials_resolve_aliases_before_positional_fallback() {
+    let nodes = parse_records_subscription(C09_RECORD_CREDENTIALS, None).unwrap();
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "ss-named-explicit",
+            "ss-named-positional",
+            "ss-qx-equal",
+            "socks-named-positional",
+            "socks-qx-explicit",
+            "vmess-named-equal",
+            "vmess-named-positional",
+            "vmess-qx-equal",
+            "vless-named-equal",
+            "vless-named-positional",
+            "vless-qx-equal",
+            "hysteria2-named-equal",
+            "hysteria2-named-positional",
+            "hy2-qx-equal",
+            "tuic-named-equal",
+            "tuic-named-positional",
+            "tuic-qx-equal",
+            "trojan-named-explicit",
+            "trojan-named-positional",
+            "anytls-named-explicit",
+            "anytls-named-positional",
+            "ss-named-repeated-equal"
+        ]
+    );
+
+    let explicit_ss = &nodes[0];
+    assert_eq!(
+        explicit_ss.shadowsocks().unwrap().encryption.as_deref(),
+        Some("aes-128-gcm")
+    );
+    assert_eq!(
+        explicit_ss.shadowsocks().unwrap().password.as_deref(),
+        Some("explicit-password")
+    );
+    assert_eq!(
+        nodes[1].shadowsocks().unwrap().password.as_deref(),
+        Some("positional-password")
+    );
+    assert_eq!(
+        nodes[3].socks5().unwrap().username.as_deref(),
+        Some("named-user")
+    );
+    assert_eq!(
+        nodes[5].vmess().unwrap().uuid.as_deref(),
+        Some("11111111-1111-4111-8111-111111111111")
+    );
+    assert_eq!(
+        nodes[6].vmess().unwrap().uuid.as_deref(),
+        Some("22222222-2222-4222-8222-222222222222")
+    );
+    assert_eq!(
+        nodes[8].vless().unwrap().uuid.as_deref(),
+        Some("44444444-4444-4444-8444-444444444444")
+    );
+    assert_eq!(
+        nodes[12].hysteria2().unwrap().auth.as_deref(),
+        Some("hy2-positional-auth")
+    );
+    assert_eq!(
+        nodes[15].tuic().unwrap().uuid.as_deref(),
+        Some("88888888-8888-4888-8888-888888888888")
+    );
+    assert_eq!(
+        nodes[17].trojan().unwrap().password.as_deref(),
+        Some("explicit-password")
+    );
+    assert_eq!(
+        nodes[19].anytls().unwrap().password.as_deref(),
+        Some("explicit-password")
+    );
+    assert_eq!(
+        nodes[21].shadowsocks().unwrap().password.as_deref(),
+        Some("repeat")
+    );
+}
+
+const B2_EMPTY_CREDENTIALS: &str = r#"socks5=example.com:1080,username=user,password="",tag=socks
+hysteria2=example.com:443,auth="",tag=hy2
+tuic=example.com:443,uuid=11111111-1111-4111-8111-111111111111,password="",tag=tuic"#;
+const B2_SPACE_CREDENTIALS: &str =
+    r#"socks5=example.com:1080,username=" ",password="  ",tag=spaces"#;
+const B2_EMPTY_OVERRIDE: &str =
+    r#"empty=socks5,example.com,1080,fallback-user,fallback-password,username="",password="""#;
+
+#[test]
+fn b2_record_permitted_empty_credentials_survive() {
+    let nodes = parse_records_subscription(B2_EMPTY_CREDENTIALS, None).unwrap();
+    assert_eq!(nodes[0].socks5().unwrap().password.as_deref(), Some(""));
+    assert_eq!(nodes[1].hysteria2().unwrap().auth.as_deref(), Some(""));
+    assert_eq!(nodes[2].tuic().unwrap().password.as_deref(), Some(""));
+}
+
+#[test]
+fn b2_record_quoted_credential_whitespace_survives() {
+    let nodes = parse_records_subscription(B2_SPACE_CREDENTIALS, None).unwrap();
+    let credentials = nodes[0].socks5().unwrap();
+    assert_eq!(credentials.username.as_deref(), Some(" "));
+    assert_eq!(credentials.password.as_deref(), Some("  "));
+}
+
+#[test]
+fn b2_record_explicit_empty_overrides_positional_credentials() {
+    let nodes = parse_records_subscription(B2_EMPTY_OVERRIDE, None).unwrap();
+    let credentials = nodes[0].socks5().unwrap();
+    assert_eq!(credentials.username.as_deref(), Some(""));
+    assert_eq!(credentials.password.as_deref(), Some(""));
 }

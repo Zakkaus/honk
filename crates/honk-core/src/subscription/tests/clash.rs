@@ -801,3 +801,34 @@ fn c07_clash_tls_name_aliases_normalize_empty_equal_and_conflict() {
     assert_eq!(nodes[1].tls().unwrap().sni.as_deref(), Some("tls.example"));
     assert_eq!(nodes[1].id, nodes[2].id);
 }
+
+const C09_CLASH_NONFINITE_CREDENTIAL: &str = r#"proxies:
+  - name: nonfinite-password
+    type: hysteria2
+    server: nonfinite.example
+    port: 443
+    auth: usable-auth
+    password: .nan
+  - name: finite-password
+    type: hysteria2
+    server: finite.example
+    port: 443
+    auth: usable-auth
+    password: 12345
+"#;
+
+#[test]
+fn c09_clash_rejects_nonfinite_credential_even_with_valid_alias() {
+    let nodes = parse_clash_subscription(C09_CLASH_NONFINITE_CREDENTIAL, None).unwrap();
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>(),
+        ["finite-password"]
+    );
+    assert_eq!(
+        nodes[0].hysteria2().unwrap().auth.as_deref(),
+        Some("usable-auth")
+    );
+}
