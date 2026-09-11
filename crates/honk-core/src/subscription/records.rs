@@ -69,7 +69,7 @@ fn parse_records_subscription(
     let nodes: Vec<_> = parse_record_outcomes(content, subscription_id)
         .into_iter()
         .filter_map(|outcome| match outcome.kind {
-            super::IndexedOutcomeKind::Node(node) => Some(node),
+            super::IndexedOutcomeKind::Node(node) => Some(*node),
             _ => None,
         })
         .collect();

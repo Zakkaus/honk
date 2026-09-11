@@ -190,7 +190,15 @@ impl honk_outbound::alive::HttpProber for ProxyHttpProber {
             } else {
                 url_host(&check_url)
             };
-            let (runtime, ephemeral) = honk_outbound::urltest::probe_runtime(&generation, &node);
+            let (runtime, ephemeral) =
+                match honk_outbound::urltest::try_probe_runtime(&generation, &node) {
+                    Ok(runtime) => runtime,
+                    Err(_) => {
+                        return honk_outbound::alive::HttpProbeResult::SetupFailure(
+                            "invalid node for health probe".into(),
+                        );
+                    }
+                };
             if !runtime.is_warm_or_stateless() {
                 let warm_reporter = start_probe_feedback(
                     &group_manager,
@@ -572,7 +580,11 @@ impl honk_outbound::alive::UdpProber for ProxyUdpProber {
                     Err(error) => return dns_only(error),
                 }
             };
-            let (runtime, ephemeral) = honk_outbound::urltest::probe_runtime(&generation, &node);
+            let (runtime, ephemeral) =
+                match honk_outbound::urltest::try_probe_runtime(&generation, &node) {
+                    Ok(runtime) => runtime,
+                    Err(_) => return dns_only("invalid node for health probe".into()),
+                };
             let reporter = start_probe_feedback(
                 &group_manager,
                 node.id,

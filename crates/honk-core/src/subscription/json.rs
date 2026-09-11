@@ -27,7 +27,7 @@ pub(super) fn parse_json_subscription(
     let nodes = outcomes
         .into_iter()
         .filter_map(|outcome| match outcome.kind {
-            IndexedOutcomeKind::Node(node) => Some(node),
+            IndexedOutcomeKind::Node(node) => Some(*node),
             _ => None,
         })
         .collect::<Vec<_>>();

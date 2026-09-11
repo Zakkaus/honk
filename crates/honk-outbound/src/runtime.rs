@@ -482,12 +482,7 @@ impl Drop for WarmAttempt {
 }
 
 impl NodeRuntime {
-    /// A generation-free runtime for one-shot callers (standalone probing,
-    /// tests): session protocols get a throwaway pool per runtime. The
-    /// caller MUST [`Self::close`] it when done — an unclosed ephemeral
-    /// pool keeps its demux-held sessions (and their connections) open
-    /// forever. Prefer [`Self::ephemeral_guarded`], which closes on drop.
-    pub fn ephemeral(node: &Node) -> Arc<Self> {
+    fn build_ephemeral(node: &Node) -> Arc<Self> {
         Arc::new(Self {
             node: Arc::new(node.clone()),
             udp_capable: (crate::descriptor::descriptor(node.protocol()).supports_udp)(node),
@@ -499,13 +494,47 @@ impl NodeRuntime {
         })
     }
 
-    /// [`Self::ephemeral`] wrapped in an ownership guard whose Drop starts
-    /// the close, so timeout/abort paths that simply drop the probe future
-    /// cannot leak the session-layer resources.
-    pub fn ephemeral_guarded(node: &Node) -> EphemeralRuntimeGuard {
+    /// Validate a node before any one-shot runtime state is cloned or built.
+    pub(crate) fn validate_for_ephemeral(node: &Node) -> Result<(), RuntimeRegistryError> {
+        honk_config::node::validate_node_collection(std::slice::from_ref(node))
+            .map_err(RuntimeRegistryError::Admission)
+    }
+
+    /// Admit a canonical node and build a generation-free one-shot runtime.
+    ///
+    /// Rejects nil IDs, intrinsic errors and stale IDs before allocating sessions.
+    /// The caller must [`Self::close`] session-owning runtimes when done; prefer
+    /// [`Self::try_ephemeral_guarded`] for cleanup on cancellation or drop.
+    pub fn try_ephemeral(node: &Node) -> Result<Arc<Self>, RuntimeRegistryError> {
+        Self::validate_for_ephemeral(node)?;
+        Ok(Self::build_ephemeral(node))
+    }
+
+    /// [`Self::try_ephemeral`] with an ownership guard that closes on drop.
+    pub fn try_ephemeral_guarded(
+        node: &Node,
+    ) -> Result<EphemeralRuntimeGuard, RuntimeRegistryError> {
+        Self::validate_for_ephemeral(node)?;
+        Ok(Self::ephemeral_guarded_after_admission(node))
+    }
+
+    pub(crate) fn ephemeral_guarded_after_admission(node: &Node) -> EphemeralRuntimeGuard {
         EphemeralRuntimeGuard {
-            runtime: Some(Self::ephemeral(node)),
+            runtime: Some(Self::build_ephemeral(node)),
         }
+    }
+
+    /// Compatibility wrapper for [`Self::try_ephemeral`]; panics on invalid input.
+    /// The caller retains the same explicit-close obligation.
+    pub fn ephemeral(node: &Node) -> Arc<Self> {
+        Self::try_ephemeral(node)
+            .unwrap_or_else(|_| panic!("invalid node passed to one-shot runtime factory"))
+    }
+
+    /// Compatibility wrapper for [`Self::try_ephemeral_guarded`]; panics on invalid input.
+    pub fn ephemeral_guarded(node: &Node) -> EphemeralRuntimeGuard {
+        Self::try_ephemeral_guarded(node)
+            .unwrap_or_else(|_| panic!("invalid node passed to one-shot runtime factory"))
     }
 
     pub(crate) fn is_ephemeral(&self) -> bool {

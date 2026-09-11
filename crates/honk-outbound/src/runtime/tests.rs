@@ -122,7 +122,7 @@ fn registry_admission_rejects_invalid_collections() {
 #[test]
 fn registry_admission_rechecks_dns_fork_source_state() {
     let node = canonical_node("dns-fork");
-    let mut registry = OutboundRuntimeRegistry::build(&[node.clone()]).unwrap();
+    let mut registry = OutboundRuntimeRegistry::build(std::slice::from_ref(&node)).unwrap();
     let runtime = registry.nodes.get_mut(&node.id).unwrap();
     let runtime = Arc::get_mut(runtime).unwrap();
     let embedded = Arc::get_mut(&mut runtime.node).unwrap();
@@ -900,4 +900,44 @@ async fn retirement_is_terminal_and_shutdown_remains_idempotent() {
         registry.is_shutdown(),
         "retirement and force shutdown remain terminal and idempotent"
     );
+}
+
+#[cfg(test)]
+mod fallible_factory_tests {
+    use super::*;
+
+    #[test]
+    fn try_ephemeral_rejects_nil_id_before_building() {
+        let mut node = canonical_node("nil-ephemeral");
+        node.id = uuid::Uuid::nil();
+        assert_admission(
+            NodeRuntime::try_ephemeral(&node).unwrap_err(),
+            "nil-node-id",
+            0,
+        );
+    }
+
+    #[test]
+    fn try_ephemeral_rejects_stale_id_before_cloning() {
+        let mut node = canonical_node("stale-ephemeral");
+        node.address = "5.6.7.8:8443".into();
+        node.host = "5.6.7.8".into();
+        node.port = 8443;
+        assert_admission(
+            NodeRuntime::try_ephemeral(&node).unwrap_err(),
+            "noncanonical-node-id",
+            0,
+        );
+    }
+
+    #[test]
+    fn try_ephemeral_rejects_intrinsic_invalidity_before_identity() {
+        let mut node = canonical_node("invalid-ephemeral");
+        node.port = 0;
+        assert_admission(
+            NodeRuntime::try_ephemeral(&node).unwrap_err(),
+            "invalid-node",
+            0,
+        );
+    }
 }

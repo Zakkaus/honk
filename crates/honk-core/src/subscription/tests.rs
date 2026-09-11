@@ -783,7 +783,16 @@ async fn c19_store_acceptance_is_independent_of_runtime_publication() {
         for body in [C19_PARTIAL, C19_INVALID, C19_PARTIAL] {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = [0; 2048];
-            stream.read(&mut request).await.unwrap();
+            let mut received = 0;
+            while !request[..received]
+                .windows(4)
+                .any(|window| window == b"\r\n\r\n")
+            {
+                assert!(received < request.len(), "HTTP request headers too large");
+                let size = stream.read(&mut request[received..]).await.unwrap();
+                assert!(size > 0, "HTTP request ended before its headers");
+                received += size;
+            }
             stream
                 .write_all(
                     format!(

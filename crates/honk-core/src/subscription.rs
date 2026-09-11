@@ -47,7 +47,7 @@ struct IndexedOutcome {
 
 #[derive(Debug)]
 enum IndexedOutcomeKind {
-    Node(Node),
+    Node(Box<Node>),
     Malformed(&'static str),
     Unsupported(&'static str),
     Profile(&'static str),
@@ -60,7 +60,7 @@ impl IndexedOutcome {
             ordinal,
             line: None,
             path,
-            kind: IndexedOutcomeKind::Node(node),
+            kind: IndexedOutcomeKind::Node(Box::new(node)),
         }
     }
 
@@ -580,7 +580,7 @@ fn collect_indexed_outcomes(
                     diagnostics.push(diagnostic);
                 } else {
                     seen.insert(node.id, ordinal);
-                    nodes.push(node);
+                    nodes.push(*node);
                 }
             }
             IndexedOutcomeKind::Malformed(reason) => diagnostics.push(indexed_diagnostic(
@@ -848,7 +848,7 @@ fn parse_clash_proxies(
     let nodes = outcomes
         .into_iter()
         .filter_map(|outcome| match outcome.kind {
-            IndexedOutcomeKind::Node(node) => Some(node),
+            IndexedOutcomeKind::Node(node) => Some(*node),
             _ => None,
         })
         .collect::<Vec<_>>();

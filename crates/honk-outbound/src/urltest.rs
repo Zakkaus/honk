@@ -234,6 +234,32 @@ async fn urltest_node_impl(
 }
 /// Reuse an already-warm generation runtime; otherwise create a throwaway
 /// runtime whose guard closes any session or client established for probing.
+pub fn try_probe_runtime(
+    generation: &crate::runtime::OutboundRuntimeRegistry,
+    node: &Node,
+) -> Result<
+    (
+        Arc<crate::runtime::NodeRuntime>,
+        Option<crate::runtime::EphemeralRuntimeGuard>,
+    ),
+    crate::runtime::RuntimeRegistryError,
+> {
+    // Validate before looking up a warm runtime: a stale ID must not buy a
+    // warm-path shortcut or cause feedback/resources to be initialized.
+    crate::runtime::NodeRuntime::validate_for_ephemeral(node)?;
+    match generation
+        .get(&node.id)
+        .filter(|runtime| runtime.is_warm_or_stateless())
+    {
+        Some(runtime) => Ok((runtime, None)),
+        None => {
+            let guard = crate::runtime::NodeRuntime::ephemeral_guarded_after_admission(node);
+            Ok((guard.runtime(), Some(guard)))
+        }
+    }
+}
+
+/// Compatibility wrapper for [`try_probe_runtime`]; panics on invalid input.
 pub fn probe_runtime(
     generation: &crate::runtime::OutboundRuntimeRegistry,
     node: &Node,
@@ -241,16 +267,8 @@ pub fn probe_runtime(
     Arc<crate::runtime::NodeRuntime>,
     Option<crate::runtime::EphemeralRuntimeGuard>,
 ) {
-    match generation
-        .get(&node.id)
-        .filter(|runtime| runtime.is_warm_or_stateless())
-    {
-        Some(runtime) => (runtime, None),
-        None => {
-            let guard = crate::runtime::NodeRuntime::ephemeral_guarded(node);
-            (guard.runtime(), Some(guard))
-        }
-    }
+    try_probe_runtime(generation, node)
+        .unwrap_or_else(|_| panic!("invalid node passed to URLTest runtime probe"))
 }
 
 /// Reuse an already-warm generation runtime. Cold reusable transports warm a
@@ -290,7 +308,7 @@ async fn urltest_node_in_generation_impl(
     } else {
         timeout
     };
-    let (runtime, guard) = probe_runtime(generation, node);
+    let (runtime, guard) = try_probe_runtime(generation, node)?;
     let result = generation
         .scope_dials(async {
             if !runtime.is_warm_or_stateless() {
@@ -796,7 +814,7 @@ mod resolver_hook_tests {
                 }
             })
         }));
-        let node = Node::default();
+        let node = honk_config::Config::builtin_direct_node();
         // The dial itself fails (nothing on 127.0.0.1:443) but the hook
         // must have been consulted first.
         let handler = crate::proxy::direct::DirectHandler::new();
@@ -1285,12 +1303,7 @@ mod tests {
     #[tokio::test]
     async fn hysteria2_excludes_pre_write_dial_time() {
         let addr = spawn_mock_http_server().await;
-        let node = Node {
-            id: uuid::Uuid::new_v4(),
-            name: "hysteria2".into(),
-            outbound: honk_config::node::OutboundConfig::from_protocol(NodeProtocol::Hysteria2),
-            ..Default::default()
-        };
+        let node = Node::from_share_link("hysteria2://test@127.0.0.1:443").unwrap();
         let elapsed = urltest_node_addr(
             &crate::runtime::NodeRuntime::ephemeral(&node),
             &DelayedDialHandler {
@@ -1664,13 +1677,7 @@ mod direct_urltest_tests {
                 .await
                 .unwrap();
         });
-        let node = Node {
-            name: honk_config::Config::BUILTIN_DIRECT_NODE.to_string(),
-            outbound: honk_config::node::OutboundConfig::from_protocol(
-                honk_config::types::NodeProtocol::Direct,
-            ),
-            ..Default::default()
-        };
+        let node = honk_config::Config::builtin_direct_node();
         let handler = crate::proxy::direct::DirectHandler::new();
         let latency = urltest_node(
             &crate::runtime::NodeRuntime::ephemeral(&node),
@@ -1681,5 +1688,23 @@ mod direct_urltest_tests {
         .await
         .expect("direct urltest must exchange with the requested URL");
         assert!(latency < Duration::from_secs(2));
+    }
+}
+
+#[cfg(test)]
+mod fallible_probe_tests {
+    use super::*;
+
+    #[test]
+    fn try_probe_runtime_rejects_stale_id_before_warm_lookup() {
+        let mut node = Node::from_share_link("socks5://127.0.0.1:1080").unwrap();
+        let generation =
+            crate::runtime::OutboundRuntimeRegistry::build(std::slice::from_ref(&node)).unwrap();
+        node.port += 1;
+        let error = try_probe_runtime(&generation, &node).unwrap_err();
+        let crate::runtime::RuntimeRegistryError::Admission(error) = error else {
+            panic!("expected node admission error");
+        };
+        assert_eq!(error.diagnostic.code, "noncanonical-node-id");
     }
 }

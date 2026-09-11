@@ -2,6 +2,8 @@ use super::udp_dial::{UdpPrepare, UdpStaggerCallbacks, prepare_udp_plan};
 use super::*;
 use crate::control::udp_endpoint::UdpEndpoint;
 use crate::dns::query::{IngressProfile, is_exact_dns_query, validate_exact_dns_query};
+#[path = "c27_prober_tests.rs"]
+mod c27_prober_tests;
 #[path = "c28_udp_tests.rs"]
 mod c28_udp_tests;
 

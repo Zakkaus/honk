@@ -274,7 +274,10 @@ address = "223.5.5.5:53"
 protocol = "udp"
 "#;
 
-        let config: Config = toml::from_str(toml_str).unwrap();
+        let mut config: Config = toml::from_str(toml_str).unwrap();
+        for node in &mut config.nodes {
+            node.id = node.derive_id();
+        }
         assert!(config.validate().is_ok());
 
         assert_eq!(config.global.tproxy_port, 12345);
@@ -337,13 +340,12 @@ protocol = "udp"
 
     #[tokio::test]
     async fn test_direct_handler_to_echo_server() {
-        use honk_config::node::Node;
         use honk_core::proxy::TcpOutbound;
         use honk_core::proxy::direct::DirectHandler;
 
         let echo_addr = spawn_echo_server().await;
         let handler = DirectHandler::new();
-        let node = Node::default();
+        let node = Config::builtin_direct_node();
 
         let target: SocketAddr = echo_addr;
 
@@ -359,12 +361,11 @@ protocol = "udp"
 
     #[tokio::test]
     async fn test_block_handler_rejects_all() {
-        use honk_config::node::Node;
         use honk_core::proxy::TcpOutbound;
         use honk_core::proxy::block::BlockHandler;
 
         let handler = BlockHandler::new();
-        let node = Node::default();
+        let node = Config::builtin_block_node();
         let target: SocketAddr = "93.184.216.34:80".parse().unwrap();
 
         let result = handler
@@ -513,13 +514,18 @@ protocol = "udp"
         use honk_config::node::Node;
 
         fn node(name: &str) -> Node {
-            Node {
-                id: uuid::Uuid::new_v4(),
+            let mut node = Node {
                 name: name.into(),
                 address: "127.0.0.1".into(),
                 port: 1,
+                outbound: node::OutboundConfig::Shadowsocks(node::ShadowsocksConfig {
+                    password: Some(name.into()),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            }
+            };
+            node.id = node.derive_id();
+            node
         }
         fn selector(name: &str, members: &[&Node]) -> Group {
             Group {
@@ -614,16 +620,20 @@ protocol = "udp"
         let other_sub_id = uuid::Uuid::new_v4();
 
         fn node(name: &str, sub: Option<uuid::Uuid>) -> Node {
-            Node {
-                id: uuid::Uuid::new_v4(),
+            let mut node = Node {
                 name: name.into(),
                 address: "127.0.0.1:1080".into(),
                 host: "127.0.0.1".into(),
                 port: 1080,
-                outbound: honk_config::node::OutboundConfig::Socks5(Default::default()),
+                outbound: node::OutboundConfig::Socks5(node::Socks5Config {
+                    username: Some(name.into()),
+                    ..Default::default()
+                }),
                 subscription_id: sub,
                 ..Default::default()
-            }
+            };
+            node.id = node.derive_id();
+            node
         }
 
         // Startup state: a static node, the subscription's previous
@@ -688,7 +698,7 @@ protocol = "udp"
             .unwrap();
 
         // Simulate a late subscription fetch completing: two new nodes with
-        // fresh UUIDs replace the previous generation.
+        // distinct canonical IDs replace the previous generation.
         let new1 = node("sub-new-1", Some(sub_id));
         let new2 = node("sub-new-2", Some(sub_id));
         cp.merge_subscription_nodes(sub_id, vec![new1.clone(), new2.clone()])
@@ -740,7 +750,7 @@ protocol = "udp"
         assert!(!registered.contains_key(&old2.id));
 
         // Idempotency: re-merging the same subscription (periodic refresh
-        // with fresh UUIDs) replaces instead of duplicating.
+        // with the same canonical IDs) replaces instead of duplicating.
         let refresh1 = node("sub-new-1", Some(sub_id));
         let refresh2 = node("sub-new-2", Some(sub_id));
         cp.merge_subscription_nodes(sub_id, vec![refresh1, refresh2])
