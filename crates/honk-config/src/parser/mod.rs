@@ -37,6 +37,14 @@ pub fn parse_dae_config_file_with_diagnostics(
     path: impl AsRef<Path>,
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) -> Result<Config, crate::ConfigError> {
+    parse_dae_config_file_attempt(path, diagnostics, &mut false)
+}
+
+pub(crate) fn parse_dae_config_file_attempt(
+    path: impl AsRef<Path>,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    semantic: &mut bool,
+) -> Result<Config, crate::ConfigError> {
     let entry = std::fs::canonicalize(path.as_ref())?;
     let entry_dir = entry.parent().map(Path::to_path_buf).ok_or_else(|| {
         crate::ConfigError::Include(format!(
@@ -49,6 +57,7 @@ pub fn parse_dae_config_file_with_diagnostics(
         loaded: HashSet::new(),
         stack: Vec::new(),
         saw_include: false,
+        entry_input: String::new(),
     };
     let blocks = match loader.expand_file(&entry, diagnostics) {
         Ok(blocks) => blocks,
@@ -62,12 +71,43 @@ pub fn parse_dae_config_file_with_diagnostics(
     };
     match parse_blocks(blocks, diagnostics) {
         Ok(config) => Ok(config),
-        Err(err @ crate::ConfigError::UnsupportedPolicy(_)) => Err(err),
-        Err(err) if loader.saw_include => Err(crate::ConfigError::Include(format!(
-            "failed to parse configuration after resolving includes: {err}"
-        ))),
-        Err(err) => Err(err),
+        Err(err) => {
+            *semantic = loader.saw_include || !is_structured_document(&loader.entry_input);
+            match err {
+                err @ crate::ConfigError::UnsupportedPolicy(_) => Err(err),
+                err if loader.saw_include => Err(crate::ConfigError::Include(format!(
+                    "failed to parse configuration after resolving includes: {err}"
+                ))),
+                err => Err(err),
+            }
+        }
     }
+}
+
+fn is_structured_document(input: &str) -> bool {
+    // A dae semantic failure is final unless the complete document decodes as
+    // a YAML, TOML or JSON mapping containing at least one known Config root.
+    use crate::config::CONFIG_FIELDS;
+
+    serde_yaml::from_str::<serde_yaml::Value>(input).is_ok_and(|value| {
+        value.as_mapping().is_some_and(|mapping| {
+            mapping
+                .keys()
+                .any(|key| key.as_str().is_some_and(|key| CONFIG_FIELDS.contains(&key)))
+        })
+    }) || toml::from_str::<toml::Value>(input).is_ok_and(|value| {
+        value.as_table().is_some_and(|mapping| {
+            mapping
+                .keys()
+                .any(|key| CONFIG_FIELDS.contains(&key.as_str()))
+        })
+    }) || serde_json::from_str::<serde_json::Value>(input).is_ok_and(|value| {
+        value.as_object().is_some_and(|mapping| {
+            mapping
+                .keys()
+                .any(|key| CONFIG_FIELDS.contains(&key.as_str()))
+        })
+    })
 }
 
 struct IncludeLoader {
@@ -77,6 +117,7 @@ struct IncludeLoader {
     loaded: HashSet<PathBuf>,
     stack: Vec<PathBuf>,
     saw_include: bool,
+    entry_input: String,
 }
 
 impl IncludeLoader {
@@ -118,6 +159,9 @@ impl IncludeLoader {
             }
             diagnostics.extend(structural_diagnostics);
             let roots = roots?;
+            if self.stack.len() == 1 {
+                self.entry_input = input;
+            }
             let mut blocks = Vec::new();
             let mut patterns = Vec::new();
             for block in roots {

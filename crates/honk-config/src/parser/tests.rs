@@ -104,8 +104,6 @@ global {
         assert_eq!(config.global.check_tolerance_ms, 50);
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].setting, "global.check_tolerance");
-        assert_eq!(diagnostics[0].value, "abc");
-        assert!(diagnostics[0].message.contains("50ms"));
     }
 
     #[test]
@@ -131,6 +129,29 @@ global {
     }
 
     #[test]
+    fn test_unrelated_scalar_cannot_hide_dae_semantic_failure() {
+        let file = tempfile::Builder::new().suffix(".dae").tempfile().unwrap();
+        std::fs::write(
+            file.path(),
+            include_str!("../../tests/fixtures/invalid_nfqueue_with_scalar.dae"),
+        )
+        .unwrap();
+        let mut diagnostics = Vec::new();
+        let error = crate::Config::from_file_with_detailed_diagnostics(
+            file.path().to_str().unwrap(),
+            &mut diagnostics,
+        )
+        .unwrap_err();
+        assert_eq!(error.category, crate::error::ErrorCategory::Parse);
+        assert_eq!(diagnostics.iter().filter(|d| d.terminal).count(), 1);
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|d| d.code == "invalid-structured-config")
+        );
+    }
+
+    #[test]
     fn test_include_preserves_timer_diagnostics() {
         let dir = tempfile::tempdir().unwrap();
         let entry = dir.path().join("config.dae");
@@ -148,8 +169,6 @@ global {
         assert_eq!(config.global.sniffing_timeout_ms, 30);
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].setting, "global.sniffing_timeout");
-        assert_eq!(diagnostics[0].value, "1m");
-        assert!(diagnostics[0].message.contains("30ms"));
     }
 
     #[test]

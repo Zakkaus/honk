@@ -84,6 +84,17 @@ impl DetailedConfigError {
     pub fn from_legacy(error: ConfigError, source: crate::diagnostic::SourceRef) -> Self {
         use crate::diagnostic::SettingPath;
         let category = ErrorCategory::of(&error);
+        if matches!(&error, ConfigError::UnsupportedPolicy(message)
+            if message == "group policy 'honk' was renamed to 'score'")
+        {
+            return Self::new(
+                category,
+                "unsupported-policy",
+                source,
+                SettingPath::new("groups").field("policy"),
+                "group policy 'honk' was renamed to 'score'",
+            );
+        }
         let (code, message) = match category {
             ErrorCategory::Io(_) => ("config-io", "configuration IO failed"),
             ErrorCategory::Parse => ("config-parse", "invalid configuration"),

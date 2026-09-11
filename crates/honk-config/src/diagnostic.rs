@@ -220,6 +220,93 @@ impl DetailedDiagnostic {
     }
 }
 
+// The old scanner/readers remain until PR2; only this boundary projects their data.
+pub(crate) fn project_legacy(d: ConfigDiagnostic, source: SourceRef) -> DetailedDiagnostic {
+    let setting = [
+        "global.tproxy_port",
+        "global.tproxy_port_protect",
+        "global.pprof_port",
+        "global.so_mark_from_dae",
+        "global.disable_waiting_network",
+        "global.auto_config_kernel_parameter",
+        "global.store_subscribe",
+        "global.check_interval",
+        "global.check_tolerance",
+        "global.allow_insecure",
+        "global.sniffing_timeout",
+        "global.tls_fragment",
+        "global.mptcp",
+        "dns.ipversion_prefer",
+        "dns.optimistic_cache",
+        "dns.optimistic_cache_ttl",
+        "dns.optimistic_stale_reply_ttl",
+        "dns.max_cache_size",
+        "experimental.clash_api.enabled",
+        "experimental.cache_file.enabled",
+        "experimental.cache_file.store_fakeip",
+        "experimental.cache_file.store_rdrc",
+        "experimental.cache_file.store_dns",
+    ]
+    .into_iter()
+    .find(|setting| *setting == d.setting);
+    let path = if let Some(setting) = setting {
+        SettingPath(setting.split('.').map(SettingSegment::Field).collect())
+    } else if d.setting.starts_with("group.") && d.setting.ends_with(".policy") {
+        SettingPath::new("groups").field("policy")
+    } else if d.setting.starts_with("group.") && d.setting.ends_with(".filter") {
+        SettingPath::new("groups").field("filter")
+    } else if d.setting.starts_with("subscription.") {
+        SettingPath::new("subscriptions").field("interval")
+    } else if d.setting.starts_with("dns.fixed_domain_ttl.") {
+        SettingPath::new("dns").field("fixed_domain_ttl")
+    } else {
+        SettingPath::new("config")
+    };
+    let value = if d.setting.ends_with(".policy") {
+        SafeValue::Empty
+    } else if d.setting.ends_with(".filter") || d.setting.is_empty() {
+        d.value
+            .parse()
+            .map(SafeValue::Ordinal)
+            .unwrap_or(SafeValue::Redacted)
+    } else {
+        SafeValue::Redacted
+    };
+    macro_rules! message {
+        ($($message:literal),* $(,)?) => {
+            match d.message.as_str() {
+                $($message => $message,)*
+                _ => "invalid configuration value; keeping the default",
+            }
+        };
+    }
+    let message = message!(
+        "unmatched `}` ignored",
+        "group(...) is unterminated; ignored",
+        "group(...) must be the whole filter line; ignored",
+        "honk could not parse this filter; ignored",
+        "policy is not recognised; using fallback selector",
+        "duration is unsupported by honk; using fallback 0s",
+        "duration is not milliseconds, `ms` or `s`; keeping the default (50ms)",
+        "duration is not milliseconds, `ms` or `s`; keeping the default (100ms)",
+        "value is not a boolean spelling honk recognises; using fallback false",
+        "honk could not parse this port as a decimal in 0-65535; using fallback 12345",
+        "honk could not parse this port as a decimal in 0-65535; using fallback 0",
+        "honk could not parse this mark as a u32; using fallback 0",
+        "honk could not parse the preference as decimal 0, 4 or 6; using fallback: no preference",
+        "honk could not parse this value as an unsigned decimal integer in range; using fallback 60",
+        "honk could not parse this value as an unsigned decimal integer in range; using fallback 30",
+        "honk could not parse this value as an unsigned decimal integer in range; using fallback 10000",
+        "honk could not parse this TTL as an unsigned 32-bit decimal integer; entry ignored",
+    );
+    let mut diagnostic =
+        DetailedDiagnostic::warning("legacy-config-warning", source, path, value, message);
+    if d.setting.is_empty() {
+        diagnostic.line = d.value.parse().ok();
+    }
+    diagnostic
+}
+
 /// Called by the outer attempt owner, not by nested readers or format probes.
 pub fn finish_attempt<T>(
     result: Result<T, crate::error::DetailedConfigError>,

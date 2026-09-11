@@ -788,12 +788,34 @@ pub struct NodeSeed<'a> {
     pub setting: SettingPath,
 }
 
+/// Crate-private variant used by the detailed structured loaders. It leaves the
+/// decoder error intact until the format-specific owner has captured location
+/// metadata and replaced the public error with a redacted terminal.
+pub(crate) struct RawNodeSeed<'a> {
+    pub diagnostics: &'a mut Vec<DetailedDiagnostic>,
+    pub source: SourceRef,
+    pub setting: SettingPath,
+}
+
 impl<'de> DeserializeSeed<'de> for NodeSeed<'_> {
     type Value = Node;
 
     fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Node, D::Error> {
-        let flat = FlatNode::deserialize(deserializer)
-            .map_err(|_| D::Error::custom("invalid node fields"))?;
+        RawNodeSeed {
+            diagnostics: self.diagnostics,
+            source: self.source,
+            setting: self.setting,
+        }
+        .deserialize(deserializer)
+        .map_err(|_| D::Error::custom("invalid node fields"))
+    }
+}
+
+impl<'de> DeserializeSeed<'de> for RawNodeSeed<'_> {
+    type Value = Node;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Node, D::Error> {
+        let flat = FlatNode::deserialize(deserializer)?;
         flat.into_node(self.diagnostics, &self.source, &self.setting)
             .map_err(|error| {
                 D::Error::custom(crate::error::DetailedConfigError::from_legacy(

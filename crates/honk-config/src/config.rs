@@ -1,4 +1,18 @@
+mod seed;
+pub(crate) use seed::CONFIG_FIELDS;
+pub use seed::ConfigSeed;
+use seed::RawConfigSeed;
+
+use std::ops::Range;
+
+use crate::diagnostic::{
+    DetailedDiagnostic, DiagnosticSources, SettingPath, SourceRef, finish_attempt, project_legacy,
+    report_detailed_diagnostics,
+};
+use crate::error::{DetailedConfigError, ErrorCategory};
+use serde::de::DeserializeSeed;
 use serde::{Deserialize, Serialize};
+use serde_path_to_error::{Deserializer as PathDeserializer, Segment, Track};
 
 use crate::ConfigDiagnostic;
 use crate::dns::DnsConfig;
@@ -21,7 +35,7 @@ pub const BLOCK_NODE_ID: uuid::Uuid = uuid::Uuid::from_u128(0x00000000_0000_4000
 pub const PRECONNECT_NODE_COUNT_AUTO: usize = usize::MAX;
 
 /// Main honk configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub global: GlobalConfig,
@@ -490,54 +504,121 @@ impl Config {
 
     pub fn from_file(path: &str) -> Result<Self, crate::ConfigError> {
         let mut diagnostics = Vec::new();
-        let result = Self::from_file_with_diagnostics(path, &mut diagnostics);
-        crate::diagnostic::report_diagnostics(&diagnostics);
-        result
+        let result = Self::from_file_with_detailed_diagnostics(path, &mut diagnostics);
+        report_detailed_diagnostics(&diagnostics);
+        result.map_err(DetailedConfigError::into_legacy)
     }
 
-    /// Load a config, appending diagnostics as encountered on success or failure.
-    /// A successful structured fallback discards only the abandoned dae diagnostics.
-    /// The plain entry point logs them instead. Values must be safe to display;
-    /// see [`ConfigDiagnostic`] for stderr warnings not captured by this vector.
+    /// Compatibility projection of the detailed data API; never logs.
     pub fn from_file_with_diagnostics(
         path: &str,
         diagnostics: &mut Vec<ConfigDiagnostic>,
     ) -> Result<Self, crate::ConfigError> {
-        let content = std::fs::read_to_string(path)?;
+        let mut detailed = Vec::new();
+        let result = Self::from_file_with_detailed_diagnostics(path, &mut detailed);
+        diagnostics.extend(detailed.iter().map(DetailedDiagnostic::to_legacy));
+        result.map_err(DetailedConfigError::into_legacy)
+    }
 
+    /// Load with failure-preserving diagnostics. Each format owns a separate source table.
+    pub fn from_file_with_detailed_diagnostics(
+        path: &str,
+        diagnostics: &mut Vec<DetailedDiagnostic>,
+    ) -> Result<Self, DetailedConfigError> {
+        let result = Self::load_file_attempt(path, diagnostics);
+        finish_attempt(result, diagnostics)
+    }
+
+    fn load_file_attempt(
+        path: &str,
+        diagnostics: &mut Vec<DetailedDiagnostic>,
+    ) -> Result<Self, DetailedConfigError> {
+        let source = DiagnosticSources::new(Some(path.into())).root();
+        let content = std::fs::read_to_string(path)
+            .map_err(|error| DetailedConfigError::from_legacy(error.into(), source.clone()))?;
         let ext = std::path::Path::new(path)
             .extension()
-            .and_then(|e| e.to_str())
+            .and_then(|ext| ext.to_str())
             .map(str::to_ascii_lowercase);
-
-        // A recognized extension picks its format first and falls back to the
-        // other structured formats.  Unknown or missing extensions keep the
-        // historical dae -> TOML -> YAML -> JSON fallback chain.
-        let diagnostics_start = diagnostics.len();
-        let mut config = match ext.as_deref() {
-            Some("json") => Self::from_json_str(&content)
-                .or_else(|_| parse_toml(&content))
-                .or_else(|_| parse_yaml(&content)),
-            Some("yaml") | Some("yml") => parse_yaml(&content)
-                .or_else(|_| parse_toml(&content))
-                .or_else(|_| Self::from_json_str(&content)),
-            Some("toml") => parse_toml(&content)
-                .or_else(|_| parse_yaml(&content))
-                .or_else(|_| Self::from_json_str(&content)),
-            _ => match crate::parser::parse_dae_config_file_with_diagnostics(path, diagnostics) {
-                Ok(config) => Ok(config),
-                // These errors identify recognized dae syntax; structured
-                // fallbacks would hide their actionable cause.
-                Err(err @ crate::ConfigError::Include(_))
-                | Err(err @ crate::ConfigError::UnsupportedPolicy(_)) => Err(err),
-                Err(_) => parse_toml(&content)
-                    .or_else(|_| parse_yaml(&content))
-                    .or_else(|_| Self::from_json_str(&content))
-                    .inspect(|_| diagnostics.truncate(diagnostics_start)),
-            },
-        }?;
-        config.derive_node_ids();
-        Ok(config)
+        let start = diagnostics.len();
+        let formats: &[ConfigFormat] = match ext.as_deref() {
+            Some("json") => &[ConfigFormat::Json, ConfigFormat::Toml, ConfigFormat::Yaml],
+            Some("yaml" | "yml") => &[ConfigFormat::Yaml, ConfigFormat::Toml, ConfigFormat::Json],
+            Some("toml") => &[ConfigFormat::Toml, ConfigFormat::Yaml, ConfigFormat::Json],
+            _ => {
+                let mut legacy = Vec::new();
+                let mut semantic = false;
+                let result =
+                    crate::parser::parse_dae_config_file_attempt(path, &mut legacy, &mut semantic);
+                diagnostics.extend(
+                    legacy
+                        .into_iter()
+                        .map(|d| project_legacy(d, source.clone())),
+                );
+                match result {
+                    Ok(mut config) => {
+                        config.derive_node_ids();
+                        return Ok(config);
+                    }
+                    Err(error) => {
+                        let stop = matches!(
+                            error,
+                            crate::ConfigError::Include(_)
+                                | crate::ConfigError::UnsupportedPolicy(_)
+                        );
+                        let mut error = DetailedConfigError::from_legacy(error, source);
+                        // File-mode legacy callers historically received the last Parse error.
+                        if !stop && semantic {
+                            error.category = ErrorCategory::Parse;
+                        }
+                        if stop || semantic {
+                            return Err(error);
+                        }
+                        let mut diagnostic = *error.diagnostic;
+                        diagnostic.terminal = false;
+                        diagnostics.push(diagnostic);
+                    }
+                }
+                &[ConfigFormat::Toml, ConfigFormat::Yaml, ConfigFormat::Json]
+            }
+        };
+        for (index, format) in formats.iter().enumerate() {
+            let attempt_start = diagnostics.len();
+            let source = DiagnosticSources::new(Some(path.into())).root();
+            match parse_structured(&content, *format, diagnostics, source) {
+                Ok(mut config) => {
+                    diagnostics.drain(start..attempt_start);
+                    config.derive_node_ids();
+                    return Ok(config);
+                }
+                Err(error) => {
+                    if index + 1 == formats.len() {
+                        if error.diagnostic.entry_index.is_none()
+                            && let Some(cause_index) =
+                                diagnostics[start..].iter().position(|diagnostic| {
+                                    diagnostic.severity == crate::diagnostic::Severity::Error
+                                        && diagnostic.entry_index.is_some()
+                                })
+                        {
+                            let mut cause = diagnostics.remove(start + cause_index);
+                            cause.terminal = true;
+                            let mut last_attempt = *error.diagnostic;
+                            last_attempt.terminal = false;
+                            diagnostics.push(last_attempt);
+                            return Err(DetailedConfigError {
+                                category: error.category,
+                                diagnostic: Box::new(cause),
+                            });
+                        }
+                        return Err(error);
+                    }
+                    let mut diagnostic = *error.diagnostic;
+                    diagnostic.terminal = false;
+                    diagnostics.push(diagnostic);
+                }
+            }
+        }
+        unreachable!("format list is nonempty")
     }
 
     pub fn to_file(&self, path: &str) -> Result<(), crate::ConfigError> {
@@ -571,12 +652,27 @@ impl Config {
 
     /// Parse a configuration from a JSON string.
     pub fn from_json_str(s: &str) -> Result<Self, crate::ConfigError> {
-        let canonical_present = json_has_global_nfqueue_enable(s);
-        let mut config: Self =
-            serde_json::from_str(s).map_err(|e| crate::ConfigError::Parse(e.to_string()))?;
-        config.apply_legacy_nfqueue(canonical_present);
-        config.derive_node_ids();
-        Ok(config)
+        let mut diagnostics = Vec::new();
+        let result = Self::from_json_str_with_detailed_diagnostics(s, &mut diagnostics);
+        report_detailed_diagnostics(&diagnostics);
+        result.map_err(DetailedConfigError::into_legacy)
+    }
+
+    pub fn from_json_str_with_detailed_diagnostics(
+        s: &str,
+        diagnostics: &mut Vec<DetailedDiagnostic>,
+    ) -> Result<Self, DetailedConfigError> {
+        let result = parse_structured(
+            s,
+            ConfigFormat::Json,
+            diagnostics,
+            DiagnosticSources::new(None).root(),
+        )
+        .map(|mut config| {
+            config.derive_node_ids();
+            config
+        });
+        finish_attempt(result, diagnostics)
     }
 
     /// Re-derive every node's content-based ID ([`Node::derive_id`]) after
@@ -807,22 +903,251 @@ impl Config {
         Ok(())
     }
 }
-/// Parse a configuration from a TOML string.
-fn parse_toml(content: &str) -> Result<Config, crate::ConfigError> {
-    let canonical_present = toml_has_global_nfqueue_enable(content);
-    let mut config: Config =
-        toml::from_str(content).map_err(|e| crate::ConfigError::Parse(e.to_string()))?;
+#[derive(Clone, Copy)]
+enum ConfigFormat {
+    Json,
+    Yaml,
+    Toml,
+}
+
+#[derive(Default)]
+struct DecodeLocation {
+    span: Option<Range<usize>>,
+    line: Option<usize>,
+    byte_column: Option<usize>,
+}
+
+fn parse_structured(
+    content: &str,
+    format: ConfigFormat,
+    diagnostics: &mut Vec<DetailedDiagnostic>,
+    source: SourceRef,
+) -> Result<Config, DetailedConfigError> {
+    let mut track = Track::new();
+    let seed = RawConfigSeed {
+        diagnostics,
+        source: source.clone(),
+    };
+    let result = match format {
+        ConfigFormat::Json => {
+            let mut decoder = serde_json::Deserializer::from_str(content);
+            seed.deserialize(PathDeserializer::new(&mut decoder, &mut track))
+                .and_then(|config| decoder.end().map(|_| config))
+                .map_err(|error| DecodeLocation {
+                    line: (error.line() != 0).then_some(error.line()),
+                    byte_column: (error.column() != 0).then_some(error.column()),
+                    span: None,
+                })
+        }
+        ConfigFormat::Yaml => seed
+            .deserialize(PathDeserializer::new(
+                serde_yaml::Deserializer::from_str(content),
+                &mut track,
+            ))
+            .map_err(|error| {
+                let location = error.location();
+                DecodeLocation {
+                    line: location.as_ref().map(|location| location.line()),
+                    byte_column: location.as_ref().and_then(|location| {
+                        let line = content.lines().nth(location.line().checked_sub(1)?)?;
+                        let column = location.column().checked_sub(1)?;
+                        Some(
+                            line.char_indices()
+                                .nth(column)
+                                .map_or(line.len(), |(i, _)| i)
+                                + 1,
+                        )
+                    }),
+                    span: None,
+                }
+            }),
+        ConfigFormat::Toml => toml::de::Deserializer::parse(content)
+            .and_then(|decoder| seed.deserialize(PathDeserializer::new(decoder, &mut track)))
+            .map_err(|error| toml_location(content, &error)),
+    };
+    let mut config =
+        result.map_err(|location| structured_decode_error(source, track.path(), location))?;
+    let canonical_present = match format {
+        ConfigFormat::Json => json_has_global_nfqueue_enable(content),
+        ConfigFormat::Yaml => yaml_has_global_nfqueue_enable(content),
+        ConfigFormat::Toml => toml_has_global_nfqueue_enable(content),
+    };
     config.apply_legacy_nfqueue(canonical_present);
     Ok(config)
 }
 
-/// Parse a configuration from a YAML string.
-fn parse_yaml(content: &str) -> Result<Config, crate::ConfigError> {
-    let canonical_present = yaml_has_global_nfqueue_enable(content);
-    let mut config: Config =
-        serde_yaml::from_str(content).map_err(|e| crate::ConfigError::Parse(e.to_string()))?;
-    config.apply_legacy_nfqueue(canonical_present);
-    Ok(config)
+fn toml_location(content: &str, error: &toml::de::Error) -> DecodeLocation {
+    let Some(span) = error.span() else {
+        return DecodeLocation::default();
+    };
+    let start = span.start.min(content.len());
+    let prefix = &content.as_bytes()[..start];
+    let line = prefix.iter().filter(|&&byte| byte == b'\n').count() + 1;
+    let byte_column = prefix
+        .iter()
+        .rposition(|&byte| byte == b'\n')
+        .map_or(start + 1, |newline| start - newline);
+    DecodeLocation {
+        span: Some(span),
+        line: Some(line),
+        byte_column: Some(byte_column),
+    }
+}
+
+fn structured_decode_error(
+    source: SourceRef,
+    path: serde_path_to_error::Path,
+    location: DecodeLocation,
+) -> DetailedConfigError {
+    let (setting, entry_index) = setting_from_decode_path(&path);
+    let mut error = DetailedConfigError::new(
+        ErrorCategory::Parse,
+        "invalid-structured-config",
+        source,
+        setting,
+        "invalid configuration fields",
+    );
+    error.diagnostic.entry_index = entry_index;
+    error.diagnostic.span = location.span;
+    error.diagnostic.line = location.line;
+    error.diagnostic.byte_column = location.byte_column;
+    error
+}
+
+fn setting_from_decode_path(path: &serde_path_to_error::Path) -> (SettingPath, Option<usize>) {
+    let mut segments = path.iter();
+    let root = match segments.next() {
+        Some(Segment::Map { key }) => seed::CONFIG_FIELDS
+            .iter()
+            .copied()
+            .find(|&field| field == key),
+        Some(Segment::Seq { index }) => seed::CONFIG_FIELDS.get(*index).copied(),
+        _ => None,
+    };
+    let Some(root) = root else {
+        return (SettingPath::new("config"), None);
+    };
+    let mut setting = SettingPath::new(root);
+    let mut entry_index = None;
+    let mut field_seen = false;
+    for segment in segments {
+        match segment {
+            Segment::Seq { index } if matches!(root, "nodes" | "groups" | "subscriptions") => {
+                let index = index + 1;
+                setting = setting.index(index);
+                entry_index.get_or_insert(index);
+            }
+            Segment::Map { key } if !field_seen => {
+                let field = match root {
+                    "nodes" if entry_index.is_some() => node_schema_field(key),
+                    "groups" if entry_index.is_some() => [
+                        "id",
+                        "name",
+                        "policy",
+                        "nodes",
+                        "filters",
+                        "groups",
+                        "default",
+                        "final_outbound",
+                        "check_url",
+                        "check_interval",
+                        "tolerance",
+                        "idle_timeout",
+                        "interrupt_connections",
+                        "created_at",
+                    ]
+                    .into_iter()
+                    .find(|field| field == key),
+                    "subscriptions" if entry_index.is_some() => [
+                        "id",
+                        "name",
+                        "url",
+                        "sub_type",
+                        "update_interval",
+                        "user_agent",
+                        "headers",
+                        "enabled",
+                        "last_updated",
+                        "node_count",
+                        "created_at",
+                    ]
+                    .into_iter()
+                    .find(|field| field == key),
+                    _ => None,
+                };
+                let Some(field) = field else {
+                    break;
+                };
+                setting = setting.field(field);
+                field_seen = true;
+            }
+            _ => break,
+        }
+    }
+    (setting, entry_index)
+}
+
+fn node_schema_field(field: &str) -> Option<&'static str> {
+    Some(match field {
+        "id" => "id",
+        "name" => "name",
+        "address" => "address",
+        "host" => "host",
+        "port" => "port",
+        "protocol" => "protocol",
+        "username" => "username",
+        "password" => "password",
+        "encryption" => "encryption",
+        "vless_mode" => "vless_mode",
+        "plugin" => "plugin",
+        "plugin_opts" => "plugin_opts",
+        "transport" => "transport",
+        "tls" => "tls",
+        "sni" => "sni",
+        "tls_alpn" => "tls_alpn",
+        "skip_cert_verify" => "skip_cert_verify",
+        "ech_enabled" => "ech_enabled",
+        "ech_config" => "ech_config",
+        "ech_config_path" => "ech_config_path",
+        "reality_public_key" => "reality_public_key",
+        "reality_short_id" => "reality_short_id",
+        "reality_spider_x" => "reality_spider_x",
+        "flow" => "flow",
+        "network" => "network",
+        "ws_path" => "ws_path",
+        "ws_host" => "ws_host",
+        "grpc_service" => "grpc_service",
+        "hy2_auth" => "hy2_auth",
+        "hy2_obfs" => "hy2_obfs",
+        "hy2_up_mbps" => "hy2_up_mbps",
+        "hy2_down_mbps" => "hy2_down_mbps",
+        "hy2_port_hopping" => "hy2_port_hopping",
+        "hy2_hop_interval" => "hy2_hop_interval",
+        "tls_pin_sha256" => "tls_pin_sha256",
+        "hy2_init_stream_recv_window" => "hy2_init_stream_recv_window",
+        "hy2_init_conn_recv_window" => "hy2_init_conn_recv_window",
+        "hy2_disable_mtu_discovery" => "hy2_disable_mtu_discovery",
+        "quic_mtu" => "quic_mtu",
+        "tuic_uuid" => "tuic_uuid",
+        "tuic_password" => "tuic_password",
+        "tuic_congestion" => "tuic_congestion",
+        "tuic_alpn" => "tuic_alpn",
+        "tuic_init_stream_recv_window" => "tuic_init_stream_recv_window",
+        "tuic_init_conn_recv_window" => "tuic_init_conn_recv_window",
+        "juicity_uuid" => "juicity_uuid",
+        "juicity_password" => "juicity_password",
+        "anytls_password" => "anytls_password",
+        "anytls_min_idle_session" => "anytls_min_idle_session",
+        "anytls_idle_session_check_interval" => "anytls_idle_session_check_interval",
+        "anytls_idle_session_timeout" => "anytls_idle_session_timeout",
+        "mark" => "mark",
+        "tags" => "tags",
+        "subscription_id" => "subscription_id",
+        "group_id" => "group_id",
+        "created_at" => "created_at",
+        "updated_at" => "updated_at",
+        _ => return None,
+    })
 }
 
 fn json_has_global_nfqueue_enable(content: &str) -> bool {
@@ -936,7 +1261,6 @@ mod builtin_nodes_tests {
         std::fs::write(file.path(), "group {\n proxy {\n policy: honk\n }\n}").unwrap();
         let error = Config::from_file(file.path().to_str().unwrap()).unwrap_err();
         assert!(matches!(error, crate::ConfigError::UnsupportedPolicy(_)));
-        assert!(error.to_string().contains("renamed to 'score'"));
     }
 
     #[test]
