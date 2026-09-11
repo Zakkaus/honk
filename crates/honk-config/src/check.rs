@@ -83,3 +83,93 @@ pub(crate) fn validate_dns_check_targets(values: &[String]) -> Result<(), crate:
     }
     Ok(())
 }
+
+/// Parsed HTTP authority and request target. Credentials are never used for authorization.
+pub struct HttpCheckTarget {
+    url: url::Url,
+    request_target: String,
+}
+
+impl HttpCheckTarget {
+    pub fn host(&self) -> &str {
+        self.url
+            .host_str()
+            .expect("validated HTTP host")
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+    }
+
+    /// Credential-free HTTP authority, including IPv6 brackets and any
+    /// non-default port.
+    pub fn authority(&self) -> &str {
+        &self.url[url::Position::BeforeHost..url::Position::AfterPort]
+    }
+
+    pub fn port(&self) -> u16 {
+        self.url
+            .port_or_known_default()
+            .expect("HTTP scheme default")
+    }
+
+    pub fn is_https(&self) -> bool {
+        self.url.scheme() == "https"
+    }
+
+    pub fn request_target(&self) -> &str {
+        &self.request_target
+    }
+}
+
+// URL serialization shortens dot segments; health checks must send the configured bytes.
+fn configured_request_target(value: &str, has_scheme: bool) -> String {
+    let authority_start = if has_scheme {
+        value.find("://").map_or(0, |index| index + 3)
+    } else {
+        0
+    };
+    let authority_and_target = &value[authority_start..];
+    let Some(target_start) = authority_and_target.find(['/', '?', '#']) else {
+        return "/".to_owned();
+    };
+    let target = &authority_and_target[target_start..];
+    let target = target.split_once('#').map_or(target, |(target, _)| target);
+    if target.starts_with('?') {
+        format!("/{target}")
+    } else if target.is_empty() {
+        "/".to_owned()
+    } else {
+        target.to_owned()
+    }
+}
+
+pub fn decode_http_check_target(
+    value: &str,
+    default_https: bool,
+) -> Result<HttpCheckTarget, InvalidCheckTarget> {
+    let value = value.trim();
+    let has_scheme = value
+        .split_once("://")
+        .is_some_and(|(prefix, _)| !prefix.contains(['/', '?', '#']));
+    let url = if has_scheme {
+        url::Url::parse(value)
+    } else {
+        url::Url::parse(&format!(
+            "{}://{value}",
+            if default_https { "https" } else { "http" }
+        ))
+    }
+    .map_err(|_| InvalidCheckTarget)?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(InvalidCheckTarget);
+    }
+    let request_target = configured_request_target(value, has_scheme);
+    Ok(HttpCheckTarget {
+        url,
+        request_target,
+    })
+}
+
+/// Health checks retain dae's comma-separated literal fallback list.
+pub fn decode_health_http_target(value: &str) -> Result<HttpCheckTarget, InvalidCheckTarget> {
+    decode_http_check_target(value.split(',').next().unwrap_or(""), false)
+}

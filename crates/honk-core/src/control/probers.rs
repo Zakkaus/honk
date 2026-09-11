@@ -58,48 +58,22 @@ fn target_family(addr: SocketAddr) -> IpVersion {
     }
 }
 
-fn url_port(url: &str) -> u16 {
-    let (default, rest) = if let Some(rest) = url.trim().strip_prefix("https://") {
-        (443, rest)
-    } else if let Some(rest) = url.trim().strip_prefix("http://") {
-        (80, rest)
-    } else {
-        (80, url.trim())
-    };
-    let authority = rest
-        .split(',')
-        .next()
-        .unwrap_or(rest)
-        .split('/')
-        .next()
-        .unwrap_or(rest);
-    if let Some(rest) = authority.strip_prefix('[') {
-        return rest
-            .split(']')
-            .nth(1)
-            .and_then(|tail| tail.strip_prefix(':'))
-            .and_then(|port| port.parse().ok())
-            .unwrap_or(default);
-    }
-    authority
-        .rsplit_once(':')
-        .and_then(|(_, port)| port.parse().ok())
-        .unwrap_or(default)
-}
-
 fn http_probe_context(url: &str, addr: SocketAddr) -> ScoreSelectionContext {
     let family = target_family(addr);
-    let (host, _) = extract_url_host_path(url).unwrap_or(("", "/"));
-    let target = host.parse::<std::net::IpAddr>().map_or_else(
-        |_| ScoreTarget::domain(host, url_port(url)),
-        |_| addr.into(),
-    );
+    let target = honk_config::check::decode_health_http_target(url)
+        .ok()
+        .map(|target| {
+            target.host().parse::<std::net::IpAddr>().map_or_else(
+                |_| ScoreTarget::domain(target.host(), target.port()),
+                |_| addr.into(),
+            )
+        });
     ScoreSelectionContext {
         network: SelectionNetwork::Tcp,
         probe_domain: ProbeDomain::Tcp,
         target_family: Some(family),
         health_family: family,
-        target: Some(target),
+        target,
     }
 }
 
@@ -312,11 +286,11 @@ async fn close_ephemeral(guard: Option<honk_outbound::runtime::EphemeralRuntimeG
 
 /// Bare host part of a check URL (`http://host[:port]/path` → `host`).
 fn url_host(url: &str) -> Option<String> {
-    let (host, _) = extract_url_host_path(url)?;
-    if host.parse::<std::net::IpAddr>().is_ok() {
+    let target = honk_config::check::decode_health_http_target(url).ok()?;
+    if target.host().parse::<std::net::IpAddr>().is_ok() {
         None
     } else {
-        Some(host.to_string())
+        Some(target.host().to_owned())
     }
 }
 
@@ -331,19 +305,20 @@ impl ProxyHttpProber {
         reporter: &ProbeReporter,
         timeout: Duration,
     ) -> Result<Duration, String> {
-        let (host, path) =
-            extract_url_host_path(url).ok_or_else(|| format!("invalid check URL: {url}"))?;
+        let target = honk_config::check::decode_health_http_target(url)
+            .map_err(|error| error.to_string())?;
+        let (host, authority, path) = (target.host(), target.authority(), target.request_target());
         let method = if method.is_empty() { "GET" } else { method };
-        if url.trim().starts_with("https://") {
+        if target.is_https() {
             let connector = health_https_connector()?;
             let mut tls = tokio::time::timeout(timeout, connector.connect(host, stream))
                 .await
                 .map_err(|_| "HTTPS handshake timeout".to_string())?
                 .map_err(|error| format!("HTTPS handshake failed: {error}"))?;
-            Self::http1_exchange(&mut tls, host, path, method, reporter, timeout).await
+            Self::http1_exchange(&mut tls, authority, path, method, reporter, timeout).await
         } else {
             let mut stream = stream;
-            Self::http1_exchange(stream.as_mut(), host, path, method, reporter, timeout).await
+            Self::http1_exchange(stream.as_mut(), authority, path, method, reporter, timeout).await
         }
     }
 
@@ -377,14 +352,14 @@ impl ProxyHttpProber {
     }
 
     /// Two requests on the warmed connection: the first (untimed HEAD, any
-    /// status accepted) absorbs every remaining setup cost, the second is
-    /// the reported warm-path sample. Each round has its own `timeout`
+    /// status accepted) absorbs every remaining setup cost, the second is the
+    /// reported warm-path sample. Each round has its own `timeout`
     /// budget: a slow warm-up fails the probe; a measured request that fails
     /// or times out falls back to the warm exchange's time, but a bad status
     /// on it fails the probe.
     async fn http1_exchange<S>(
         stream: &mut S,
-        host: &str,
+        authority: &str,
         path: &str,
         method: &str,
         reporter: &ProbeReporter,
@@ -394,8 +369,9 @@ impl ProxyHttpProber {
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + ?Sized,
     {
         use tokio::io::AsyncWriteExt;
-        let warm_request =
-            format!("HEAD {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: honk-health/1.0\r\n\r\n");
+        let warm_request = format!(
+            "HEAD {path} HTTP/1.1\r\nHost: {authority}\r\nUser-Agent: honk-health/1.0\r\n\r\n"
+        );
         let warm_start = std::time::Instant::now();
         let warm_round = async {
             stream
@@ -414,7 +390,7 @@ impl ProxyHttpProber {
         let warm = warm_start.elapsed();
 
         let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: honk-health/1.0\r\nConnection: close\r\n\r\n"
+            "{method} {path} HTTP/1.1\r\nHost: {authority}\r\nUser-Agent: honk-health/1.0\r\nConnection: close\r\n\r\n"
         );
         let start = std::time::Instant::now();
         let measured_round = async {
@@ -815,15 +791,15 @@ pub(super) async fn resolve_quic_score_target(
         warn!("Score QUIC probe disabled: tcp_check_url is not HTTPS");
         return None;
     }
-    let (host, _) = match extract_url_host_path(url) {
-        Some(parts) => parts,
-        None => {
+    let target = match honk_config::check::decode_health_http_target(url) {
+        Ok(target) => target,
+        Err(_) => {
             warn!("Score QUIC probe disabled: invalid tcp_check_url");
             return None;
         }
     };
-    let host = host.to_string();
-    let port = url_port(url);
+    let host = target.host().to_owned();
+    let port = target.port();
     let addrs = if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         vec![SocketAddr::new(ip, port)]
     } else {
@@ -918,39 +894,61 @@ pub(super) fn is_broadcast_or_multicast(ip: &std::net::IpAddr) -> bool {
     }
 }
 
-/// Extract hostname from a URL like "http://cp.cloudflare.com".
-/// Extract `(host, request_path)` from a health-check URL.
-///
-/// The scheme is optional; with dae's comma-separated fallback list
-/// (`http://host,ip4,ip6`) only the first segment contributes. The path
-/// defaults to `/` when the URL has none. The port is stripped (bracketed
-/// IPv6 literals are kept intact).
-pub(super) fn extract_url_host_path(url: &str) -> Option<(&str, &str)> {
-    let s = url.trim();
-    let s = s
-        .strip_prefix("http://")
-        .or_else(|| s.strip_prefix("https://"))
-        .unwrap_or(s);
-    let s = s.split(',').next().unwrap_or(s).trim();
-    let (authority, path) = match s.find('/') {
-        Some(i) => (&s[..i], &s[i..]),
-        None => (s, "/"),
-    };
-    let host = if let Some(rest) = authority.strip_prefix('[') {
-        rest.split(']').next().unwrap_or(authority)
-    } else {
-        authority.split(':').next().unwrap_or(authority)
-    };
-    if host.is_empty() {
-        None
-    } else {
-        Some((host, path))
-    }
-}
 #[cfg(test)]
 mod http_probe_tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn c25_health_sends_authority_and_path_query_without_credentials() {
+        for (url_host, suffix, path) in [
+            ("localhost", "/check?q=1#fragment", "/check?q=1"),
+            ("localhost", "?q=1", "/?q=1"),
+            ("localhost", "/a/../health?q=1#fragment", "/a/../health?q=1"),
+            (
+                "localhost",
+                "/a/%2e%2e/health?q=1#fragment",
+                "/a/%2e%2e/health?q=1",
+            ),
+            ("[::1]", "/check?q=1#fragment", "/check?q=1"),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let expected_authority = format!("{url_host}:{}", addr.port());
+            let peer = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                for _ in 0..2 {
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        request.push(stream.read_u8().await.unwrap());
+                    }
+                    let request = String::from_utf8(request).unwrap();
+                    assert_eq!(
+                        request.split_once("\r\n").unwrap().0,
+                        format!("HEAD {path} HTTP/1.1")
+                    );
+                    assert!(request.contains(&format!("\r\nHost: {expected_authority}\r\n")));
+                    assert!(!request.contains("PRIVATE") && !request.contains("Authorization:"));
+                    stream
+                        .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                        .await
+                        .unwrap();
+                }
+            });
+            let url = format!("http://user:PRIVATE@{url_host}:{}{suffix}", addr.port());
+            let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            ProxyHttpProber::http_check(
+                Box::new(stream),
+                &url,
+                "HEAD",
+                &empty_probe_reporter(),
+                Duration::from_secs(2),
+            )
+            .await
+            .unwrap();
+            peer.await.unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn https_health_check_starts_with_tls_client_hello() {

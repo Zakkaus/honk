@@ -29,3 +29,67 @@ fn malformed_udp_dns_targets_fail_located_admission() {
         assert!(!format!("{diagnostics:?}{error:?}").contains("PRIVATE"));
     }
 }
+
+#[test]
+fn http_targets_preserve_caller_defaults_and_authority_boundaries() {
+    use honk_config::check::{decode_health_http_target, decode_http_check_target};
+    for (input, host, port, path) in [
+        ("http://host,1.1.1.1,::1", "host", 80, "/"),
+        ("host/generate_204", "host", 80, "/generate_204"),
+        (
+            "host/path?next=https://other/",
+            "host",
+            80,
+            "/path?next=https://other/",
+        ),
+        (
+            "http://u:PRIVATE@host:8080/path?q#fragment",
+            "host",
+            8080,
+            "/path?q",
+        ),
+        ("https://host?q=1", "host", 443, "/?q=1"),
+        (
+            "http://host/a/../health?q=1",
+            "host",
+            80,
+            "/a/../health?q=1",
+        ),
+        (
+            "http://host/a/%2e%2e/health?q=1",
+            "host",
+            80,
+            "/a/%2e%2e/health?q=1",
+        ),
+        ("[::1]:8080/path", "::1", 8080, "/path"),
+        ("https://[::1]/", "::1", 443, "/"),
+    ] {
+        let target = decode_health_http_target(input).unwrap();
+        assert_eq!(
+            (target.host(), target.port(), target.request_target()),
+            (host, port, path)
+        );
+    }
+    for (input, expected) in [
+        ("http://host", "host"),
+        ("http://host:80", "host"),
+        ("http://host:8080", "host:8080"),
+        ("https://host:443", "host"),
+        ("https://host:8443", "host:8443"),
+        ("http://[::1]", "[::1]"),
+        ("http://[::1]:8080", "[::1]:8080"),
+    ] {
+        assert_eq!(
+            decode_health_http_target(input).unwrap().authority(),
+            expected,
+            "{input}"
+        );
+    }
+    assert_eq!(
+        decode_http_check_target("host/check", true).unwrap().port(),
+        443
+    );
+    for input in ["", "https://", "http://[::1", "http://host:bad/"] {
+        assert!(decode_health_http_target(input).is_err());
+    }
+}

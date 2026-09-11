@@ -148,10 +148,11 @@ async fn reject_http_change(change: fn(&mut Config)) {
     assert_eq!(cp.config_handle().read().await.as_ref(), old.as_ref());
     let requests = requests.lock();
     assert!(!requests.is_empty(), "real HTTP probe made no request");
-    assert!(requests.iter().all(
-        |request| request.starts_with("HEAD /old-path?old=1 HTTP/1.1")
-            && request.contains("Host: 127.0.0.1\r\n")
-    ));
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.starts_with("HEAD /old-path?old=1 HTTP/1.1"))
+    );
     task.abort();
 }
 

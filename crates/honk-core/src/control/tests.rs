@@ -660,36 +660,6 @@ async fn quic_probe_still_runs_when_dns_probe_fails() {
     assert_eq!(dials.load(std::sync::atomic::Ordering::Relaxed), 2);
 }
 
-#[test]
-fn extract_url_host_path_parses_all_forms() {
-    // Regression: path must not leak into the Host header / DNS name.
-    assert_eq!(
-        extract_url_host_path("http://www.google-analytics.com/generate_204"),
-        Some(("www.google-analytics.com", "/generate_204"))
-    );
-    assert_eq!(
-        extract_url_host_path("www.google-analytics.com/generate_204"),
-        Some(("www.google-analytics.com", "/generate_204"))
-    );
-    assert_eq!(
-        extract_url_host_path("https://cp.cloudflare.com/"),
-        Some(("cp.cloudflare.com", "/"))
-    );
-    assert_eq!(
-        extract_url_host_path("http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111"),
-        Some(("cp.cloudflare.com", "/"))
-    );
-    assert_eq!(
-        extract_url_host_path("http://example.com:8080/check?q=1"),
-        Some(("example.com", "/check?q=1"))
-    );
-    assert_eq!(
-        extract_url_host_path("http://[2606:4700:4700::1111]:443/"),
-        Some(("2606:4700:4700::1111", "/"))
-    );
-    assert_eq!(extract_url_host_path(""), None);
-}
-
 fn addr(s: &str) -> SocketAddr {
     s.parse().unwrap()
 }
