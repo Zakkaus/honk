@@ -599,6 +599,13 @@ fn apply_quic(mapping: &Mapping, node: &mut Node) -> Result<(), &'static str> {
                 return Err("Hysteria2 port hopping aliases conflict");
             }
             config.port_hopping = ports.or(mport);
+            if config
+                .port_hopping
+                .as_deref()
+                .is_some_and(|spec| honk_config::options::vocab::parse_port_hopping(spec).is_none())
+            {
+                return Err("invalid Hysteria2 hop port list");
+            }
             config.hop_interval =
                 yaml_duration_alias(mapping, &["hop-interval", "hop_interval", "mhop"])?;
             config.init_stream_recv_window = yaml_u64_alias(mapping, STREAM_WINDOW_KEYS)?;

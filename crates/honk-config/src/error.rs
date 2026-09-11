@@ -101,6 +101,11 @@ impl DetailedConfigError {
         };
         if let Some(text) = text {
             let reason = match text {
+                "invalid hysteria2 hop port list" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes").field("hy2_port_hopping"),
+                    "hopping ports must be nonzero, valid ranges, and nonrepeating",
+                )),
                 "unsupported TUIC UDP relay mode" => Some((
                     "invalid-config-value",
                     SettingPath::new("nodes").field("udp_relay_mode"),

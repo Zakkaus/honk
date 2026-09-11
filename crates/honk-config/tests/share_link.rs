@@ -2126,3 +2126,23 @@ fn c13_hy2_obfs_claims_preserve_exact_source_grammar() {
         assert!(Node::from_share_link(&format!("{LINK}?{query}")).is_err());
     }
 }
+
+#[test]
+fn c15_hopping_sets_reject_duplicates_and_keep_valid_spelling() {
+    for spec in ["443,443", "443-445,445-446"] {
+        for link in [
+            format!("hy2://password@example.com:443?mport={spec}"),
+            format!("hy2://password@example.com:{spec}"),
+        ] {
+            assert!(Node::from_share_link(&link).is_err());
+        }
+    }
+    for spec in ["443", "443, 500-501"] {
+        let node =
+            Node::from_share_link(&format!("hy2://password@example.com:443?mport={spec}")).unwrap();
+        assert_eq!(
+            node.hysteria2().unwrap().port_hopping.as_deref(),
+            Some(spec)
+        );
+    }
+}

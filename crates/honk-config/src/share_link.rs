@@ -564,19 +564,8 @@ fn extract_hy2_hop_ports(link: &str) -> Result<(Cow<'_, str>, Option<String>), C
 
 /// Comma-separated ports and inclusive port ranges, all nonzero.
 fn valid_hop_port_spec(spec: &str) -> bool {
-    !spec.is_empty()
-        && spec.split(',').all(|segment| {
-            let segment = segment.trim();
-            match segment.split_once('-') {
-                None => segment.parse::<u16>().is_ok_and(|port| port > 0),
-                Some((low, high)) => {
-                    match (low.trim().parse::<u16>(), high.trim().parse::<u16>()) {
-                        (Ok(low), Ok(high)) => low > 0 && low <= high,
-                        _ => false,
-                    }
-                }
-            }
-        })
+    spec.split(',').all(|segment| !segment.trim().is_empty())
+        && crate::options::vocab::parse_port_hopping(spec).is_some()
 }
 
 /// Base64-decode tolerantly: URL-safe without padding first, then the other

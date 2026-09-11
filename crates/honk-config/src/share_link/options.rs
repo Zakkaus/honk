@@ -506,6 +506,13 @@ fn apply_hysteria2(
         ));
     }
     config.port_hopping = mport.cloned().or(embedded_hop_ports);
+    if config
+        .port_hopping
+        .as_deref()
+        .is_some_and(|spec| crate::options::vocab::parse_port_hopping(spec).is_none())
+    {
+        return Err(ConfigError::Parse("invalid hysteria2 hop port list".into()));
+    }
     config.hop_interval = query.get("mhop").and_then(|value| value.parse().ok());
     config.init_stream_recv_window = query
         .get("initStreamReceiveWindow")

@@ -120,3 +120,39 @@ pub fn verification_text(value: &str) -> Result<bool, &'static str> {
     }
     Err("invalid certificate verification boolean")
 }
+
+/// Decode nonzero ports and inclusive ranges, rejecting repeated ports.
+/// Empty comma segments retain the mport consumer's historical grammar.
+pub fn parse_port_hopping(spec: &str) -> Option<Vec<u16>> {
+    let mut ports = Vec::new();
+    let mut seen = [0u64; 1024];
+    for part in spec
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let (low, high) = match part.split_once('-') {
+            Some((low, high)) => (
+                low.trim().parse::<u16>().ok()?,
+                high.trim().parse::<u16>().ok()?,
+            ),
+            None => {
+                let port = part.parse::<u16>().ok()?;
+                (port, port)
+            }
+        };
+        if low == 0 || high < low {
+            return None;
+        }
+        for port in low..=high {
+            let word = &mut seen[usize::from(port) / 64];
+            let bit = 1u64 << (port % 64);
+            if *word & bit != 0 {
+                return None;
+            }
+            *word |= bit;
+            ports.push(port);
+        }
+    }
+    (!ports.is_empty()).then_some(ports)
+}
