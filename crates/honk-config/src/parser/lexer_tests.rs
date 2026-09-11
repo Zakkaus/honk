@@ -12,7 +12,7 @@ fn significant(tokens: &[Token]) -> Vec<&Token> {
         .collect()
 }
 
-fn word(text: &str, quoted: &[std::ops::Range<usize>]) {
+fn word(text: &str, quoted: &[(usize, usize)]) {
     let source = source(text);
     let mut diagnostics = Vec::new();
     let tokens = source.tokenize(&mut diagnostics);
@@ -24,7 +24,7 @@ fn word(text: &str, quoted: &[std::ops::Range<usize>]) {
         tokens[0]
             .quoted
             .iter()
-            .map(|s| s.start..s.end)
+            .map(|s| (s.start, s.end))
             .collect::<Vec<_>>(),
         quoted
     );
@@ -32,13 +32,13 @@ fn word(text: &str, quoted: &[std::ops::Range<usize>]) {
 
 #[test]
 fn argument_position_quotes_are_opaque() {
-    word("name('a } b')", &[5..12]);
-    word("call(a,'b # c')", &[7..14]);
+    word("name('a } b')", &[(5, 12)]);
+    word("call(a,'b # c')", &[(7, 14)]);
 }
 
 #[test]
 fn glued_tokens_continue_after_quotes() {
-    word("'piece'(part)tail", &[0..7]);
+    word("'piece'(part)tail", &[(0, 7)]);
     word("filter='hk'#token", &[]);
     word("/tmp/don't", &[]);
     word("/tmp/a#b", &[]);
@@ -120,7 +120,7 @@ fn unterminated_quotes_are_one_located_eol_error() {
 
 #[test]
 fn escapes_preserve_bytes_and_do_not_escape_physical_newlines() {
-    word(r#"'a\'b\\c'"#, &[0..9]);
+    word(r#"'a\'b\\c'"#, &[(0, 9)]);
     let source = source("'a\\\r\nnext");
     let mut diagnostics = Vec::new();
     let tokens = source.tokenize(&mut diagnostics);

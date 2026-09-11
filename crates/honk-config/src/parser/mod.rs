@@ -1,3 +1,4 @@
+pub mod cursor;
 mod diagnostics;
 mod dns;
 pub mod lexer;
@@ -10,6 +11,9 @@ mod tests;
 
 #[cfg(test)]
 mod lexer_tests;
+
+#[cfg(test)]
+mod cursor_tests;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
