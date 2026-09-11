@@ -39,6 +39,9 @@ async fn capture_runtime_admission(future: impl Future) -> String {
     future.await;
     String::from_utf8(captured.lock().clone()).unwrap()
 }
+#[path = "c28_health_tests.rs"]
+mod c28_health_tests;
+
 fn restart_required_changes(current: &Config, candidate: &Config) -> Vec<&'static str> {
     let current_log_file = crate::resolved_log_file_path(current, None);
     let candidate_log_file = crate::resolved_log_file_path(candidate, None);
@@ -341,7 +344,7 @@ fn changed_routing_config() -> Config {
     config
 }
 
-fn score_reload_config(interval: u64) -> Config {
+fn score_reload_config(revision: u64) -> Config {
     let nodes = [("score-a", 9), ("score-b", 10)].map(|(name, port)| {
         let mut node = Node {
             name: name.into(),
@@ -355,7 +358,20 @@ fn score_reload_config(interval: u64) -> Config {
         node
     });
     let mut config = Config::default();
-    config.global.check_interval_secs = interval;
+    config
+        .routing
+        .rules
+        .push(honk_config::routing::RoutingRule {
+            name: format!("score-reload-{revision}"),
+            condition: honk_config::routing::RoutingCondition {
+                domain: vec![format!("score-{revision}.example")],
+                ..Default::default()
+            },
+            outbound: honk_config::routing::RoutingOutbound::Simple("direct".into()),
+            priority: 0,
+            must: false,
+            mark: 0,
+        });
     config.nodes = nodes.to_vec();
     config.groups = vec![Group {
         name: "score".into(),
@@ -382,9 +398,9 @@ fn score_reload_context() -> honk_outbound::group::ScoreSelectionContext {
 #[tokio::test]
 async fn reload_publishes_score_authority_before_dns_snapshot_is_reachable() {
     let cp = Arc::new(test_cp().await);
-    let first_interval = Config::default().global.check_interval_secs + 1;
+    let first_revision = 1;
     assert!(
-        cp.apply_runtime_config(score_reload_config(first_interval), &DrainTracker::new(),)
+        cp.apply_runtime_config(score_reload_config(first_revision), &DrainTracker::new(),)
             .await
     );
     let provider = cp.dns_controller.runtime_provider();
@@ -424,7 +440,7 @@ async fn reload_publishes_score_authority_before_dns_snapshot_is_reachable() {
 
     let result = cp
         .apply_runtime_config(
-            score_reload_config(first_interval + 1),
+            score_reload_config(first_revision + 1),
             &DrainTracker::new(),
         )
         .await;
@@ -445,22 +461,25 @@ async fn reload_publishes_score_authority_before_dns_snapshot_is_reachable() {
 #[tokio::test]
 async fn failed_reload_keeps_old_score_authority() {
     let cp = test_cp().await;
-    let interval = Config::default().global.check_interval_secs + 1;
+    let first_revision = 1;
     assert!(
-        cp.apply_runtime_config(score_reload_config(interval), &DrainTracker::new())
+        cp.apply_runtime_config(score_reload_config(first_revision), &DrainTracker::new())
             .await
     );
     let provider = cp.dns_controller.runtime_provider();
     let before_dns = provider.current_generation();
     let before_manager = cp.group_manager.read().clone();
-    let mut invalid = score_reload_config(interval + 1);
+    let mut invalid = score_reload_config(first_revision + 1);
     invalid.dns.upstream[0].address = "://invalid".into();
 
     assert!(!cp.apply_runtime_config(invalid, &DrainTracker::new()).await);
 
     assert_eq!(provider.current_generation(), before_dns);
     assert!(Arc::ptr_eq(&cp.group_manager.read(), &before_manager));
-    assert_eq!(cp.config.read().await.global.check_interval_secs, interval);
+    assert_eq!(
+        cp.config.read().await.routing.rules[0].name,
+        format!("score-reload-{first_revision}")
+    );
     let feedback = before_manager
         .selection_plan_for_target("score", &score_reload_context())
         .entries[0]
@@ -477,9 +496,9 @@ async fn failed_reload_keeps_old_score_authority() {
 #[tokio::test]
 async fn post_publication_datapath_failure_is_committed_degraded() {
     let cp = test_cp_with_nfq(true).await;
-    let first_interval = Config::default().global.check_interval_secs + 1;
+    let first_revision = 1;
     assert!(
-        cp.apply_runtime_config(score_reload_config(first_interval), &DrainTracker::new())
+        cp.apply_runtime_config(score_reload_config(first_revision), &DrainTracker::new())
             .await
     );
     let provider = cp.dns_controller.runtime_provider();
@@ -490,14 +509,17 @@ async fn post_publication_datapath_failure_is_committed_degraded() {
         ebpf.clear_datapath_flags_write_log();
         ebpf.arm_datapath_flags_write_fault(2).unwrap();
     }
-    let interval = first_interval + 1;
+    let revision = first_revision + 1;
     let drain = DrainTracker::new();
     assert!(
-        cp.apply_runtime_config(score_reload_config(interval), &drain)
+        cp.apply_runtime_config(score_reload_config(revision), &drain)
             .await
     );
     assert_ne!(provider.current_generation(), before_dns);
-    assert_eq!(cp.config.read().await.global.check_interval_secs, interval);
+    assert_eq!(
+        cp.config.read().await.routing.rules[0].name,
+        format!("score-reload-{revision}")
+    );
     assert!(!Arc::ptr_eq(&cp.group_manager.read(), &before_manager));
     assert!(!cp.is_datapath_healthy());
     assert!(drain.should_reject());
@@ -532,12 +554,12 @@ async fn post_publication_datapath_failure_is_committed_degraded() {
 async fn fence_failure_rejects_reload_without_stranding_datapath() {
     let cp = test_cp().await;
     assert!(cp.datapath_flags.is_some());
-    let first_interval = Config::default().global.check_interval_secs + 1;
+    let first_revision = 1;
     assert!(
-        cp.apply_runtime_config(score_reload_config(first_interval), &DrainTracker::new())
+        cp.apply_runtime_config(score_reload_config(first_revision), &DrainTracker::new())
             .await
     );
-    let before_interval = cp.config.read().await.global.check_interval_secs;
+    let before_route = cp.config.read().await.routing.rules[0].name.clone();
     {
         let mut ebpf = cp.ebpf.write().await;
         ebpf.clear_datapath_flags_write_log();
@@ -545,13 +567,13 @@ async fn fence_failure_rejects_reload_without_stranding_datapath() {
     }
     let drain = DrainTracker::new();
     assert!(
-        !cp.apply_runtime_config(score_reload_config(first_interval + 1), &drain)
+        !cp.apply_runtime_config(score_reload_config(first_revision + 1), &drain)
             .await,
         "fence failure must reject the reload"
     );
     assert_eq!(
-        cp.config.read().await.global.check_interval_secs,
-        before_interval,
+        cp.config.read().await.routing.rules[0].name,
+        before_route,
         "rejected reload keeps the old config"
     );
     assert!(cp.is_datapath_healthy());
@@ -587,9 +609,9 @@ async fn quiesce_failure_rejects_reload_and_restores_ready_flags() {
         ebpf.arm_quiesce_fault();
     }
     let drain = DrainTracker::new();
-    let interval = Config::default().global.check_interval_secs + 1;
+    let revision = 1;
     assert!(
-        !cp.apply_runtime_config(score_reload_config(interval), &drain)
+        !cp.apply_runtime_config(score_reload_config(revision), &drain)
             .await,
         "quiesce failure must reject the reload"
     );
@@ -811,12 +833,12 @@ async fn reload_clamps_dials_to_startup_descriptor_reservation() {
 #[tokio::test]
 async fn build_failure_leaves_live_config_untouched() {
     let cp = test_cp().await;
-    let before = cp.config_handle().read().await.global.check_interval_secs;
+    let before = cp.config_handle().read().await.global.check_tolerance_ms;
 
     // An upstream with an empty address fails DnsEndpoint::parse during
     // build_dns_forwarder — the reload must abort before commit.
     let mut bad = Config::default();
-    bad.global.check_interval_secs += 1;
+    bad.global.check_tolerance_ms += 1;
     bad.dns.upstream = vec![honk_config::dns::DnsUpstream {
         name: "broken".into(),
         address: String::new(),
@@ -828,7 +850,7 @@ async fn build_failure_leaves_live_config_untouched() {
     let drain = DrainTracker::new();
     cp.apply_runtime_config(bad, &drain).await;
 
-    let after = cp.config_handle().read().await.global.check_interval_secs;
+    let after = cp.config_handle().read().await.global.check_tolerance_ms;
     assert_eq!(before, after, "failed build must not swap the live config");
 }
 
@@ -960,7 +982,7 @@ async fn reload_cancels_initializing_generation_before_swap_and_keeps_ready_endp
     });
 
     let mut new_config = Config::default();
-    new_config.global.check_interval_secs += 1;
+    new_config.global.check_tolerance_ms += 1;
     let drain = DrainTracker::new();
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -1009,8 +1031,8 @@ async fn reload_cancels_initializing_generation_before_swap_and_keeps_ready_endp
         EndpointReservation::Initializing(_)
     ));
     assert_eq!(
-        cp.config_handle().read().await.global.check_interval_secs,
-        Config::default().global.check_interval_secs + 1
+        cp.config_handle().read().await.global.check_tolerance_ms,
+        Config::default().global.check_tolerance_ms + 1
     );
     pool.remove(ready_client, dst);
     pool.remove(initializing_client, dst);
@@ -1031,9 +1053,9 @@ async fn reload_timeout_keeps_runtime_and_restores_admission() {
         _ => panic!("timeout fixture must hold a real initializer lease"),
     };
     let mut cancellation = lease.cancellation();
-    let before = cp.config_handle().read().await.global.check_interval_secs;
+    let before = cp.config_handle().read().await.global.check_tolerance_ms;
     let mut next = Config::default();
-    next.global.check_interval_secs += 1;
+    next.global.check_tolerance_ms += 1;
     let drain = Arc::new(DrainTracker::new());
     let reloading_cp = Arc::clone(&cp);
     let reloading_drain = Arc::clone(&drain);
@@ -1055,7 +1077,7 @@ async fn reload_timeout_keeps_runtime_and_restores_admission() {
     reloader.await.unwrap();
 
     assert_eq!(
-        cp.config_handle().read().await.global.check_interval_secs,
+        cp.config_handle().read().await.global.check_tolerance_ms,
         before,
         "a timed-out initializer must prevent the runtime/config swap"
     );
@@ -1076,7 +1098,7 @@ async fn reload_timeout_keeps_runtime_and_restores_admission() {
 /// the static routing bank or retaining its generation-owned upstream pool.
 #[tokio::test]
 async fn valid_reload_commits() {
-    let expected_interval = Config::default().global.check_interval_secs + 1;
+    let expected_tolerance = Config::default().global.check_tolerance_ms + 1;
     let cp = test_cp().await;
     let before_routing_generation = cp.ebpf.read().await.active_routing_generation().unwrap();
     let before_runtime = cp.dns_controller.runtime_provider().acquire();
@@ -1091,12 +1113,12 @@ async fn valid_reload_commits() {
     drop(before_runtime);
 
     let mut good = Config::default();
-    good.global.check_interval_secs = expected_interval;
+    good.global.check_tolerance_ms = expected_tolerance;
     assert!(cp.apply_runtime_config(good, &DrainTracker::new()).await);
 
     assert_eq!(
-        cp.config_handle().read().await.global.check_interval_secs,
-        expected_interval,
+        cp.config_handle().read().await.global.check_tolerance_ms,
+        expected_tolerance,
         "valid reload should swap the live config"
     );
     assert_eq!(
@@ -1388,14 +1410,14 @@ async fn routing_push_failure_keeps_active_policy_and_userspace_generation() {
         .inject_routing_fault(RoutingPushPhase::Root, 1)
         .unwrap();
     let mut replacement = changed_routing_config();
-    replacement.global.check_interval_secs += 1;
+    replacement.global.check_tolerance_ms += 1;
 
     cp.apply_runtime_config(replacement, &DrainTracker::new())
         .await;
 
     assert_eq!(
-        cp.config_handle().read().await.global.check_interval_secs,
-        Config::default().global.check_interval_secs,
+        cp.config_handle().read().await.global.check_tolerance_ms,
+        Config::default().global.check_tolerance_ms,
     );
     assert!(cp.is_datapath_healthy());
     assert!(!cp.drain_tracker.should_reject());
@@ -1411,7 +1433,7 @@ async fn domain_route_staging_failure_keeps_the_active_generation() {
         .inject_routing_fault(RoutingPushPhase::DomainRouting, 1)
         .unwrap();
     let mut replacement = changed_routing_config();
-    replacement.global.check_interval_secs += 1;
+    replacement.global.check_tolerance_ms += 1;
 
     cp.apply_runtime_config(replacement, &DrainTracker::new())
         .await;
@@ -1420,8 +1442,8 @@ async fn domain_route_staging_failure_keeps_the_active_generation() {
         before
     );
     assert_eq!(
-        cp.config_handle().read().await.global.check_interval_secs,
-        Config::default().global.check_interval_secs,
+        cp.config_handle().read().await.global.check_tolerance_ms,
+        Config::default().global.check_tolerance_ms,
     );
     assert!(cp.is_datapath_healthy());
     assert!(!cp.drain_tracker.should_reject());
@@ -1437,7 +1459,7 @@ async fn repeated_publication_failures_preserve_serving_generation() {
         .inject_routing_fault(RoutingPushPhase::Root, 2)
         .unwrap();
     let mut replacement = changed_routing_config();
-    replacement.global.check_interval_secs += 1;
+    replacement.global.check_tolerance_ms += 1;
     for _ in 0..2 {
         let drain = DrainTracker::new();
         assert!(!cp.apply_runtime_config(replacement.clone(), &drain).await);
@@ -1449,8 +1471,8 @@ async fn repeated_publication_failures_preserve_serving_generation() {
             active
         );
         assert_eq!(
-            cp.config.read().await.global.check_interval_secs,
-            Config::default().global.check_interval_secs
+            cp.config.read().await.global.check_tolerance_ms,
+            Config::default().global.check_tolerance_ms
         );
     }
     assert!(
@@ -1462,8 +1484,8 @@ async fn repeated_publication_failures_preserve_serving_generation() {
         active
     );
     assert_eq!(
-        cp.config.read().await.global.check_interval_secs,
-        replacement.global.check_interval_secs
+        cp.config.read().await.global.check_tolerance_ms,
+        replacement.global.check_tolerance_ms
     );
 }
 

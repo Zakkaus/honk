@@ -18,6 +18,27 @@ pub(crate) fn restart_required_changes(
     }
     let old_global = &current.global;
     let new_global = &candidate.global;
+    if old_global.check_interval_secs != new_global.check_interval_secs {
+        changed.push("global.check_interval");
+    }
+    let old_http = http_probe_inputs(old_global);
+    let new_http = http_probe_inputs(new_global);
+    if old_http.map(|input| input.0) != new_http.map(|input| input.0) {
+        changed.push("global.tcp_check_url");
+    }
+    if old_http.map(|input| input.1) != new_http.map(|input| input.1) {
+        changed.push("global.tcp_check_http_method");
+    }
+    if configured_udp_check_target(&old_global.udp_check_dns).unwrap_or_default()
+        != configured_udp_check_target(&new_global.udp_check_dns).unwrap_or_default()
+    {
+        changed.push("global.udp_check_dns");
+    }
+    if old_global.tls_implementation.eq_ignore_ascii_case("utls")
+        != new_global.tls_implementation.eq_ignore_ascii_case("utls")
+    {
+        changed.push("global.tls_implementation");
+    }
     if old_global.tproxy_port != new_global.tproxy_port {
         changed.push("global.tproxy_port");
     }
@@ -84,4 +105,14 @@ pub(crate) fn restart_required_changes(
         changed.push("experimental.cache_file");
     }
     changed
+}
+
+fn http_probe_inputs(global: &honk_config::config::GlobalConfig) -> Option<(&str, &str)> {
+    let url = global.tcp_check_url.first().filter(|url| !url.is_empty())?;
+    let method = if global.tcp_check_http_method.is_empty() {
+        "HEAD"
+    } else {
+        &global.tcp_check_http_method
+    };
+    Some((url, method))
 }

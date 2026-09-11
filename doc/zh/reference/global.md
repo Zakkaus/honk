@@ -28,9 +28,9 @@
 | `check_tolerance` | `check_tolerance_ms` | `50ms` | URLTest 切换所选成员前要求的延迟改善量。接受裸毫秒数、`ms` 或 `s`，其余写法沿用此默认值并记录一条警告。 |
 | `dial_mode` | `dial_mode` | `"domain"` | 目的域名发现和路由模式：`ip`、`domain`、`domain+` 或 `domain++`。参见[拨号模式](#拨号模式)。 |
 | `allow_insecure` | `allow_insecure` | `false` | 全局 TLS 校验回退兼容字段。当前 TLS connector 不读取该字段；跳过证书校验需在节点分享链接中按节点配置。 |
-| `sniffing_timeout` | `sniffing_timeout_ms` | `30ms` | 嗅探超时兼容字段。dae 解析器会保存该时长，但当前控制面不读取它。接受裸毫秒数、`ms` 或 `s`，其余写法沿用此默认值并记录一条警告。 |
+| `sniffing_timeout` | `sniffing_timeout_ms` | `30ms` | 兼容嗅探超时字段，当前控制面不读取。单位及无效值处理方式同 `check_tolerance`。 |
 | `tls_implementation` | `tls_implementation` | `"tls"` | `tls` 使用常规 BoringSSL 客户端 profile；`utls` 启用 honk 的真实 Chrome ClientHello profile。 |
-| `utls_imitate` | `utls_imitate` | `"chrome_auto"` | 使用 `utls` 时请求的指纹 profile。当前只实现 `chrome*`；其他值会告警并仍使用 Chrome。 |
+| `utls_imitate` | `utls_imitate` | `"chrome_auto"` | 兼容指纹配置。uTLS 使用固定的 Chrome 指纹；此值不会切换指纹实现。 |
 | `tls_fragment` | `tls_fragment` | `false` | TLS ClientHello 分片兼容开关；当前 TLS connector 不读取该字段。 |
 | `tls_fragment_length` | `tls_fragment_length` | `""` | 分片长度范围兼容字段；当前 TLS connector 不读取该字段。 |
 | `tls_fragment_interval` | `tls_fragment_interval` | `""` | 分片间隔范围兼容字段；当前 TLS connector 不读取该字段。 |
@@ -47,6 +47,18 @@
 | —（dae 语法中不可配置） | `connect_timeout_ms` | `3000ms` | 代理连接、协议准备、预连接、健康检查和控制面拨号使用的超时。 |
 | —（dae 语法中不可配置） | `dns_resolve_timeout_ms` | `2000ms` | 控制面 DNS 解析超时，包括拨号前必须转换为 IP 的目标。 |
 | —（dae 语法中不可配置） | `relay_idle_timeout_secs` | `300s` | 旧 relay 空闲超时字段；当前 relay 路径不读取它。 |
+
+## 重载健康检查与 TLS 模式
+
+以下参数在启动时确定。重载若改变生效值，会被拒绝；当前配置与已安装的探测器保持不变：
+
+- `check_interval`。
+- 第一个 `tcp_check_url`，包括回退地址、路径和查询字符串。缺失或空的首项均关闭 HTTP 探测；后续项不参与比较。
+- HTTP 探测启用时的 `tcp_check_http_method`。空值与 `HEAD` 等价。
+- `udp_check_dns` 选中的目标：去除首尾空白并忽略空项，优先选择列表中的第一个 IP 字面量，否则选择第一个域名，再无可用项则使用 `8.8.8.8:53`。重载检查只比较配置中的地址或域名及端口，不解析 DNS。未选中项的变化仍可重载。
+- `tls_implementation` 在原生 TLS 与 uTLS 之间的切换。比较 `utls` 时不区分大小写。
+
+dae 配置中的 `check_tolerance` 仍可通过重载更新 URLTest 组的容差。组级检查 URL 与直接连接探测仍沿现有路径动态更新。重载 `utls_imitate` 只保存兼容配置值，不改变指纹。
 
 ## 网卡语义
 

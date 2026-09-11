@@ -2,6 +2,8 @@ use super::udp_dial::{UdpPrepare, UdpStaggerCallbacks, prepare_udp_plan};
 use super::*;
 use crate::control::udp_endpoint::UdpEndpoint;
 use crate::dns::query::{IngressProfile, is_exact_dns_query, validate_exact_dns_query};
+#[path = "c28_udp_tests.rs"]
+mod c28_udp_tests;
 
 #[test]
 fn interrupting_groups_enable_tracking_without_the_clash_api() {
@@ -461,7 +463,7 @@ async fn test_resolve_udp_check_target() {
 #[tokio::test]
 async fn quic_failure_trains_score_without_failing_dns_udp_health() {
     use honk_config::node::{Group, GroupPolicy};
-    use honk_outbound::group::{GroupManager, ScoreTarget, SelectionNetwork};
+    use honk_outbound::group::{ScoreTarget, SelectionNetwork};
 
     let node = udp_test_node();
     let mut other = node.clone();
@@ -474,14 +476,15 @@ async fn quic_failure_trains_score_without_failing_dns_udp_health() {
         nodes: vec![node.id, other.id],
         ..Group::default()
     };
-    let config = Config {
+    let mut config = Config {
         nodes: vec![node.clone(), other.clone()],
         groups: vec![group.clone()],
         ..Config::default()
     };
-    let manager: SharedGroupManager = Arc::new(parking_lot::RwLock::new(Arc::new(
-        GroupManager::new(&[group], &[node.clone(), other.clone()]),
-    )));
+    config.global.nfqueue_enable = false;
+    config.global.tcp_check_url = vec!["https://quic.example.test:9443/generate_204".into()];
+    let cp = c20_tests::control_plane(config.clone()).await;
+    let manager = cp.group_manager();
     let dials = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let handler = Arc::new(UdpTestHandler {
         mode: UdpTestMode::DnsResponse {
@@ -493,19 +496,13 @@ async fn quic_failure_trains_score_without_failing_dns_udp_health() {
         honk_outbound::proxy::ProtocolEntry::new(node.protocol(), handler.clone())
             .with_packet(handler),
     );
-    let runtime = Arc::new(parking_lot::RwLock::new(Arc::new(
-        honk_outbound::runtime::OutboundRuntimeRegistry::build(&[node.clone(), other.clone()])
-            .unwrap(),
-    )));
+    let runtime = cp.runtime_registry();
     let resolver: crate::outbound::ResolveHook = Arc::new(|_host, port| {
         Box::pin(async move { vec![SocketAddr::from(([127, 0, 0, 1], port))] })
     });
-    let quic_target = resolve_quic_score_target(
-        "https://quic.example.test:9443/generate_204",
-        Some(resolver),
-    )
-    .await
-    .unwrap();
+    let quic_target = resolve_quic_score_target(&config.global.tcp_check_url[0], Some(resolver))
+        .await
+        .unwrap();
     let context = probers::quic_probe_context(&quic_target);
     assert_eq!(context.network, SelectionNetwork::Udp);
     assert_eq!(context.probe_domain, ProbeDomain::DataUdp);
@@ -524,15 +521,18 @@ async fn quic_failure_trains_score_without_failing_dns_udp_health() {
         node.id
     );
     let prober = probers::ProxyUdpProber::new(
-        Arc::new(RwLock::new(Arc::new(config))),
+        cp.config_handle(),
         Arc::new(registry),
         runtime,
-        Arc::new(StatsManager::new()),
+        cp.stats_handle(),
         "127.0.0.1:53".parse().unwrap(),
         "127.0.0.1:53".parse::<SocketAddr>().unwrap().into(),
         Some(quic_target),
         manager.clone(),
     );
+    let mut candidate = config.clone();
+    candidate.global.tcp_check_url = vec!["https://changed.example.test:9444/new".into()];
+    let accepted = cp.reload_runtime_config(candidate).await;
 
     let result =
         honk_outbound::alive::UdpProber::probe_udp(&prober, &node.name, Duration::from_millis(30))
@@ -552,6 +552,8 @@ async fn quic_failure_trains_score_without_failing_dns_udp_health() {
             .id,
         other.id
     );
+    assert!(!accepted);
+    assert_eq!(cp.config_handle().read().await.as_ref(), &config);
 }
 
 #[tokio::test]
@@ -2297,6 +2299,7 @@ enum UdpTestMode {
     DnsResponse {
         dials: Arc<std::sync::atomic::AtomicUsize>,
     },
+    DnsResponseCaptureTarget(Arc<parking_lot::Mutex<Option<SocketAddr>>>),
     #[cfg(feature = "ebpf")]
     KernelSocket(Arc<UdpSocket>),
     TcpHold {
@@ -2367,16 +2370,21 @@ impl honk_outbound::proxy::PacketTransport for UdpTestTransport {
             let (size, _) = socket.recv_from(buf).await?;
             return Ok((size, self.relay));
         }
-        if matches!(self.mode, UdpTestMode::DnsResponse { .. })
-            && !self
-                .replied
-                .swap(true, std::sync::atomic::Ordering::Relaxed)
+        if matches!(
+            self.mode,
+            UdpTestMode::DnsResponse { .. } | UdpTestMode::DnsResponseCaptureTarget(_)
+        ) && !self
+            .replied
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
         {
             let response = [0x12, 0x34, 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0];
             buf[..response.len()].copy_from_slice(&response);
             return Ok((response.len(), self.relay));
         }
-        if matches!(self.mode, UdpTestMode::DnsResponse { .. }) {
+        if matches!(
+            self.mode,
+            UdpTestMode::DnsResponse { .. } | UdpTestMode::DnsResponseCaptureTarget(_)
+        ) {
             return std::future::pending().await;
         }
         Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
@@ -2472,6 +2480,9 @@ impl honk_outbound::proxy::PacketOutbound for UdpTestHandler {
         target_domain: Option<&str>,
         _connect_timeout: Duration,
     ) -> anyhow::Result<Arc<dyn honk_outbound::proxy::PacketTransport>> {
+        if let UdpTestMode::DnsResponseCaptureTarget(captured) = &self.mode {
+            *captured.lock() = Some(target);
+        }
         if let UdpTestMode::UdpCaptureTarget(captured) = &self.mode {
             *captured.lock().expect("UDP dial target") =
                 Some((target, target_domain.map(str::to_owned)));

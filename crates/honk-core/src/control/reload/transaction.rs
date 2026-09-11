@@ -172,11 +172,6 @@ impl ControlPlane {
             error!("reload rejected: subscription worker changes require the control command path");
             return Ok(false);
         }
-        honk_config::parser::resolve_group_filters(
-            &mut new_config.groups,
-            &new_config.nodes,
-            &new_config.subscriptions,
-        );
         new_config.validate_assembled()?;
 
         let config_unchanged = effective_config_unchanged(current_config.as_ref(), &mut new_config);

@@ -28,9 +28,9 @@ Compatibility-only keys are accepted by the dae parser and stored in `GlobalConf
 | `check_tolerance` | `check_tolerance_ms` | `50ms` | Latency improvement required before URLTest changes its selected member. Accepts bare milliseconds, `ms`, or `s`; anything else keeps this default and logs a warning. |
 | `dial_mode` | `dial_mode` | `"domain"` | Destination-domain discovery and routing mode: `ip`, `domain`, `domain+`, or `domain++`. See [Dial modes](#dial-modes). |
 | `allow_insecure` | `allow_insecure` | `false` | Compatibility global TLS-verification fallback. Current TLS connectors do not read it; certificate skipping is configured per node in its share link. |
-| `sniffing_timeout` | `sniffing_timeout_ms` | `30ms` | Compatibility sniffing timeout. The dae parser stores the duration, but the current control plane does not read it. Accepts bare milliseconds, `ms`, or `s`; anything else keeps this default and logs a warning. |
+| `sniffing_timeout` | `sniffing_timeout_ms` | `30ms` | Compatibility sniffing timeout, currently unused by the control plane. Duration syntax and invalid-value handling match `check_tolerance`. |
 | `tls_implementation` | `tls_implementation` | `"tls"` | `tls` uses the regular BoringSSL client profile; `utls` enables honk's real Chrome ClientHello profile. |
-| `utls_imitate` | `utls_imitate` | `"chrome_auto"` | Fingerprint profile requested with `utls`. Only `chrome*` is implemented; other values warn and still use Chrome. |
+| `utls_imitate` | `utls_imitate` | `"chrome_auto"` | Compatibility fingerprint request. uTLS uses a fixed Chrome profile; this value does not switch profiles. |
 | `tls_fragment` | `tls_fragment` | `false` | Compatibility TLS ClientHello-fragmentation switch. The current TLS connector does not read it. |
 | `tls_fragment_length` | `tls_fragment_length` | `""` | Compatibility fragmentation-length range. The current TLS connector does not read it. |
 | `tls_fragment_interval` | `tls_fragment_interval` | `""` | Compatibility fragmentation-interval range. The current TLS connector does not read it. |
@@ -47,6 +47,18 @@ Compatibility-only keys are accepted by the dae parser and stored in `GlobalConf
 | — (not settable in dae syntax) | `connect_timeout_ms` | `3000ms` | Timeout used by proxy connects, protocol preparation, preconnect, health probes, and control-plane dials. |
 | — (not settable in dae syntax) | `dns_resolve_timeout_ms` | `2000ms` | Timeout for control-plane DNS resolution, including targets that must be converted to an IP before dialing. |
 | — (not settable in dae syntax) | `relay_idle_timeout_secs` | `300s` | Legacy relay-idle timeout field. The current relay path does not read it. |
+
+## Reloading health checks and TLS mode
+
+These inputs are captured at startup. A reload that changes their effective values is rejected, preserving the active configuration and installed probes:
+
+- `check_interval`.
+- The first `tcp_check_url`, including its fallback, path, and query text. A missing or empty first value disables HTTP probing; later values do not affect this comparison.
+- `tcp_check_http_method` while HTTP probing is enabled. Empty and `HEAD` are equivalent.
+- The selected `udp_check_dns` target: trim and ignore empty entries, prefer the first IP literal anywhere in the list, otherwise use the first domain, otherwise `8.8.8.8:53`. Admission compares configured address/domain and port, without resolving DNS. Changes to unselected entries remain admissible.
+- Switching `tls_implementation` between native TLS and uTLS. The `utls` comparison is case-insensitive.
+
+DAE `check_tolerance` still updates URLTest group tolerances on reload. Group-specific check URLs and direct checks retain their existing live-update paths. Reloading `utls_imitate` stores the compatibility value but does not change the fingerprint.
 
 ## Interface semantics
 

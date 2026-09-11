@@ -452,7 +452,10 @@ fn health_https_connector() -> Result<honk_outbound::tls::TlsConnector, String> 
 
 /// Default DNS target for UDP health checks when `udp_check_dns` is unset
 /// or unresolvable (dae semantics: plain `8.8.8.8:53`).
-const DEFAULT_UDP_CHECK_DNS: &str = "8.8.8.8:53";
+const DEFAULT_UDP_CHECK_DNS: SocketAddr = SocketAddr::V4(std::net::SocketAddrV4::new(
+    std::net::Ipv4Addr::new(8, 8, 8, 8),
+    53,
+));
 
 #[derive(Clone)]
 pub(super) struct QuicScoreTarget {
@@ -750,6 +753,66 @@ pub(super) fn build_dns_probe_query() -> Vec<u8> {
     q
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ConfiguredUdpTarget<'a> {
+    Literal(SocketAddr),
+    Domain { host: &'a str, port: u16 },
+}
+
+impl Default for ConfiguredUdpTarget<'_> {
+    fn default() -> Self {
+        Self::Literal(DEFAULT_UDP_CHECK_DNS)
+    }
+}
+
+impl PartialEq for ConfiguredUdpTarget<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Literal(a), Self::Literal(b)) => a == b,
+            (
+                Self::Domain {
+                    host: a, port: p, ..
+                },
+                Self::Domain {
+                    host: b, port: q, ..
+                },
+            ) => {
+                p == q
+                    && a.strip_suffix('.')
+                        .unwrap_or(a)
+                        .eq_ignore_ascii_case(b.strip_suffix('.').unwrap_or(b))
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ConfiguredUdpTarget<'_> {}
+
+pub(super) fn configured_udp_check_target(raws: &[String]) -> Option<ConfiguredUdpTarget<'_>> {
+    let mut first = None;
+    for raw in raws
+        .iter()
+        .map(|raw| raw.trim())
+        .filter(|raw| !raw.is_empty())
+    {
+        first = first.or(Some(raw));
+        if let Ok(addr) = raw.parse::<SocketAddr>() {
+            return Some(ConfiguredUdpTarget::Literal(addr));
+        }
+        if let Ok(ip) = raw.parse::<std::net::IpAddr>() {
+            return Some(ConfiguredUdpTarget::Literal(SocketAddr::new(ip, 53)));
+        }
+    }
+    first.map(|raw| {
+        let (host, port) = raw
+            .rsplit_once(':')
+            .and_then(|(host, port)| port.parse::<u16>().ok().map(|port| (host, port)))
+            .unwrap_or((raw, 53));
+        ConfiguredUdpTarget::Domain { host, port }
+    })
+}
+
 /// Resolve the UDP health check target from `global.udp_check_dns`
 /// (dae semantics: `host[:port]` list, default port 53).
 ///
@@ -762,73 +825,32 @@ pub(super) async fn resolve_udp_check_target(
     raws: &[String],
     resolver: Option<crate::outbound::ResolveHook>,
 ) -> SocketAddr {
-    let fallback: SocketAddr = DEFAULT_UDP_CHECK_DNS
-        .parse()
-        .expect("hardcoded default UDP check DNS address");
-    let entries: Vec<&str> = raws
-        .iter()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-    // First pass: literal IPs (full socket addr or bare IP with default port).
-    for raw in &entries {
-        if let Ok(addr) = raw.parse::<SocketAddr>() {
-            return addr;
+    match configured_udp_check_target(raws) {
+        Some(ConfiguredUdpTarget::Literal(addr)) => addr,
+        Some(ConfiguredUdpTarget::Domain { host, port, .. }) => {
+            let addrs = match resolver {
+                Some(resolve) => resolve(host.to_string(), port).await,
+                None => tokio::net::lookup_host((host, port))
+                    .await
+                    .map(|it| it.collect())
+                    .unwrap_or_default(),
+            };
+            if let Some(addr) = addrs.into_iter().next() {
+                return addr;
+            }
+            warn!("Failed to resolve configured UDP health-check target; using default");
+            DEFAULT_UDP_CHECK_DNS
         }
-        if let Ok(ip) = raw.parse::<std::net::IpAddr>() {
-            return SocketAddr::new(ip, 53);
-        }
+        None => DEFAULT_UDP_CHECK_DNS,
     }
-    // Second pass: first domain entry, resolved through the internal DNS
-    // resolver when installed (system lookup otherwise).
-    if let Some(raw) = entries.first() {
-        let (host, port) = match raw.rsplit_once(':') {
-            Some((h, p)) => match p.parse::<u16>() {
-                Ok(port) => (h, port),
-                Err(_) => (*raw, 53),
-            },
-            None => (*raw, 53),
-        };
-        let addrs = match resolver {
-            Some(resolve) => resolve(host.to_string(), port).await,
-            None => tokio::net::lookup_host((host, port))
-                .await
-                .map(|it| it.collect())
-                .unwrap_or_default(),
-        };
-        if let Some(addr) = addrs.into_iter().next() {
-            return addr;
-        }
-        warn!(
-            "Failed to resolve udp_check_dns '{}'; using {}",
-            raw, fallback
-        );
-    }
-    fallback
 }
 
 pub(super) fn udp_probe_identity(raws: &[String], resolved: SocketAddr) -> ScoreTarget {
-    let entries: Vec<&str> = raws
-        .iter()
-        .map(|raw| raw.trim())
-        .filter(|raw| !raw.is_empty())
-        .collect();
-    for raw in &entries {
-        if let Ok(addr) = raw.parse::<SocketAddr>() {
-            return addr.into();
-        }
-        if let Ok(ip) = raw.parse::<std::net::IpAddr>() {
-            return SocketAddr::new(ip, 53).into();
-        }
+    match configured_udp_check_target(raws) {
+        Some(ConfiguredUdpTarget::Literal(addr)) => addr.into(),
+        Some(ConfiguredUdpTarget::Domain { host, port, .. }) => ScoreTarget::domain(host, port),
+        None => resolved.into(),
     }
-    if let Some(raw) = entries.first() {
-        let (host, port) = raw
-            .rsplit_once(':')
-            .and_then(|(host, port)| port.parse::<u16>().ok().map(|port| (host, port)))
-            .unwrap_or((raw, 53));
-        return ScoreTarget::domain(host, port);
-    }
-    resolved.into()
 }
 
 pub(super) async fn resolve_quic_score_target(
