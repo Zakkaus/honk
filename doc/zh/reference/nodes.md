@@ -21,7 +21,7 @@ node {
 
 识别 tag 与链接的结束引号时，反斜杠会转义下一个字符；解析后的文本保留原始转义序列。
 
-格式错误但 scheme 已识别的链接会被丢弃，并向 stderr 输出 `node section: skipping unparseable entry: ...`。未知 scheme 是配置硬错误。独立的 `mux:` 或 `mux=` 行也会被拒绝；VLESS wire 行为必须写在各链接的 `vless_mode=` query 中。
+协议已识别但格式错误的链接会被丢弃，并产生 `invalid-node-entry` 诊断。诊断使用原始节点条目序号，不包含链接或节点名称。数据接口返回诊断而不记录日志；普通接口只报告一次。未知协议属于配置硬错误。独立的 `mux:` 或 `mux=` 行也会被拒绝；VLESS 传输行为必须写在各链接的 `vless_mode=` 查询参数中。
 
 旧版 `ss://base64(method:password@host:port)` 格式按字面值读取解码后的凭据，不做 URL 解码：`%20` 保持为 `%20`，`?`、`/`、`#`、`:` 和 `@` 仍是密码字符。最后一个 `@` 分隔凭据与端点；userinfo 本身也可以是 `base64(method:password)`。解码后的载荷缺少 `@`，或凭据无法解析为方法与密码时，拒绝解析。URL userinfo 格式仍按百分号解码凭据。端点、路径、query（包括 `/?plugin=...`）和 fragment 继续按 URL 处理。
 

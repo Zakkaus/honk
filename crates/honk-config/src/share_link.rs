@@ -30,6 +30,38 @@ impl Node {
     /// Parse a proxy share link (e.g. `ss://...`, `trojan://...`) into a [`Node`].
     /// A chain describes several hops; only the first is parsed.
     pub fn from_share_link(link: &str) -> Result<Node, ConfigError> {
+        let mut diagnostics = Vec::new();
+        let result = Self::from_share_link_with_detailed_diagnostics(link, &mut diagnostics);
+        crate::diagnostic::report_detailed_diagnostics(&diagnostics);
+        result.map_err(crate::error::DetailedConfigError::into_legacy)
+    }
+
+    /// Parse without logging, retaining a safe terminal diagnostic on failure.
+    pub fn from_share_link_with_detailed_diagnostics(
+        link: &str,
+        diagnostics: &mut Vec<crate::diagnostic::DetailedDiagnostic>,
+    ) -> Result<Node, crate::error::DetailedConfigError> {
+        let source = crate::diagnostic::DiagnosticSources::new(None).root();
+        let result = Self::parse_share_link(link)
+            .map_err(|error| crate::error::DetailedConfigError::from_legacy(error, source));
+        crate::diagnostic::finish_attempt(result, diagnostics)
+    }
+
+    pub fn from_share_link_with_diagnostics(
+        link: &str,
+        diagnostics: &mut Vec<crate::ConfigDiagnostic>,
+    ) -> Result<Node, ConfigError> {
+        let mut detailed = Vec::new();
+        let result = Self::from_share_link_with_detailed_diagnostics(link, &mut detailed);
+        diagnostics.extend(
+            detailed
+                .iter()
+                .map(crate::diagnostic::DetailedDiagnostic::to_legacy),
+        );
+        result.map_err(crate::error::DetailedConfigError::into_legacy)
+    }
+
+    pub(crate) fn parse_share_link(link: &str) -> Result<Node, ConfigError> {
         let first = link.split("->").next().unwrap_or("").trim();
         let mut ss_config = None;
         let (decoded, shadowrocket) = match first.split_once("://") {

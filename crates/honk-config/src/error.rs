@@ -95,6 +95,111 @@ impl DetailedConfigError {
                 "group policy 'honk' was renamed to 'score'",
             );
         }
+        let text = match &error {
+            ConfigError::Parse(text) | ConfigError::Validation(text) => Some(text.as_str()),
+            _ => None,
+        };
+        if let Some(text) = text {
+            let reason = match text {
+                "node section: standalone 'mux' is unsupported; set vless_mode on each VLESS share link" => {
+                    Some((
+                        "unsupported-node-mux",
+                        SettingPath::new("nodes").field("mux"),
+                        "standalone mux is unsupported; set vless_mode on each VLESS share link",
+                    ))
+                }
+                "dns.hosts_file was removed; use one or more use_host paths" => Some((
+                    "removed-dns-hosts-file",
+                    SettingPath::new("dns").field("hosts_file"),
+                    "hosts_file was removed; use one or more use_host paths",
+                )),
+                "not a dae config file" => Some((
+                    "not-dae-config",
+                    SettingPath::new("config"),
+                    "not a dae config file",
+                )),
+                _ if text.starts_with("unclosed block `") => Some((
+                    "unclosed-block",
+                    SettingPath::new("config"),
+                    "unclosed configuration block",
+                )),
+                _ if text.starts_with("unexpected `{` at line ") => Some((
+                    "unexpected-opener",
+                    SettingPath::new("config"),
+                    "unexpected opening brace",
+                )),
+                _ if text.starts_with("unknown experimental.udp_nfqueue setting: ") => Some((
+                    "unknown-nfqueue-setting",
+                    SettingPath::new("experimental").field("udp_nfqueue"),
+                    "unknown NFQUEUE setting; only enabled is supported",
+                )),
+                _ if text.starts_with("unknown experimental setting: ") => Some((
+                    "unknown-experimental-setting",
+                    SettingPath::new("experimental"),
+                    "unknown experimental setting",
+                )),
+                _ => None,
+            };
+            if let Some((code, setting, message)) = reason {
+                return Self::new(category, code, source, setting, message);
+            }
+            for (prefix, root, field) in [
+                ("global.dial_mode", "global", "dial_mode"),
+                ("global.data_dir", "global", "data_dir"),
+                ("global.check_interval", "global", "check_interval"),
+                ("global.tproxy_mark", "global", "tproxy_mark"),
+                ("global.so_mark_from_dae", "global", "so_mark_from_dae"),
+                (
+                    "invalid udp_warm_node_count",
+                    "global",
+                    "udp_warm_node_count",
+                ),
+                (
+                    "invalid preconnect_node_count",
+                    "global",
+                    "preconnect_node_count",
+                ),
+                (
+                    "invalid max_concurrent_dials",
+                    "global",
+                    "max_concurrent_dials",
+                ),
+                (
+                    "invalid boolean for global.nfqueue_enable",
+                    "global",
+                    "nfqueue_enable",
+                ),
+                ("invalid dns.bind", "dns", "bind"),
+                ("invalid dns.client_subnet", "dns", "client_subnet"),
+                (
+                    "invalid boolean for experimental.udp_nfqueue.enabled",
+                    "experimental",
+                    "udp_nfqueue",
+                ),
+            ] {
+                if text.starts_with(prefix) {
+                    return Self::new(
+                        category,
+                        "invalid-config-value",
+                        source,
+                        SettingPath::new(root).field(field),
+                        match field {
+                            "preconnect_node_count" => "expected a nonnegative integer or auto",
+                            "max_concurrent_dials" | "udp_warm_node_count" => {
+                                "expected a nonnegative integer"
+                            }
+                            "nfqueue_enable" | "udp_nfqueue" => {
+                                "expected true/false, yes/no, 1/0 or on/off"
+                            }
+                            "client_subnet" => {
+                                "expected empty, auto, auto(IPv4), IPv4, or IPv4/prefix"
+                            }
+                            _ => "invalid configuration value",
+                        },
+                    );
+                }
+            }
+        }
         let (code, message) = match category {
             ErrorCategory::Io(_) => ("config-io", "configuration IO failed"),
             ErrorCategory::Parse => ("config-parse", "invalid configuration"),

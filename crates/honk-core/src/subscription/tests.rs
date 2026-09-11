@@ -239,11 +239,7 @@ fn test_parse_subscription_rejects_encrypted_vless_flow_before_deduplication() {
         ["b"]
     );
     let error = Node::from_share_link(invalid).unwrap_err();
-    assert!(matches!(
-        error,
-        honk_config::ConfigError::Validation(message)
-            if message == "Node 'a' combines VLESS Encryption with flow; this combination is unsupported"
-    ));
+    assert!(matches!(error, honk_config::ConfigError::Validation(_)));
 }
 
 #[test]

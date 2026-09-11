@@ -94,7 +94,15 @@ impl<'de> Visitor<'de> for RawConfigSeed<'_> {
                 }
                 Field::Groups => config.groups = map.next_value()?,
                 Field::Subscriptions => config.subscriptions = map.next_value()?,
-                Field::Experimental => config.experimental = map.next_value()?,
+                Field::Experimental => {
+                    config.experimental = map.next_value()?;
+                    if config.experimental.legacy_udp_nfqueue.is_some() {
+                        self.diagnostics
+                            .push(crate::diagnostic::legacy_nfqueue_warning(
+                                self.source.clone(),
+                            ));
+                    }
+                }
                 Field::Ignore => unreachable!(),
             }
         }
@@ -113,7 +121,14 @@ impl<'de> Visitor<'de> for RawConfigSeed<'_> {
             .unwrap_or_default();
         let groups = seq.next_element()?.unwrap_or_default();
         let subscriptions = seq.next_element()?.unwrap_or_default();
-        let experimental = seq.next_element()?.unwrap_or_default();
+        let experimental: crate::experimental::ExperimentalConfig =
+            seq.next_element()?.unwrap_or_default();
+        if experimental.legacy_udp_nfqueue.is_some() {
+            self.diagnostics
+                .push(crate::diagnostic::legacy_nfqueue_warning(
+                    self.source.clone(),
+                ));
+        }
         Ok(Config {
             global,
             dns,

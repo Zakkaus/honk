@@ -6,7 +6,7 @@ use seed::RawConfigSeed;
 use std::ops::Range;
 
 use crate::diagnostic::{
-    DetailedDiagnostic, DiagnosticSources, SettingPath, SourceRef, finish_attempt, project_legacy,
+    DetailedDiagnostic, DiagnosticSources, SettingPath, SourceRef, finish_attempt,
     report_detailed_diagnostics,
 };
 use crate::error::{DetailedConfigError, ErrorCategory};
@@ -493,10 +493,6 @@ impl Config {
         let Some(legacy) = self.experimental.legacy_udp_nfqueue.take() else {
             return;
         };
-        eprintln!(
-            "warning: experimental.udp_nfqueue.enabled is deprecated; migrate to global.nfqueue_enable: {}",
-            legacy.enabled
-        );
         if !canonical_present {
             self.global.nfqueue_enable = legacy.enabled;
         }
@@ -546,15 +542,9 @@ impl Config {
             Some("yaml" | "yml") => &[ConfigFormat::Yaml, ConfigFormat::Toml, ConfigFormat::Json],
             Some("toml") => &[ConfigFormat::Toml, ConfigFormat::Yaml, ConfigFormat::Json],
             _ => {
-                let mut legacy = Vec::new();
                 let mut semantic = false;
                 let result =
-                    crate::parser::parse_dae_config_file_attempt(path, &mut legacy, &mut semantic);
-                diagnostics.extend(
-                    legacy
-                        .into_iter()
-                        .map(|d| project_legacy(d, source.clone())),
-                );
+                    crate::parser::parse_dae_config_file_attempt(path, diagnostics, &mut semantic);
                 match result {
                     Ok(mut config) => {
                         config.derive_node_ids();
@@ -562,11 +552,10 @@ impl Config {
                     }
                     Err(error) => {
                         let stop = matches!(
-                            error,
-                            crate::ConfigError::Include(_)
-                                | crate::ConfigError::UnsupportedPolicy(_)
+                            error.category,
+                            ErrorCategory::Include | ErrorCategory::UnsupportedPolicy
                         );
-                        let mut error = DetailedConfigError::from_legacy(error, source);
+                        let mut error = error;
                         // File-mode legacy callers historically received the last Parse error.
                         if !stop && semantic {
                             error.category = ErrorCategory::Parse;
@@ -915,6 +904,7 @@ struct DecodeLocation {
     span: Option<Range<usize>>,
     line: Option<usize>,
     byte_column: Option<usize>,
+    reason: Option<&'static str>,
 }
 
 fn parse_structured(
@@ -937,6 +927,7 @@ fn parse_structured(
                     line: (error.line() != 0).then_some(error.line()),
                     byte_column: (error.column() != 0).then_some(error.column()),
                     span: None,
+                    reason: Some(safe_json_reason(&error)),
                 })
         }
         ConfigFormat::Yaml => seed
@@ -959,6 +950,7 @@ fn parse_structured(
                         )
                     }),
                     span: None,
+                    reason: None,
                 }
             }),
         ConfigFormat::Toml => toml::de::Deserializer::parse(content)
@@ -976,6 +968,36 @@ fn parse_structured(
     Ok(config)
 }
 
+fn safe_json_reason(error: &serde_json::Error) -> &'static str {
+    // Decoder prose is transient. Only these schema-defined reasons may escape.
+    let text = error.to_string();
+    let reason = text
+        .rsplit_once(" at line ")
+        .map_or(text.as_str(), |(reason, _)| reason);
+    if reason == "expected value" {
+        "expected a JSON value"
+    } else if reason == "expected ident" {
+        "invalid JSON literal"
+    } else if reason.starts_with("unknown field `") && reason.ends_with("expected `enabled`") {
+        "unknown field; expected enabled"
+    } else if reason.starts_with("invalid type:") {
+        if reason.ends_with("expected struct Group") {
+            "expected a group object"
+        } else if reason.ends_with("expected a sequence") {
+            "expected a sequence"
+        } else {
+            "incorrect value type for configuration field"
+        }
+    } else {
+        match error.classify() {
+            serde_json::error::Category::Io => "configuration IO failed",
+            serde_json::error::Category::Syntax => "invalid JSON syntax",
+            serde_json::error::Category::Eof => "incomplete JSON input",
+            serde_json::error::Category::Data => "invalid configuration fields",
+        }
+    }
+}
+
 fn toml_location(content: &str, error: &toml::de::Error) -> DecodeLocation {
     let Some(span) = error.span() else {
         return DecodeLocation::default();
@@ -991,6 +1013,7 @@ fn toml_location(content: &str, error: &toml::de::Error) -> DecodeLocation {
         span: Some(span),
         line: Some(line),
         byte_column: Some(byte_column),
+        reason: None,
     }
 }
 
@@ -1005,7 +1028,7 @@ fn structured_decode_error(
         "invalid-structured-config",
         source,
         setting,
-        "invalid configuration fields",
+        location.reason.unwrap_or("invalid configuration fields"),
     );
     error.diagnostic.entry_index = entry_index;
     error.diagnostic.span = location.span;

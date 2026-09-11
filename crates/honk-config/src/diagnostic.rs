@@ -4,16 +4,11 @@ use std::sync::Arc;
 
 use tracing::warn;
 
-/// A non-fatal configuration diagnostic, appended as encountered even if loading fails.
-/// Plain entry points log diagnostics instead of returning them.
-/// Node skips and legacy NFQUEUE migration still print to stderr; an empty vector
-/// does not imply a warning-free load.
+/// One-release projection of detailed diagnostics. Data entrypoints never log.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigDiagnostic {
     pub setting: String,
-    /// Scalar diagnostics retain the parsed scalar text, including anything typed there.
-    /// Filter and policy expressions are never echoed: filters use a node-filter ordinal,
-    /// and policies use an empty value.
+    /// Arbitrary values are redacted; filters retain ordinals and policies are withheld.
     pub value: String,
     pub message: String,
 }
@@ -289,6 +284,7 @@ pub(crate) fn project_legacy(d: ConfigDiagnostic, source: SourceRef) -> Detailed
         "duration is unsupported by honk; using fallback 0s",
         "duration is not milliseconds, `ms` or `s`; keeping the default (50ms)",
         "duration is not milliseconds, `ms` or `s`; keeping the default (100ms)",
+        "duration is not milliseconds, `ms` or `s`; keeping the default (30ms)",
         "value is not a boolean spelling honk recognises; using fallback false",
         "honk could not parse this port as a decimal in 0-65535; using fallback 12345",
         "honk could not parse this port as a decimal in 0-65535; using fallback 0",
@@ -305,6 +301,18 @@ pub(crate) fn project_legacy(d: ConfigDiagnostic, source: SourceRef) -> Detailed
         diagnostic.line = d.value.parse().ok();
     }
     diagnostic
+}
+
+pub(crate) fn legacy_nfqueue_warning(source: SourceRef) -> DetailedDiagnostic {
+    DetailedDiagnostic::warning(
+        "legacy-nfqueue",
+        source,
+        SettingPath::new("experimental")
+            .field("udp_nfqueue")
+            .field("enabled"),
+        SafeValue::Redacted,
+        "experimental.udp_nfqueue.enabled is deprecated; migrate to global.nfqueue_enable",
+    )
 }
 
 /// Called by the outer attempt owner, not by nested readers or format probes.
