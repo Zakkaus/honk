@@ -41,7 +41,7 @@ group {
 | — (not in dae) | `check_interval` | `null` | Per-group interval field in seconds. The current runtime does not consult it and uses the global interval. |
 | — (not in dae) | `tolerance` | `50` | URLTest switch threshold in milliseconds. dae URLTest groups receive `global.check_tolerance`; the runtime applies an effective minimum of 1 ms. |
 | — (not in dae) | `idle_timeout` | `null` | URLTest probe-suspension threshold after inactivity, in seconds. With `null`, the health layer uses 1800 seconds. |
-| — (not in dae) | `interrupt_connections` | `false` | Close tracked connections on an actual Selector, URLTest, or Fallback selection change. LoadBalance rotation does not trigger it. |
+| — (not in dae) | `interrupt_connections` | `false` | Requests tracking removal on selection changes, not cancellation of live relays. A true value emits `ineffective-option` at `groups[index].interrupt_connections`, including structured and constructed configurations. |
 | — (not in dae) | `id` | random UUID | Internal group identity generated when the field is absent. |
 
 ## Policies

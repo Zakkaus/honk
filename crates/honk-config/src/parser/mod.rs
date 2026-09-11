@@ -1332,6 +1332,7 @@ fn parse_experimental_section(
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Result<ExperimentalConfig, crate::ConfigError> {
     let mut cfg = ExperimentalConfig::default();
+    let mut api_location = None;
     let recognised = ["clash_api", "cache_file", "udp_nfqueue"];
     let ambient = section.lines_except(&recognised);
     if let Some(setting) = ambient.into_iter().find(|line| !line.trim().is_empty()) {
@@ -1349,6 +1350,7 @@ fn parse_experimental_section(
             "clash_api" => {
                 if let Some(v) = kv.get("external_controller") {
                     cfg.clash_api.external_controller = v.clone();
+                    api_location = Some(diagnostics.field_location("external_controller"));
                 }
                 if let Some(v) = kv.get("external_ui") {
                     cfg.clash_api.external_ui = v.clone();
@@ -1405,6 +1407,12 @@ fn parse_experimental_section(
             }
             _ => {}
         }
+    }
+    if let Some((source, line)) = api_location
+        && let Some(mut diagnostic) = cfg.clash_api.exposure_diagnostic(source)
+    {
+        diagnostic.line = line;
+        diagnostics.output.push(diagnostic);
     }
 
     Ok(cfg)

@@ -558,16 +558,6 @@ fn open_log_file(path: &std::path::Path) -> anyhow::Result<std::fs::File> {
     Ok(file)
 }
 
-#[cfg(feature = "clash-api")]
-fn warn_api_exposure(listen: std::net::SocketAddr, secret: &str) {
-    if !listen.ip().is_loopback() && secret.is_empty() {
-        warn!(
-            listen = %listen,
-            "Clash API authentication is disabled on a non-loopback address; the API has no TLS"
-        );
-    }
-}
-
 fn load_operator_config(
     path: &str,
     diagnostics: &mut Vec<DetailedDiagnostic>,
@@ -579,6 +569,7 @@ fn load_operator_config(
         || DiagnosticSources::new(Some(path.into())).root(),
         |diagnostic| diagnostic.source.sources().root(),
     );
+    config.append_diagnostics(source.clone(), diagnostics);
     let result = config.validate_detailed().and_then(|()| {
         subscription::validate_subscription_ids(&config.subscriptions).map_err(|_| {
             DetailedConfigError::new(
@@ -1247,7 +1238,6 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         };
         match listen_str.parse::<std::net::SocketAddr>() {
             Ok(listen) => {
-                warn_api_exposure(listen, &clash_cfg.secret);
                 let stream_samplers = std::sync::Arc::new(clash_api::StreamSamplers::new());
                 let connection_tracker = control_plane.connection_tracker();
                 let state = std::sync::Arc::new(clash_api::ClashState {
@@ -2153,96 +2143,6 @@ mod startup_lifecycle_tests {
         drop(lock);
         assert!(running_instance_pid(&path).is_err());
     }
-
-    #[cfg(feature = "clash-api")]
-    const API_WARNING_CASES: &[(&str, &str, &str, bool)] = &[
-        ("wildcard_ipv4_empty", "0.0.0.0:9090", "", true),
-        ("wildcard_ipv6_empty", "[::]:9091", "", true),
-        (
-            "wildcard_ipv6_secret",
-            "[::]:9092",
-            "wildcard-v6-secret",
-            false,
-        ),
-        ("assigned_ipv4_empty", "192.0.2.221:9092", "", true),
-        ("assigned_ipv6_empty", "[2001:db8::221]:9093", "", true),
-        (
-            "assigned_ipv6_secret",
-            "[2001:db8::221]:9095",
-            "assigned-v6-secret",
-            false,
-        ),
-        ("loopback_ipv4_empty", "127.0.0.1:9094", "", false),
-        (
-            "loopback_ipv4_secret",
-            "127.0.0.1:9095",
-            "loopback-v4-secret",
-            false,
-        ),
-        ("loopback_ipv6_empty", "[::1]:9096", "", false),
-        (
-            "loopback_ipv6_secret",
-            "[::1]:9097",
-            "loopback-v6-secret",
-            false,
-        ),
-        (
-            "assigned_ipv4_secret",
-            "192.0.2.222:9098",
-            "assigned-v4-secret",
-            false,
-        ),
-        ("wildcard_ipv4_whitespace", "0.0.0.0:9099", " ", false),
-    ];
-
-    #[cfg(feature = "clash-api")]
-    #[test]
-    fn api_exposure_warning_captures_only_unsafe_cases() {
-        let output = tempfile::NamedTempFile::new().expect("create warning capture");
-        let subscriber = tracing_subscriber::fmt()
-            .without_time()
-            .with_ansi(false)
-            .with_writer(std::sync::Arc::new(
-                output.reopen().expect("reopen warning capture"),
-            ))
-            .finish();
-
-        let cases = tracing::subscriber::with_default(subscriber, || {
-            API_WARNING_CASES
-                .iter()
-                .map(|&(name, address, secret, exposed)| {
-                    let listen: std::net::SocketAddr =
-                        address.parse().expect("parse warning case address");
-                    let listen_text = listen.to_string();
-                    super::warn_api_exposure(listen, secret);
-                    (name, listen_text, secret, exposed)
-                })
-                .collect::<Vec<_>>()
-        });
-
-        let captured =
-            std::fs::read_to_string(output.path()).expect("read captured warning output");
-        let unsafe_cases = cases.iter().filter(|case| case.3).count();
-        assert_eq!(captured.lines().count(), unsafe_cases);
-        for (name, listen, secret, exposed) in cases {
-            let matching = captured
-                .lines()
-                .filter(|line| line.contains(&listen))
-                .collect::<Vec<_>>();
-            if exposed {
-                assert_eq!(matching.len(), 1, "{name}");
-                assert!(matching[0].contains("WARN"), "{name}");
-                assert!(matching[0].contains("authentication is disabled"), "{name}");
-                assert!(matching[0].contains("no TLS"), "{name}");
-            } else {
-                assert!(matching.is_empty(), "{name}");
-            }
-            if secret.chars().any(|character| !character.is_whitespace()) {
-                assert!(!captured.contains(secret), "{name}");
-            }
-        }
-    }
-
     #[test]
     fn startup_load_reports_duplicate_node_identity() {
         let file = tempfile::Builder::new().suffix(".dae").tempfile().unwrap();

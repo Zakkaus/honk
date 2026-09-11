@@ -1,3 +1,4 @@
+mod diagnostics;
 mod seed;
 pub(crate) use seed::CONFIG_FIELDS;
 pub use seed::ConfigSeed;

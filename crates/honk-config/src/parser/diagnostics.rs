@@ -48,6 +48,11 @@ impl<'a> ParserDiagnostics<'a> {
         self.current.source.clone()
     }
 
+    pub fn field_location(&self, field: &str) -> (SourceRef, Option<usize>) {
+        let location = self.fields.get(field).unwrap_or(&self.current);
+        (location.source.clone(), location.line)
+    }
+
     pub fn parse_share_link(
         &mut self,
         link: &str,

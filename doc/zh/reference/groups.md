@@ -41,7 +41,7 @@ group {
 | —（dae 中不可配置） | `check_interval` | `null` | 按组间隔字段，单位为秒。当前运行时不读取该字段，而使用全局间隔。 |
 | —（dae 中不可配置） | `tolerance` | `50` | URLTest 切换阈值，单位为毫秒。dae URLTest 组接收 `global.check_tolerance`；运行时的有效下限为 1 ms。 |
 | —（dae 中不可配置） | `idle_timeout` | `null` | URLTest 在不活跃后暂停探测的阈值，单位为秒。值为 `null` 时，健康检查层使用 1800 秒。 |
-| —（dae 中不可配置） | `interrupt_connections` | `false` | Selector、URLTest 或 Fallback 的选择实际变化时关闭已跟踪连接。LoadBalance 轮转不会触发。 |
+| —（dae 中不可配置） | `interrupt_connections` | `false` | 请求在选择变化时移除连接跟踪记录，不会取消正在运行的转发任务。值为 true 时在 `groups[index].interrupt_connections` 产生 `ineffective-option`，结构化配置和通过代码构造的配置也不例外。 |
 | —（dae 中不可配置） | `id` | 随机 UUID | 字段缺失时生成的内部组标识。 |
 
 ## 策略

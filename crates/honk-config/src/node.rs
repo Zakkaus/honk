@@ -595,7 +595,7 @@ pub struct Group {
     /// `None` means never stop. Zero means never stop.
     #[serde(default)]
     pub idle_timeout: Option<u64>,
-    /// Interrupt existing connections when the selected node changes.
+    /// Request tracking removal on selection changes; live relays are not cancelled.
     #[serde(default)]
     pub interrupt_connections: bool,
     #[serde(default = "chrono::Utc::now")]
