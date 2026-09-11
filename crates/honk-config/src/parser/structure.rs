@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use super::cursor::{Document, Segment};
 use super::diagnostics::ParserDiagnostics;
-use super::lexer::{Source, TokenKind};
+use super::lexer::{Source, Span, TokenKind};
 
 use crate::{ConfigDiagnostic, ConfigError};
 
@@ -102,6 +102,7 @@ impl Block {
 /// bounded and retained as raw blocks, but their path patterns are deliberately
 /// left to the include reader in the next parser layer.
 /// `saw_include` remains set on errors so file loading preserves include error mapping.
+#[cfg(test)]
 pub fn scan(
     input: &str,
     source: Option<&Path>,
@@ -141,6 +142,7 @@ pub(super) fn scan_readers(
     let lines = Line::all(input);
     let mut scanner = Scanner::default();
     let mut position = (0, 0);
+    let mut migrated_root_seen = false;
     while position.0 < lines.len() {
         let offset = lines[position.0].start + position.1;
         let start = tokens.partition_point(|token| token.span.start < offset);
@@ -148,10 +150,10 @@ pub(super) fn scan_readers(
         let migrated = scanner.at_root()
             && first.is_some_and(|index| {
                 let name = source.raw(tokens[index].span);
-                let named = matches!(name, "global" | "experimental");
-                let glued = name
-                    .strip_suffix('{')
-                    .is_some_and(|name| matches!(name, "global" | "experimental"));
+                let named = matches!(name, "global" | "experimental" | "node" | "subscription");
+                let glued = name.strip_suffix('{').is_some_and(|name| {
+                    matches!(name, "global" | "experimental" | "node" | "subscription")
+                });
                 let opener = tokens[index + 1..]
                     .iter()
                     .find(|token| !token.kind.is_trivia());
@@ -164,6 +166,7 @@ pub(super) fn scan_readers(
                 tokens[index].line == position.0 + 1 && (glued || (named && !empty))
             });
         if migrated {
+            migrated_root_seen = true;
             let start = first.unwrap();
             let mut depth = 0usize;
             let mut opened = false;
@@ -243,6 +246,44 @@ pub(super) fn scan_readers(
                 position = (line + 1, 0);
             }
             continue;
+        }
+        if migrated_root_seen
+            && scanner.at_root()
+            && let Some(index) = first.filter(|&index| tokens[index].line == position.0 + 1)
+        {
+            let token = &tokens[index];
+            if token.kind == TokenKind::CloseBrace {
+                diagnostics.output.push(source.diagnostic(
+                    token.span,
+                    crate::diagnostic::Severity::Warning,
+                    "unmatched-close",
+                    "unmatched closing brace was ignored",
+                ));
+                position.1 = token.span.end - lines[position.0].start;
+                continue;
+            }
+            let end = tokens[index..]
+                .iter()
+                .position(|token| token.line != position.0 + 1 || token.kind == TokenKind::Comment)
+                .map_or(tokens.len(), |end| index + end);
+            if source.raw(token.span) != "include"
+                && !tokens[index..end].iter().any(|token| {
+                    matches!(token.kind, TokenKind::OpenBrace | TokenKind::CloseBrace)
+                        || source.raw(token.span).contains(['{', '}'])
+                })
+            {
+                diagnostics.output.push(source.diagnostic(
+                    Span {
+                        end: tokens[end - 1].span.end,
+                        ..token.span
+                    },
+                    crate::diagnostic::Severity::Warning,
+                    "unknown-statement",
+                    "statement outside a section was ignored",
+                ));
+                position = (position.0 + 1, 0);
+                continue;
+            }
         }
         let mut legacy = Vec::new();
         let next = scanner.process_line(input, &lines, position, path, &mut legacy);

@@ -1,12 +1,14 @@
 pub mod cursor;
 mod diagnostics;
 mod dns;
+mod entries;
 pub mod lexer;
 mod routing;
 
 mod read;
 mod scalars;
 mod structure;
+use entries::{parse_node_section, parse_subscription_section};
 use scalars::{parse_experimental_section, parse_global_section};
 
 #[cfg(test)]
@@ -33,7 +35,7 @@ use crate::subscription::Subscription;
 use crate::{Config, ConfigDiagnostic};
 use lexer::quoted_end;
 use regex::Regex;
-use structure::{Block, Item};
+use structure::Block;
 enum ParseFailure {
     Legacy(crate::ConfigError),
     Detailed(crate::error::DetailedConfigError),
@@ -742,40 +744,6 @@ fn unquote_filter_argument(value: &str) -> &str {
     value
 }
 
-fn split_entry_tag(mut line: &str) -> (Option<&str>, &str) {
-    let bytes = line.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'\'' | b'"' => {
-                if let Some(end) = quoted_end(bytes, index) {
-                    index = end;
-                    continue;
-                }
-            }
-            b'#' if index == 0 || matches!(bytes[index - 1], b' ' | b'\t') => {
-                line = line[..index].trim_end();
-                break;
-            }
-            _ => {}
-        }
-        index += 1;
-    }
-
-    if line.starts_with(['\'', '"']) {
-        if let Some(end) = quoted_end(line.as_bytes(), 0)
-            && let Some(value) = line[end..].trim_start().strip_prefix(':')
-        {
-            return (Some(&line[..end]), value.trim());
-        }
-    } else if let Some(pos) = line.find(':')
-        && !line[pos..].starts_with("://")
-    {
-        return (Some(&line[..pos]), line[pos + 1..].trim());
-    }
-    (None, line)
-}
-
 fn parse_kv_pair(line: &str) -> Option<(&str, &str)> {
     let trimmed = strip_unquoted_comment(line.trim()).trim();
     let (key, value) = trimmed.split_once(':')?;
@@ -882,71 +850,6 @@ fn normalize_geosite_code(code: &str) -> String {
     code.trim().to_string()
 }
 
-fn parse_node_section(
-    section: &Block,
-    diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<Vec<Node>, ParseFailure> {
-    let mut nodes = Vec::new();
-    let lines = section.lines_except(&[]);
-    for (index, line) in lines.into_iter().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        diagnostics.entry(line, index + 1);
-        if let Some(rest) = trimmed.strip_prefix("mux")
-            && rest.trim_start().starts_with(['=', ':'])
-        {
-            let (source, line) = diagnostics.field_location("mux");
-            let mut error = DetailedConfigError::new(
-                crate::error::ErrorCategory::Parse,
-                "unsupported-node-mux",
-                source,
-                SettingPath::new("nodes").field("mux"),
-                "standalone mux is unsupported; set vless_mode on each VLESS share link",
-            );
-            error.diagnostic.line = line;
-            return Err(error.into());
-        }
-        let unquote = |s: &str| s.trim().trim_matches(|c| c == '\'' || c == '"').to_string();
-        let (tag, value) = split_entry_tag(trimmed);
-        let (tag, uri) = match tag {
-            Some(tag) if tag.starts_with(['\'', '"']) => {
-                (tag[1..tag.len() - 1].to_string(), unquote(value))
-            }
-            Some(tag) if tag.contains(char::is_whitespace) => (String::new(), trimmed.to_string()),
-            Some(tag) => (unquote(tag), unquote(value)),
-            None if value.starts_with(['\'', '"']) => (
-                String::new(),
-                quoted_end(value.as_bytes(), 0)
-                    .map(|end| value[1..end - 1].to_string())
-                    .unwrap_or_else(|| unquote(value)),
-            ),
-            None if value.contains(':') => (String::new(), value.to_string()),
-            None => (String::new(), unquote(value)),
-        };
-        match diagnostics.parse_share_link(&uri) {
-            Ok(mut node) => {
-                if !tag.is_empty() {
-                    node.name = tag;
-                }
-                nodes.push(node);
-            }
-            // Config documents reject removed protocols; subscriptions skip them.
-            Err(error) if error.category == crate::error::ErrorCategory::UnknownProtocol => {
-                return Err(ParseFailure::Detailed(error));
-            }
-            Err(_) => diagnostics.emit(DetailedDiagnostic::warning(
-                "invalid-node-entry",
-                diagnostics.source(),
-                SettingPath::new("nodes").index(index + 1),
-                SafeValue::Redacted,
-                "node entry could not be parsed; ignored",
-            )),
-        }
-    }
-    Ok(nodes)
-}
 fn parse_group_section(
     section: &Block,
     diagnostics: &mut ParserDiagnostics<'_>,
@@ -1059,142 +962,6 @@ fn parse_group_policy(
             Ok(crate::group::GroupPolicy::Selector)
         }
     }
-}
-
-fn parse_subscription_section(
-    section: &Block,
-    diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<Vec<Subscription>, crate::ConfigError> {
-    let mut subs = Vec::new();
-    append_subscriptions(&section.items, &mut subs, diagnostics);
-    Ok(subs)
-}
-
-fn append_subscriptions(
-    items: &[Item],
-    subs: &mut Vec<Subscription>,
-    diagnostics: &mut ParserDiagnostics<'_>,
-) {
-    for item in items {
-        match item {
-            Item::Statement(line, _) => subs.extend(parse_subscription_entry(line)),
-            Item::Block(block) => {
-                let Some((tag, _)) = block
-                    .header
-                    .split_once(':')
-                    .filter(|(_, value)| value.trim() == "{")
-                else {
-                    subs.extend(parse_subscription_entry(&block.header));
-                    append_subscriptions(&block.items, subs, diagnostics);
-                    subs.extend(parse_subscription_entry(&block.closing));
-                    continue;
-                };
-                let kv = parse_kv_pairs(block.lines_except(&[]));
-                diagnostics.subscription(block, subs.len() + 1);
-                let mut sub = Subscription {
-                    name: unquote_filter_argument(tag).to_string(),
-                    ..Default::default()
-                };
-                if let Some(url) = kv.get("url") {
-                    sub.url = url.clone();
-                }
-                if let Some(ua) = kv.get("ua") {
-                    sub.user_agent = Some(ua.clone());
-                }
-                if let Some(interval) = kv.get("interval") {
-                    sub.update_interval = lenient(
-                        crate::types::parse_duration_secs(interval),
-                        0,
-                        diagnostics,
-                        || ConfigDiagnostic {
-                            setting: format!("subscription.{}.interval", sub.name),
-                            value: interval.clone(),
-                            message: "duration is unsupported by honk; using fallback 0s"
-                                .to_string(),
-                        },
-                    );
-                }
-                subs.push(sub);
-            }
-        }
-    }
-}
-
-fn parse_subscription_entry(line: &str) -> Option<Subscription> {
-    let (tag, value) = split_entry_tag(line.trim());
-    let (mut url, user_agent) = parse_subscription_value(value);
-    let name = if let Some(tag) = tag {
-        unquote_filter_argument(tag).to_string()
-    } else {
-        let tag_colon = url.find(':').filter(|&pos| !url[pos..].starts_with("://"));
-        let value = tag_colon.map_or(url.as_str(), |pos| &url[pos + 1..]);
-        if !value.contains("://") {
-            return None;
-        }
-        if let Some(pos) = tag_colon {
-            let name = url[..pos].to_string();
-            url.drain(..=pos);
-            name
-        } else {
-            url::Url::parse(&url)
-                .ok()
-                .and_then(|url| url.host_str().map(str::to_owned))
-                .unwrap_or_default()
-        }
-    };
-    Some(Subscription {
-        name,
-        url,
-        user_agent,
-        ..Default::default()
-    })
-}
-
-fn parse_subscription_value(value: &str) -> (String, Option<String>) {
-    let value = value.trim();
-    if matches!(value.as_bytes().first().copied(), Some(b'\'' | b'"'))
-        && let Some(end) = quoted_end(value.as_bytes(), 0)
-    {
-        let mut remainder = value[end..].trim();
-        if remainder.is_empty() || remainder.starts_with('#') {
-            return (value[1..end - 1].to_string(), None);
-        }
-        if remainder.starts_with('(') {
-            let bytes = remainder.as_bytes();
-            let mut depth = 0;
-            let mut index = 0;
-            while index < bytes.len() {
-                match bytes[index] {
-                    b'\'' | b'"' => {
-                        if let Some(end) = quoted_end(bytes, index) {
-                            index = end;
-                            continue;
-                        }
-                    }
-                    b'(' => depth += 1,
-                    b')' if depth > 0 => {
-                        depth -= 1;
-                        if depth == 0 && bytes.get(index + 1) == Some(&b'#') {
-                            remainder = &remainder[..index + 1];
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-                index += 1;
-            }
-        }
-        if let Some(ua) = remainder
-            .strip_prefix('(')
-            .and_then(|ua| ua.strip_suffix(')'))
-        {
-            return (
-                value[1..end - 1].to_string(),
-                Some(unquote_filter_argument(ua).to_string()),
-            );
-        }
-    }
-    (unquote_filter_argument(value).to_string(), None)
 }
 
 fn parse_checked_bool(s: &str, setting: &str) -> Result<bool, crate::ConfigError> {

@@ -32,11 +32,15 @@ pub(super) struct ParserDiagnostics<'a> {
     subscription: Option<usize>,
     entry: Option<usize>,
     pub failure: Option<DetailedDiagnostic>,
+    root: &'static str,
+    attempt_start: usize,
 }
 
 impl<'a> ParserDiagnostics<'a> {
     pub fn new(output: &'a mut Vec<DetailedDiagnostic>, source: SourceRef) -> Self {
         Self {
+            attempt_start: output.len(),
+            root: "config",
             output,
             current: Location {
                 source,
@@ -68,12 +72,14 @@ impl<'a> ParserDiagnostics<'a> {
         link: &str,
     ) -> Result<crate::node::Node, crate::error::DetailedConfigError> {
         let source = self.source();
-        let line = self.current.line;
+        let location = &self.current;
         let entry = self.entry;
         // Node tags are not schema fields: every link diagnostic belongs to this entry.
         let locate_entry = |diagnostic: &mut DetailedDiagnostic| {
             diagnostic.source = source.clone();
-            diagnostic.line = line;
+            diagnostic.line = location.line;
+            diagnostic.span = location.span.clone();
+            diagnostic.byte_column = location.byte_column;
             diagnostic.entry_index = entry;
             if let Some(crate::diagnostic::SettingSegment::Field(root)) =
                 diagnostic.setting.0.first_mut()
@@ -215,6 +221,12 @@ impl<'a> ParserDiagnostics<'a> {
     }
     pub fn at_section(&mut self, section: &Block, excluded: &[&str]) {
         self.at_line(&section.header);
+        self.root = match section.name.as_str() {
+            "node" => "nodes",
+            "subscription" => "subscriptions",
+            "group" => "groups",
+            _ => "config",
+        };
         self.group = None;
         self.subscription = None;
         self.entry = None;
@@ -227,11 +239,6 @@ impl<'a> ParserDiagnostics<'a> {
             if let Some((key, _)) = trimmed.split_once(':') {
                 self.fields
                     .insert(key.trim().to_owned(), self.location(line));
-            }
-        }
-        for text in super::read::statements(section) {
-            if let Some((key, value)) = text.kv() {
-                self.register_field(key.raw(), value);
             }
         }
     }
@@ -262,11 +269,6 @@ impl<'a> ParserDiagnostics<'a> {
         if let Some(group) = self.groups.get(index - 1) {
             self.current = group.location.clone();
         }
-    }
-
-    pub fn subscription(&mut self, block: &Block, index: usize) {
-        self.at_section(block, &[]);
-        self.subscription = Some(index);
     }
 
     pub fn entry(&mut self, line: &str, index: usize) {
@@ -329,6 +331,39 @@ impl<'a> ParserDiagnostics<'a> {
         for diagnostic in diagnostics {
             self.push(diagnostic);
         }
+    }
+
+    pub fn notice(&mut self, mut diagnostic: DetailedDiagnostic) {
+        diagnostic.setting = SettingPath::new(self.root);
+        if let Some(group) = self.group {
+            diagnostic.setting = SettingPath::new("groups").index(group).field("filter");
+            if diagnostic.code == "empty-subgroup" {
+                let ordinal = self.groups[group - 1].filters.len();
+                diagnostic.setting = diagnostic.setting.index(ordinal);
+                diagnostic.value = SafeValue::Ordinal(ordinal);
+            }
+        } else if let Some(entry) = self.entry {
+            diagnostic.setting = diagnostic.setting.index(entry);
+            diagnostic.entry_index = Some(entry);
+        } else if let Some(subscription) = self.subscription {
+            diagnostic.setting = diagnostic.setting.index(subscription);
+        }
+        let position = diagnostic
+            .span
+            .as_ref()
+            .and_then(|span| {
+                self.output[self.attempt_start..]
+                    .iter()
+                    .position(|existing| {
+                        existing.source == diagnostic.source
+                            && existing
+                                .span
+                                .as_ref()
+                                .is_some_and(|existing| existing.start > span.start)
+                    })
+            })
+            .map_or(self.output.len(), |index| self.attempt_start + index);
+        self.output.insert(position, diagnostic);
     }
 
     pub fn emit(&mut self, mut diagnostic: DetailedDiagnostic) {

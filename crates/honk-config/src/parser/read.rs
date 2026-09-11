@@ -92,6 +92,45 @@ impl<'d, 'a> Text<'d, 'a> {
         parts
     }
 
+    /// Return the leading parenthesized body and its untouched trailing span.
+    pub fn parenthesized(self) -> Option<(Self, Self)> {
+        let raw = self.raw().as_bytes();
+        if raw.first() != Some(&b'(') {
+            return None;
+        }
+        let mut quotes = self
+            .tokens
+            .iter()
+            .flat_map(|token| &token.quoted)
+            .filter(|quote| self.span.start <= quote.start && quote.end <= self.span.end)
+            .peekable();
+        let mut depth = 0;
+        let mut index = 0;
+        while index < raw.len() {
+            let absolute = self.span.start + index;
+            while quotes.peek().is_some_and(|quote| quote.end <= absolute) {
+                quotes.next();
+            }
+            if let Some(quote) = quotes.peek().filter(|quote| quote.start <= absolute) {
+                index = quote.end - self.span.start;
+                quotes.next();
+                continue;
+            }
+            match raw[index] {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((self.sub(1, index), self.sub(index + 1, raw.len())));
+                    }
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+        None
+    }
+
     pub fn kv(self) -> Option<(Self, Self)> {
         let colon = self.find(":")?;
         Some((
@@ -146,8 +185,7 @@ impl<'d, 'a> Text<'d, 'a> {
         code: &'static str,
         message: &'static str,
     ) {
-        sink.output
-            .push(self.source.diagnostic(self.span, severity, code, message));
+        sink.notice(self.source.diagnostic(self.span, severity, code, message));
     }
 }
 

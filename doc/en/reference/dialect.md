@@ -36,10 +36,10 @@ honk reads dae's configuration syntax, but it is a dialect: where honk and dae r
 | Input | dae grammar | honk |
 |---|---|---|
 | A tag on a share link or subscription | `ID ':' literal`; a bare literal cannot contain `:`, so links are quoted | The text before the first `:` is the tag unless that colon starts `://`; links may be bare; tags and links may be quoted. In `subscription` only, a wholly quoted value with a tag inside (`'paid:https://…'`) is split after unquoting, and an entry without a tag is named after its URL host; in `node` a quoted value is the whole link (`'paid:socks5://…'` is an unknown scheme). |
-| A trailing comment on an entry line | comment when `#` starts a token | A `#` after a space or tab ends the line; in a bare link a glued `#` stays in the link (`…#hk1`, `?filter=(hk)#token`). A tagless quoted node uses only the quoted span, whatever follows it. After a quoted subscription URL, a `#` right after the closing quote or after the `(UA)` suffix is also a comment. |
+| A trailing comment on an entry line | comment when `#` starts a token | A `#` after a space or tab ends the line. Inside a bare value, glued `#` is data (`…#hk1`, `?filter='hk'#token`, `/tmp/a#b`). After a closing node/link quote or one balanced subscription `(UA)` suffix, a glued `#` is accepted as a comment: retain the entry and warn `legacy-glued-hash` at the `#`, with “put whitespace before a comment”. Other trailing text skips the entry with `trailing-entry-text` or `legacy-ua-boundary`. |
 | `'url'(User-Agent)` after a subscription link | not in the grammar | honk extension: the parenthesised text is the User-Agent; a `#` after a space inside unquoted parentheses ends the line, so quote such a User-Agent. |
 | A subscription block, `paid: {` followed by `url: …`, `ua: …`, `interval: …` on their own lines and `}` | `ID ':' '{'` is not a declaration | honk extension: the block form of a subscription; its settings are one per line like any block. |
-| A bare tag with a space before the colon in `node`, `edge : 'socks5://…'` | tag `edge` | The whole line is taken as the link, rejected by the share-link parser, and skipped with a message on stderr; the rest of the file loads. Write `edge: …` or quote the tag. |
+| A bare tag with a space before the colon in `node`, `edge : 'socks5://…'` | tag `edge` | Whitespace around the colon is normalized: the node is retained with tag `edge` and an `entry-tag-normalized` informational diagnostic. `edge: …` and quoted tags remain accepted. |
 
 ## Routing
 
