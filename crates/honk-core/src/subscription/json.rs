@@ -295,6 +295,37 @@ mod tests {
         assert_eq!(nodes[4].vless().unwrap().mode, WireMode::H2mux);
     }
 
+    const C10_SING_BOX_TRANSPORTS: &str = r#"{"outbounds":[
+      {"type":"vless","tag":"packet-tcp-stream-tcp","server":"raw.example","server_port":443,"uuid":"00000000-0000-4000-8000-000000000025","network":"tcp","transport":{"type":"tcp"}},
+      {"type":"vless","tag":"packet-tcp-stream-ws","server":"ws.example","server_port":443,"uuid":"00000000-0000-4000-8000-000000000027","network":"tcp","transport":{"type":"ws"}},
+      {"type":"vless","tag":"packet-tcp-stream-grpc","server":"grpc.example","server_port":443,"uuid":"00000000-0000-4000-8000-000000000028","network":"tcp","transport":{"type":"grpc"}},
+      {"type":"vless","tag":"raw-tcp-active-settings","server":"active.example","server_port":443,"uuid":"00000000-0000-4000-8000-000000000029","network":"tcp","transport":{"type":"tcp","path":"/must-not-ignore"}},
+      {"type":"vless","tag":"unsupported-h2-stream","server":"h2.example","server_port":443,"uuid":"00000000-0000-4000-8000-000000000026","network":"tcp","transport":{"type":"h2"}}
+    ]}"#;
+
+    #[test]
+    fn c10_sing_box_packet_network_and_stream_transport_are_separate() {
+        let nodes = parse_json_subscription(json(C10_SING_BOX_TRANSPORTS), None).unwrap();
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(
+            nodes
+                .iter()
+                .map(|node| node.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "packet-tcp-stream-tcp",
+                "packet-tcp-stream-ws",
+                "packet-tcp-stream-grpc"
+            ]
+        );
+        assert_eq!(nodes[0].network(), Some("tcp"));
+        assert_eq!(nodes[0].transport().unwrap().transport, "tcp");
+        assert_eq!(nodes[1].network(), Some("tcp"));
+        assert_eq!(nodes[1].transport().unwrap().transport, "ws");
+        assert_eq!(nodes[2].network(), Some("tcp"));
+        assert_eq!(nodes[2].transport().unwrap().transport, "grpc");
+    }
+
     #[test]
     fn sing_box_empty_grpc_and_tuic_defaults_are_preserved() {
         let nodes = parse_json_subscription(

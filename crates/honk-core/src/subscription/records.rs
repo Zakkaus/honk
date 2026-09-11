@@ -5,7 +5,7 @@
 //! Clash key vocabulary so the common parser owns Node
 //! construction and validation.
 
-use honk_config::options::vocab::{optional_flow, optional_text};
+use honk_config::options::vocab::{optional_flow, optional_text, stream_transport};
 
 use serde_yaml::{Mapping, Value};
 
@@ -536,25 +536,24 @@ fn apply_transport(
     options: &mut RecordOptions,
     positions: &[String],
 ) -> RecordResult<()> {
-    let mut transport = take_option(options, &["transport", "network"]);
+    let mut transport: Option<&str> =
+        take_stream_transport_alias(options, &["transport", "network"])?
+            .filter(|value| !value.is_empty());
     let ws = take_bool(options, &["ws"])?;
     if transport.is_none() && ws == Some(true) {
-        transport = Some("ws".to_string());
+        transport = Some("ws");
     }
     let transport = transport.or_else(|| {
         positions
             .iter()
             .find(|value| matches!(value.as_str(), "tcp" | "ws" | "grpc" | "h2" | "httpupgrade"))
-            .cloned()
+            .map(String::as_str)
     });
     let Some(transport) = transport else {
         return Ok(());
     };
-    let transport = transport.to_ascii_lowercase();
-    if !matches!(transport.as_str(), "tcp" | "ws" | "grpc") {
-        return Err("record transport is unsupported");
-    }
-    put_str(map, "network", transport.clone());
+    let transport = stream_transport(transport)?;
+    put_str(map, "network", transport.to_string());
     if transport == "ws" {
         set_optional(
             map,
@@ -897,6 +896,40 @@ fn take_credential_alias(
         }
     }
     Ok(take_raw(options, keys))
+}
+fn take_stream_transport_alias(
+    options: &mut RecordOptions,
+    keys: &[&str],
+) -> RecordResult<Option<&'static str>> {
+    for (key, value) in &mut options.occurrences {
+        if keys.contains(&key.as_str()) {
+            value.make_ascii_lowercase();
+        }
+    }
+    let mut selected = None;
+    let mut saw_nonempty_tcp = false;
+    for key in keys {
+        for value in options.claims(key) {
+            let normalized = stream_transport(value)?;
+            saw_nonempty_tcp |= normalized == "tcp" && !value.is_empty();
+            match selected {
+                None => selected = Some(normalized),
+                Some(previous) if previous == normalized => {}
+                Some(_) => return Err("record transport aliases conflict"),
+            }
+        }
+    }
+    let selected = selected.map(|normalized| {
+        if normalized == "tcp" && !saw_nonempty_tcp {
+            ""
+        } else {
+            normalized
+        }
+    });
+    for key in keys {
+        options.remove(key);
+    }
+    Ok(selected)
 }
 fn take_option(options: &mut RecordOptions, keys: &[&str]) -> Option<String> {
     take_raw(options, keys).filter(|value| !value.is_empty())

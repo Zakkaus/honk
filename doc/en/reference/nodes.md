@@ -140,7 +140,7 @@ An incorrect or non-base64 key fails handler construction.
 
 ### Stream transports
 
-Trojan and VLESS URL links select transport with `type=` or its `network=` alias. For `ws`, `path` maps to `ws_path` and `host` maps to `ws_host`; for `grpc`, `serviceName` or `service_name` maps to `grpc_service`. `sni` is independent. `alpn` is accepted for compatibility but not stored. Configuration validation admits only TCP, WebSocket, and gRPC.
+Stream-capable share links select transport with `type=` or its `network=` alias. Empty text and `tcp` mean raw TCP; `ws` and `grpc` select WebSocket and gRPC. All supplied aliases, including compatible `obfs` declarations and repeated query keys, must agree before assignment. Unsupported names such as `h2` and `kcp` reject the link during parsing. For `ws`, `path` maps to `ws_path` and `host` maps to `ws_host`; for `grpc`, `serviceName` or `service_name` maps to `grpc_service`. `sni` is independent. `alpn` is accepted for compatibility but not stored.
 
 ```dae
 node {
@@ -150,6 +150,8 @@ node {
 ```
 
 VMess accepts v2rayN Base64 JSON (`net`, `host`, `path`, `sni`) and Shadowrocket's `vmess://base64(auto:UUID@host:port)?...` authority form. The latter maps `tls`, `peer`/`sni`, `obfs=websocket|grpc`, `obfsParam`, `path`, and `remark`; standard/URL-safe Base64 and optional padding are accepted. Encoded-authority VMess requires AEAD authentication and `auto`/`aes-128-gcm`; unsupported ciphers and REALITY parameters are rejected, not silently replaced.
+
+VMess JSON `net` and Shadowrocket transport parameters select only the stream transport. They no longer populate packet-network capability; an omitted packet restriction retains the existing default UDP allowance. Valid empty transport spelling is preserved where already used.
 
 Live interoperability has been verified for VLESS TCP+REALITY+Vision, TCP+REALITY, TCP+WS, TCP+WS+TLS, and TCP+gRPC. Vision's supported direct-copy combination is raw TCP with TLS or REALITY, not WS/gRPC.
 

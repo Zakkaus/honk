@@ -4,7 +4,7 @@ mod fields;
 pub(super) mod options;
 
 use honk_config::node::{Node, OutboundConfig};
-use honk_config::options::vocab::optional_flow;
+use honk_config::options::vocab::{optional_flow, stream_transport};
 use honk_config::types::NodeProtocol;
 use serde_yaml::Mapping;
 
@@ -383,9 +383,7 @@ fn apply_stream(mapping: &Mapping, node: &mut Node, udp: Option<bool>) -> Result
         yaml_text_alias(mapping, &["network"])?.filter(|network| !network.trim().is_empty())
     {
         if let Some(transport) = node.transport_mut() {
-            if !matches!(network.as_str(), "tcp" | "ws" | "grpc") {
-                return Err("unsupported stream transport");
-            }
+            stream_transport(&network)?;
             transport.transport = network;
         } else if let Some(config) = node.anytls_mut() {
             if !matches!(network.as_str(), "tcp" | "udp") {

@@ -543,3 +543,24 @@ fn b2_record_explicit_empty_overrides_positional_credentials() {
     assert_eq!(credentials.username.as_deref(), Some(""));
     assert_eq!(credentials.password.as_deref(), Some(""));
 }
+
+const C10_RECORD_TRANSPORTS: &str = r#"raw-tcp=trojan,raw.example,443,password=secret,transport=tcp,network=tcp
+ws-equal=trojan,ws.example,443,password=secret,transport=WS,transport=ws,network=ws
+grpc-equal=trojan,grpc.example,443,password=secret,transport=grpc,network=grpc
+transport-conflict=trojan,conflict.example,443,password=secret,transport=ws,network=grpc
+unsupported-h2=trojan,h2.example,443,password=secret,transport=h2"#;
+
+#[test]
+fn c10_record_transport_aliases_resolve_before_loss() {
+    let nodes = parse_records_subscription(C10_RECORD_TRANSPORTS, None).unwrap();
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>(),
+        ["raw-tcp", "ws-equal", "grpc-equal"]
+    );
+    assert_eq!(nodes[0].transport().unwrap().transport, "tcp");
+    assert_eq!(nodes[1].transport().unwrap().transport, "ws");
+    assert_eq!(nodes[2].transport().unwrap().transport, "grpc");
+}

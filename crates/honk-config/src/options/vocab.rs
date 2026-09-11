@@ -39,6 +39,17 @@ pub fn optional_flow(value: Option<&str>) -> Result<Option<&str>, &'static str> 
     }
 }
 
+/// Normalize a stream transport claim while retaining the caller's source
+/// spelling for storage. Empty and TCP both mean raw TCP.
+pub fn stream_transport(value: &str) -> Result<&'static str, &'static str> {
+    match value {
+        "" | "tcp" => Ok("tcp"),
+        "ws" => Ok("ws"),
+        "grpc" => Ok("grpc"),
+        _ => Err("unsupported stream transport"),
+    }
+}
+
 /// Decode share-link certificate-verification text into the skip-verification
 /// boolean used by the canonical TLS options.
 pub fn verification_text(value: &str) -> Result<bool, &'static str> {

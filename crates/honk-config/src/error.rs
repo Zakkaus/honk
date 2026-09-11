@@ -101,6 +101,14 @@ impl DetailedConfigError {
         };
         if let Some(text) = text {
             let reason = match text {
+                "unsupported stream transport"
+                | "conflicting stream transport aliases"
+                | "unsupported VLESS obfs transport"
+                | "unsupported VMess obfs transport" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes").field("transport"),
+                    "stream transport must be tcp, ws, or grpc; aliases must agree",
+                )),
                 "invalid certificate verification boolean"
                 | "conflicting certificate verification aliases" => Some((
                     "invalid-config-value",

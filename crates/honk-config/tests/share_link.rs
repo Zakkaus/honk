@@ -15,6 +15,20 @@ fn vmess_link(json: &str) -> String {
     format!("vmess://{}", b64(json))
 }
 
+fn vmess_transport_fixture(net: Option<&str>) -> String {
+    let mut fixture = serde_json::json!({
+        "ps": "vmess-transport-fixture",
+        "add": "vmess.example.com",
+        "port": 443,
+        "id": UUID_A,
+        "tls": "tls",
+    });
+    if let Some(net) = net {
+        fixture["net"] = serde_json::json!(net);
+    }
+    serde_json::to_string(&fixture).unwrap()
+}
+
 const UUID_A: &str = "b831381d-6324-4d53-ad4f-8cda48b30811";
 const UUID_B: &str = "00000000-0000-0000-0000-000000000001";
 
@@ -364,8 +378,8 @@ fn test_vmess_full_fields_ws_tls() {
         Some("b831381d-6324-4d53-ad4f-8cda48b30811")
     );
     assert_eq!(node.vmess().unwrap().encryption.as_deref(), Some("auto"));
+    assert_eq!(node.network(), None);
     assert_eq!(node.transport().unwrap().transport, "ws");
-    assert_eq!(node.network(), Some("ws"));
     assert!(node.tls().unwrap().enabled);
     assert_eq!(
         node.transport().unwrap().ws_host.as_deref(),
@@ -1896,4 +1910,77 @@ fn c09_flat_credential_aliases_preserve_equal_conflicts_and_empty() {
         numeric.is_err(),
         "flat typed credentials must not coerce numbers"
     );
+}
+
+#[test]
+fn c10_vmess_json_net_maps_only_to_stream_transport() {
+    for (net, expected_transport) in [
+        (Some("tcp"), "tcp"),
+        (Some("ws"), "ws"),
+        (Some("grpc"), "grpc"),
+        (None, ""),
+    ] {
+        let node = Node::from_share_link(&vmess_link(&vmess_transport_fixture(net))).unwrap();
+        assert_eq!(
+            node.transport().unwrap().transport,
+            expected_transport,
+            "{net:?}"
+        );
+        assert_eq!(
+            node.network(),
+            None,
+            "{net:?} must not become packet network"
+        );
+    }
+    assert!(
+        Node::from_share_link(&vmess_link(&vmess_transport_fixture(Some("h2")))).is_err(),
+        "unsupported VMess stream transport"
+    );
+}
+
+#[test]
+fn c10_share_link_stream_transport_aliases_resolve_before_storage() {
+    for (query, expected_transport) in [
+        ("type=ws", "ws"),
+        ("type=ws&type=ws", "ws"),
+        ("type=ws&network=ws&obfs=websocket", "ws"),
+        ("type=tcp&obfs=", "tcp"),
+        ("type=&network=tcp", ""),
+        ("network=tcp&type=", ""),
+        ("network=grpc&obfs=grpc", "grpc"),
+    ] {
+        let node = Node::from_share_link(&format!(
+            "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?{query}"
+        ))
+        .unwrap();
+        assert_eq!(
+            node.transport().unwrap().transport,
+            expected_transport,
+            "{query}"
+        );
+    }
+
+    let authority = b64(&format!("auto:{UUID_A}@example.com:443"));
+    let encoded = Node::from_share_link(&format!(
+        "vmess://{authority}?tls=1&type=&network=tcp&network=tcp"
+    ))
+    .unwrap();
+    assert_eq!(encoded.transport().unwrap().transport, "");
+    assert_eq!(encoded.network(), None);
+
+    for query in [
+        "type=ws&network=grpc",
+        "type=ws&type=grpc",
+        "type=tcp&obfs=websocket",
+        "type=h2",
+        "obfs=h2",
+    ] {
+        assert!(
+            Node::from_share_link(&format!(
+                "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?{query}"
+            ))
+            .is_err(),
+            "{query}"
+        );
+    }
 }

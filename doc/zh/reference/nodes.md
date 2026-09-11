@@ -140,7 +140,7 @@ TOML、YAML 与 JSON 继续使用旧的扁平节点键。加载时只读取所�
 
 ### 流传输
 
-Trojan 与 VLESS URL 链接用 `type=` 或其 `network=` 别名选择 transport。对于 `ws`，`path` 映射到 `ws_path`，`host` 映射到 `ws_host`；对于 `grpc`，`serviceName` 或 `service_name` 映射到 `grpc_service`。`sni` 独立生效。`alpn` 为兼容而接受，但不会存储。配置校验只允许 TCP、WebSocket 与 gRPC。
+支持流传输的分享链接用 `type=` 或其 `network=` 别名选择传输方式。空文本和 `tcp` 表示裸 TCP；`ws`、`grpc` 分别选择 WebSocket、gRPC。赋值前会比较所有已提供的别名，包括兼容的 `obfs` 声明和重复查询键；不一致则拒绝链接。`h2`、`kcp` 等不支持的名称会在解析时被拒绝。对于 `ws`，`path` 映射到 `ws_path`，`host` 映射到 `ws_host`；对于 `grpc`，`serviceName` 或 `service_name` 映射到 `grpc_service`。`sni` 独立生效。`alpn` 为兼容而接受，但不会存储。
 
 ```dae
 node {
@@ -150,6 +150,8 @@ node {
 ```
 
 VMess 接受 v2rayN Base64 JSON（`net`、`host`、`path`、`sni`），也接受 Shadowrocket 的 `vmess://base64(auto:UUID@host:port)?...` authority 形式。后者映射 `tls`、`peer`/`sni`、`obfs=websocket|grpc`、`obfsParam`、`path` 和 `remark`；接受 standard / URL-safe Base64，有无 padding 均可。编码 authority 的 VMess 要求 AEAD 认证及 `auto`/`aes-128-gcm`；不支持的 cipher 和 REALITY 参数会被拒绝，不会静默替换。
+
+VMess JSON 的 `net` 和 Shadowrocket 传输参数只选择流传输方式，不再写入数据包网络能力字段。未指定数据包限制时，保留原有默认 UDP 能力；已有的有效空传输字段也保留原始写法。
 
 VLESS 已完成以下 live 互通验证：TCP+REALITY+Vision、TCP+REALITY、TCP+WS、TCP+WS+TLS 与 TCP+gRPC。Vision 支持的 direct-copy 组合是带 TLS 或 REALITY 的裸 TCP，而不是 WS/gRPC。
 

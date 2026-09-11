@@ -1,11 +1,10 @@
 //! Normalize sing-box outbounds into the shared Clash-shaped vocabulary.
 
-use honk_config::options::vocab::optional_text;
+use honk_config::options::vocab::{optional_text, stream_transport};
 use honk_config::types::NodeProtocol;
 use serde_yaml::{Mapping, Value};
 
 use super::{NodeResult, move_credential_strings, move_strings, put, take_optional_string};
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PacketNetwork {
     Both,
@@ -425,7 +424,6 @@ fn normalize_vless_uot(source: &mut Mapping, proxy: &mut Mapping) -> Result<bool
     put(proxy, "udp-over-tcp", Value::Mapping(options));
     Ok(true)
 }
-
 fn normalize_transport(source: &mut Mapping, proxy: &mut Mapping) -> Result<(), &'static str> {
     let Some(value) = source.remove("transport") else {
         return Ok(());
@@ -442,12 +440,26 @@ fn normalize_transport(source: &mut Mapping, proxy: &mut Mapping) -> Result<(), 
         None if transport.values().all(|value| !active(value)) => return Ok(()),
         None => return Err("sing-box transport type is missing"),
     };
-    match kind.as_str() {
-        "" if transport.values().all(|value| !active(value)) => Ok(()),
-        "" => Err("sing-box transport type is missing"),
+    let normalized = stream_transport(&kind)?;
+    if kind.is_empty() {
+        return if transport.values().any(active) {
+            Err("sing-box raw TCP transport has unsupported settings")
+        } else {
+            Ok(())
+        };
+    }
+    match normalized {
+        "tcp" => {
+            reject_active_remainder(
+                &transport,
+                "sing-box raw TCP transport has unsupported settings",
+            )?;
+            put(proxy, "network", Value::String(kind));
+            Ok(())
+        }
         "ws" => normalize_ws_transport(transport, proxy),
         "grpc" => normalize_grpc_transport(transport, proxy),
-        _ => Err("unsupported sing-box stream transport"),
+        _ => unreachable!("stream_transport returned an unknown transport"),
     }
 }
 

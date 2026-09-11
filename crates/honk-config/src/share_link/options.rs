@@ -2,7 +2,7 @@
 
 use crate::error::ConfigError;
 use crate::node::{Hysteria2Config, Node, OutboundConfig, QuicOptions, VlessConfig};
-use crate::options::vocab::{optional_flow, optional_text, verification_text};
+use crate::options::vocab::{optional_flow, optional_text, stream_transport, verification_text};
 use crate::types::{NodeProtocol, parse_duration_secs};
 
 #[derive(Default)]
@@ -59,7 +59,14 @@ pub(super) fn parse_query(
         if shadowrocket_vmess
             && !matches!(
                 key.as_str(),
-                "sni" | "peer" | "allowInsecure" | "allow_insecure" | "insecure"
+                "sni"
+                    | "peer"
+                    | "allowInsecure"
+                    | "allow_insecure"
+                    | "insecure"
+                    | "type"
+                    | "network"
+                    | "obfs"
             )
             && query.get(&key).is_some_and(|previous| previous != &value)
         {
@@ -251,12 +258,49 @@ pub(super) fn apply_tls(
     }
     Ok(())
 }
-
-pub(super) fn apply_transport(
-    node: &mut Node,
+fn resolve_stream_transport(
     query: &Query,
-    shadowrocket: bool,
-) -> Result<(), ConfigError> {
+    protocol: NodeProtocol,
+) -> Result<Option<&str>, ConfigError> {
+    let mut resolved = None;
+    for (key, value) in &query.0 {
+        let canonical = match key.as_str() {
+            "type" | "network" => stream_transport(value)
+                .map_err(|_| ConfigError::Parse("unsupported stream transport".into()))?,
+            "obfs" if matches!(protocol, NodeProtocol::VLess | NodeProtocol::VMess) => {
+                match value.as_str() {
+                    "" | "none" => "tcp",
+                    "websocket" => "ws",
+                    "grpc" => "grpc",
+                    _ => {
+                        return Err(ConfigError::Parse(
+                            if protocol == NodeProtocol::VLess {
+                                "unsupported VLESS obfs transport"
+                            } else {
+                                "unsupported VMess obfs transport"
+                            }
+                            .into(),
+                        ));
+                    }
+                }
+            }
+            _ => continue,
+        };
+        if resolved.is_some_and(|previous| previous != canonical) {
+            return Err(ConfigError::Parse(
+                "conflicting stream transport aliases".into(),
+            ));
+        }
+        resolved = Some(canonical);
+    }
+    Ok(query
+        .get("type")
+        .or_else(|| query.get("network"))
+        .map(String::as_str)
+        .or(resolved))
+}
+
+pub(super) fn apply_transport(node: &mut Node, query: &Query) -> Result<(), ConfigError> {
     let protocol = node.protocol();
     let host_fallback = query.get("host").map(String::as_str);
     let host_sni_fallback = optional_text([host_fallback])
@@ -266,50 +310,14 @@ pub(super) fn apply_transport(
     } else {
         None
     };
-    let shadowrocket_vmess = shadowrocket && protocol == NodeProtocol::VMess;
     let mut host_consumed = false;
     if let Some(transport) = node.transport_mut() {
-        if let Some(value) = query.get("type").or_else(|| query.get("network")) {
-            transport.transport = value.clone();
+        if let Some(value) = resolve_stream_transport(query, protocol)? {
+            transport.transport = value.to_string();
         }
-        if matches!(protocol, NodeProtocol::VLess | NodeProtocol::VMess)
-            && let Some(obfs) = query.get("obfs")
-        {
-            let alias = match obfs.as_str() {
-                "" | "none" => "tcp",
-                "websocket" => "ws",
-                "grpc" => "grpc",
-                _ => {
-                    return Err(ConfigError::Parse(
-                        if protocol == NodeProtocol::VLess {
-                            "unsupported VLESS obfs transport"
-                        } else {
-                            "unsupported VMess obfs transport"
-                        }
-                        .into(),
-                    ));
-                }
-            };
-            if query
-                .get("type")
-                .or_else(|| query.get("network"))
-                .is_some_and(|value| value != alias)
-            {
-                return Err(ConfigError::Parse(
-                    if protocol == NodeProtocol::VLess {
-                        "conflicting VLESS transports"
-                    } else {
-                        "conflicting VMess transports"
-                    }
-                    .into(),
-                ));
-            }
-            transport.transport = alias.to_string();
-        }
-        if shadowrocket_vmess && !matches!(transport.transport.as_str(), "tcp" | "ws" | "grpc") {
-            return Err(ConfigError::Parse("unsupported VMess transport".into()));
-        }
-        match transport.transport.as_str() {
+        let transport_kind = stream_transport(&transport.transport)
+            .map_err(|_| ConfigError::Parse("unsupported stream transport".into()))?;
+        match transport_kind {
             "ws" => {
                 if let Some(value) = host_fallback.or(obfs_host) {
                     transport.ws_host = Some(value.to_string());
@@ -323,7 +331,7 @@ pub(super) fn apply_transport(
                     .or_else(|| query.get("service_name"))
                     .or_else(|| {
                         (matches!(protocol, NodeProtocol::VLess | NodeProtocol::VMess)
-                            && query.get("obfs").is_some_and(|value| value == "grpc"))
+                            && query.values("obfs").any(|value| value == "grpc"))
                         .then(|| query.get("path"))
                         .flatten()
                     })
@@ -338,14 +346,6 @@ pub(super) fn apply_transport(
         && let Some(tls) = node.tls_mut()
     {
         tls.sni = Some(value.to_string());
-    }
-    if shadowrocket_vmess {
-        let network = node
-            .transport()
-            .map(|transport| transport.transport.clone());
-        if let Some(config) = node.vmess_mut() {
-            config.network = network;
-        }
     }
     Ok(())
 }

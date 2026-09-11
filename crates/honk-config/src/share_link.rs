@@ -23,7 +23,7 @@ use base64::Engine as _;
 
 use crate::error::ConfigError;
 use crate::node::{Node, OutboundConfig, ShadowsocksConfig};
-use crate::options::vocab::optional_text;
+use crate::options::vocab::{optional_text, stream_transport};
 
 mod options;
 
@@ -111,7 +111,7 @@ impl Node {
             .unwrap_or_else(|| format!("{}-{}", url.scheme(), node.host));
 
         options::apply_tls(&mut node, &query, shadowrocket, source, emit)?;
-        options::apply_transport(&mut node, &query, shadowrocket)?;
+        options::apply_transport(&mut node, &query)?;
         options::apply_protocol(&mut node, &query, embedded_hop_ports, shadowrocket)?;
         node.validate_protocol()?;
         node.id = node.derive_id();
@@ -254,9 +254,11 @@ impl VmessLinkJson {
             .ok_or_else(|| ConfigError::Parse("invalid vmess link: missing user id".into()))?;
 
         let transport = self.net.unwrap_or_default();
+        let transport_kind = stream_transport(&transport)
+            .map_err(|_| ConfigError::Parse("unsupported stream transport".into()))?;
 
         let mut stream = crate::node::StreamTransportOptions {
-            transport: transport.clone(),
+            transport,
             ..Default::default()
         };
         let mut tls = crate::node::TlsOptions {
@@ -269,7 +271,7 @@ impl VmessLinkJson {
         let sni_claim = optional_text([self.sni.as_deref()])
             .map_err(|_| ConfigError::Parse("invalid VMess TLS server name".into()))?;
         if let Some(value) = host_claim.as_deref() {
-            if transport == "ws" {
+            if transport_kind == "ws" {
                 stream.ws_host = Some(value.to_string());
             } else if let Some(value) = host_sni_claim {
                 tls.sni = Some(value.to_string());
@@ -279,7 +281,7 @@ impl VmessLinkJson {
             tls.sni = Some(value.to_string());
         }
         if let Some(value) = self.path.filter(|value| !value.is_empty()) {
-            match transport.as_str() {
+            match transport_kind {
                 "ws" => stream.ws_path = Some(value),
                 "grpc" => stream.grpc_service = Some(value),
                 _ => {}
@@ -293,7 +295,7 @@ impl VmessLinkJson {
             outbound: crate::node::OutboundConfig::Vmess(crate::node::VmessConfig {
                 uuid: Some(id),
                 encryption: self.scy.or(self.security),
-                network: (!transport.is_empty()).then_some(transport),
+                network: None,
                 transport: stream,
                 tls,
             }),

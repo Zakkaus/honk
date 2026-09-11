@@ -122,7 +122,7 @@ vless://00000000-0000-4000-8000-000000000000@example.com:443?security=tls#edge
 | `password` | `password` | 可选 string；VLESS 使用下文优先级。 |
 | `cipher` | `encryption` | 可选加密算法；VLESS 的字段优先级见下文。 |
 | `plugin`, `plugin-opts` | — | 不支持；任一字段具有非空值时，条目会在发布节点前被跳过，mapping 类型的 options 也会被拒绝。 |
-| `network` | `transport` | 可选 transport string。 |
+| `network` | `transport` 或数据包网络能力 | Trojan/VMess/VLESS 使用流传输方式（`tcp`、`ws`、`grpc`）；AnyTLS 使用数据包网络能力。 |
 | `tls` | `tls` | 可选 bool。Trojan、AnyTLS、Hysteria2、TUIC 和 Juicity 默认启用 TLS，并拒绝显式关闭。 |
 | `servername`、`server-name`、`sni` | `sni` | 空值或纯空白名称视为未指定；非空别名必须逐字节一致。 |
 | `skip-cert-verify`、`skip_cert_verify`、`insecure` | `skip_cert_verify` | 须使用原生布尔值；已提供的别名必须一致。 |
@@ -189,6 +189,8 @@ SIP008 version 1/2 wrapper（`{"servers":[...]}`）及裸服务器数组会导�
 
 sing-box 配置从 `outbounds` 导入受支持的 Shadowsocks、SOCKS5、VMess、VLESS、Trojan、Hysteria2、TUIC、Juicity 和 AnyTLS 条目。结构性 `selector`、`urltest`、`direct`、`block` 与 `dns` 条目不是代理节点。TLS/SNI、REALITY、WebSocket/gRPC、VLESS packet mode 和受支持的协议调优会通过共同的节点构建逻辑规范化。只有未启用 multiplex/UoT、未限制为仅 TCP 且没有显式 packet encoding 时，VLESS 才默认使用 XUDP。gRPC service name 为空或省略时保留 sing-box 的空 service，不套用 honk 的 `GunService` 默认值。Hysteria2 可以只提供 `server_ports`，以第一个跳跃端口作为名义端点。不支持的链式代理、线协议功能和认证要求不会被静默丢弃。每节点 uTLS 指纹提示不会覆盖 honk 的进程级 TLS 设置。
 
+在 sing-box 输入中，`network` 表示数据包网络能力，不是流传输类型；`transport.type` 选择流传输方式。`h2` 等不支持的名称会使条目被拒绝，不会被当作裸 TCP。
+
 显式 sing-box 原生 VLESS UDP（`packet_encoding: ""` 且未限制为仅 TCP、未启用 wrapper）尚不支持，会跳过；启用 H2MUX 时由它承载 packet 路径，即使来源同时显式写出 `packet_encoding: "xudp"`。
 
 ### Surge、Surfboard、Loon 与 Quantumult X
@@ -198,6 +200,8 @@ sing-box 配置从 `outbounds` 导入受支持的 Shadowsocks、SOCKS5、VMess�
 显式凭据和加密方法别名在转换前须一致。具名记录仅在对应具名值缺失时使用位置参数；有效的显式值不会因位置参数不同而冲突。Quantumult X 不使用位置参数回退。显式空凭据参与别名比较，不会触发回退。
 
 允许为空的可选记录凭据会逐字节保留空字符串和带引号的空白：SOCKS 用户名与密码、Hysteria2 认证值及 TUIC 密码。显式空值仍优先于位置参数；要求非空凭据的协议仍会拒绝空值。
+
+记录中的 `transport`/`network` 流传输声明在赋值前比较，包括重复键。空文本与 `tcp` 都表示裸 TCP；声明冲突或包含不支持的传输方式时，拒绝该条目。
 
 受支持的记录把凭据、TLS/SNI、WebSocket/gRPC、REALITY 和已实现的协议选项映射到同一节点模型。Quantumult X 的 `obfs=wss` 同时使用 `obfs-host` 作为 WebSocket Host 和默认 TLS SNI；显式 TLS 主机名优先。SSR、不支持的插件/混淆及传输方式会被跳过，不会冒充另一种协议导入。
 
