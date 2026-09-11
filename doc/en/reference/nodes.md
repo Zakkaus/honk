@@ -69,7 +69,7 @@ The Node model exposes the fields below. Share links populate operator-facing fi
 | `reality_short_id` | string? | null | REALITY short ID from `sid` |
 | `reality_spider_x` | string? | null | Stored `spx`; a REALITY link defaults it to `/` |
 | `flow` | string? | null | VLESS flow from nonempty `flow` or Shadowrocket `xtls=2`; only `xtls-rprx-vision` is supported |
-| `network` | string? | null | Protocol network/capability hint; VMess JSON `net` and subscription import populate it |
+| `network` | string? | null | Packet capability for supported protocols; independent of VMess JSON `net` and other stream-transport fields |
 | `ws_path` / `ws_host` | string? | null | WebSocket `path` and Host header |
 | `grpc_service` | string? | null | gRPC `serviceName` or `service_name` |
 | `hy2_auth` / `hy2_obfs` | string? | null | Hysteria2 authentication and salamander password |
@@ -121,6 +121,8 @@ Share-link verification booleans ignore surrounding whitespace and ASCII case. `
 | `block` | — | No | No | Reserved built-in reject outbound; no share-link scheme |
 
 `network` may further disable packet dialing for Trojan, AnyTLS, and non-legacy VLESS. AnyTLS rejects UDP payloads above 16 KiB, matching anytls-go 0.0.13's relay buffer. Legacy VLESS has no UDP, and VMess UDP is not implemented.
+
+For protocols that own `network`, flat structured input accepts comma-separated `tcp`/`udp` tokens, ignoring token whitespace and ASCII case. `tcp` disables UDP; `udp` and `tcp,udp` both permit UDP. Empty or whitespace-only text becomes absent and retains the protocol's default capability. Unknown tokens such as `quic`, or empty tokens inside a nonempty list, reject the node. This controls UDP admission only: `udp` does not add a TCP rejection policy.
 
 VMess and VLESS nodes still parse without the `rprx` Cargo feature, but no handler is registered and dialing fails with `No handler for protocol`. `honk-core` enables `rprx` by default.
 

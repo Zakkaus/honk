@@ -134,6 +134,8 @@ Hysteria2 导入 `password`/`auth`、`obfs: salamander` 与 `obfs-password`、�
 
 显式关闭的功能 block 按禁用处理，不会误判为启用未支持功能。原生支持 UDP 的协议接受 `udp: true`；节点模型无法保留显式 UDP 限制时会拒绝导入。TUIC 允许省略 password 或使用空密码。Hysteria2 和 Juicity 接受与运行时固定选择一致的 `h3` ALPN；Juicity 接收窗口固定为 8 MiB，因此拒绝非默认覆盖值。
 
+AnyTLS 按 `anytls-network`、适用的 `network`、`udp` 的顺序一次性解析数据包能力声明。空文本或 null 不提供网络声明。网络字符串使用逗号分隔的 `tcp`/`udp`；别名按是否允许 UDP 比较，因此 `udp` 与 `tcp,udp` 一致，而 `tcp` 与 `udp: true` 冲突。即使存在有效别名，`quic` 等未知值仍会使条目被拒绝。等价声明保留第一个显式网络字段的写法；仅提供布尔值时，才生成 `tcp` 或 `tcp,udp`。
+
 TCP TLS ALPN 列表成员及顺序原样保留；每个名称必须占 1–255 个 UTF-8 字节，带长度前缀的完整列表不得超过 65,533 字节。这是语法上限；完整 ClientHello 还受 TLS 库的大小限制。导入的 `alpn` 省略、为 null 或空列表时保留原有 TLS profile 默认值及节点 ID；扁平字段 `tls_alpn` 只接受省略或字符串数组，不接受 null。非空覆盖值参与节点身份派生；与关闭 TLS、REALITY、WebSocket 或 gRPC 组合时会拒绝，不会静默丢弃。只有实际 ALPN 列表包含 `h2` 时才发送 Chrome ALPS。分享链接原有的 ALPN 兼容行为不变；这里适用于结构化订阅导入及扁平模型字段 `tls_alpn`。
 
 #### VLESS transport 与 REALITY
@@ -191,6 +193,8 @@ sing-box 配置从 `outbounds` 导入受支持的 Shadowsocks、SOCKS5、VMess�
 
 在 sing-box 输入中，`network` 表示数据包网络能力，不是流传输类型；`transport.type` 选择流传输方式。`h2` 等不支持的名称会使条目被拒绝，不会被当作裸 TCP。
 
+在支持数据包限制的 sing-box 映射中，`network: udp` 与 `network: tcp,udp` 允许 UDP，`network: tcp` 则关闭 UDP。这些值不会额外禁止 TCP。现有 VLESS 数据包模式要求，以及无法表示网络限制的协议约束，仍然适用。
+
 显式 sing-box 原生 VLESS UDP（`packet_encoding: ""` 且未限制为仅 TCP、未启用 wrapper）尚不支持，会跳过；启用 H2MUX 时由它承载 packet 路径，即使来源同时显式写出 `packet_encoding: "xudp"`。
 
 ### Surge、Surfboard、Loon 与 Quantumult X
@@ -202,6 +206,8 @@ sing-box 配置从 `outbounds` 导入受支持的 Shadowsocks、SOCKS5、VMess�
 允许为空的可选记录凭据会逐字节保留空字符串和带引号的空白：SOCKS 用户名与密码、Hysteria2 认证值及 TUIC 密码。显式空值仍优先于位置参数；要求非空凭据的协议仍会拒绝空值。
 
 记录中的 `transport`/`network` 流传输声明在赋值前比较，包括重复键。空文本与 `tcp` 都表示裸 TCP；声明冲突或包含不支持的传输方式时，拒绝该条目。
+
+AnyTLS 记录中的 `network` 表示数据包能力，不是流传输方式。所有重复的 `network`、`udp` 和 `udp-relay` 值都会在选择前校验。等价声明保留第一个显式网络值的写法；任一值无效或冲突时，拒绝该记录。
 
 受支持的记录把凭据、TLS/SNI、WebSocket/gRPC、REALITY 和已实现的协议选项映射到同一节点模型。Quantumult X 的 `obfs=wss` 同时使用 `obfs-host` 作为 WebSocket Host 和默认 TLS SNI；显式 TLS 主机名优先。SSR、不支持的插件/混淆及传输方式会被跳过，不会冒充另一种协议导入。
 

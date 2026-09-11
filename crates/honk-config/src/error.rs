@@ -101,6 +101,11 @@ impl DetailedConfigError {
         };
         if let Some(text) = text {
             let reason = match text {
+                "invalid packet network" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes").field("network"),
+                    "packet network must contain only tcp or udp tokens",
+                )),
                 "unsupported stream transport"
                 | "conflicting stream transport aliases"
                 | "unsupported VLESS obfs transport"

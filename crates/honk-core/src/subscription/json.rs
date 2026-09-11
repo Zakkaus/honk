@@ -326,6 +326,43 @@ mod tests {
         assert_eq!(nodes[2].transport().unwrap().transport, "grpc");
     }
 
+    const C11_SING_BOX_PACKET_NETWORKS: &str = r#"{"outbounds":[
+      {"type":"vless","tag":"packet-udp-stream-ws","server":"udp.example","server_port":443,"uuid":"00000000-0000-4000-8000-000000000029","network":"udp","transport":{"type":"ws"}},
+      {"type":"vless","tag":"packet-list-stream-grpc","server":"list.example","server_port":443,"uuid":"00000000-0000-4000-8000-000000000030","network":"tcp,udp","transport":{"type":"grpc"}},
+      {"type":"vless","tag":"packet-empty","server":"empty.example","server_port":443,"uuid":"00000000-0000-4000-8000-000000000031","network":"","transport":{"type":"tcp"}},
+      {"type":"vless","tag":"packet-null","server":"null.example","server_port":443,"uuid":"00000000-0000-4000-8000-000000000032","network":null,"transport":{"type":"ws"}},
+      {"type":"anytls","tag":"native-anytls-udp","server":"native-anytls.example","server_port":443,"password":"password","network":"udp","tls":{"enabled":true}},
+      {"type":"vless","tag":"packet-unknown","server":"unknown.example","server_port":443,"uuid":"00000000-0000-4000-8000-000000000033","network":"quic","transport":{"type":"tcp"}}
+    ]}"#;
+
+    #[test]
+    fn c11_sing_box_packet_networks_do_not_rewrite_stream_transport() {
+        let nodes = parse_json_subscription(json(C11_SING_BOX_PACKET_NETWORKS), None).unwrap();
+        assert_eq!(nodes.len(), 5);
+        assert_eq!(
+            nodes
+                .iter()
+                .map(|node| node.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "packet-udp-stream-ws",
+                "packet-list-stream-grpc",
+                "packet-empty",
+                "packet-null",
+                "native-anytls-udp"
+            ]
+        );
+        assert_eq!(nodes[0].network(), Some("tcp,udp"));
+        assert_eq!(nodes[0].transport().unwrap().transport, "ws");
+        assert_eq!(nodes[1].network(), Some("tcp,udp"));
+        assert_eq!(nodes[1].transport().unwrap().transport, "grpc");
+        assert_eq!(nodes[2].network(), None);
+        assert_eq!(nodes[2].transport().unwrap().transport, "tcp");
+        assert_eq!(nodes[3].network(), None);
+        assert_eq!(nodes[3].transport().unwrap().transport, "ws");
+        assert_eq!(nodes[4].anytls().unwrap().network.as_deref(), Some("udp"));
+    }
+
     #[test]
     fn sing_box_empty_grpc_and_tuic_defaults_are_preserved() {
         let nodes = parse_json_subscription(

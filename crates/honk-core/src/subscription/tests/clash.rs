@@ -832,3 +832,91 @@ fn c09_clash_rejects_nonfinite_credential_even_with_valid_alias() {
         Some("usable-auth")
     );
 }
+
+const C11_CLASH_ANYTLS_NETWORK: &str = r#"proxies:
+  - name: anytls-udp-first
+    type: anytls
+    server: udp-first.example
+    port: 443
+    password: password
+    anytls-network: udp
+    network: tcp,udp
+    udp: true
+  - name: anytls-list-first
+    type: anytls
+    server: list-first.example
+    port: 443
+    password: password
+    anytls-network: tcp,udp
+    network: udp
+    udp: true
+  - name: anytls-boolean-only
+    type: anytls
+    server: boolean-only.example
+    port: 443
+    password: password
+    udp: true
+  - name: anytls-tcp
+    type: anytls
+    server: tcp.example
+    port: 443
+    password: password
+    anytls-network: tcp
+    udp: false
+  - name: anytls-empty
+    type: anytls
+    server: empty.example
+    port: 443
+    password: password
+    anytls-network: ""
+    network: null
+  - name: anytls-conflict
+    type: anytls
+    server: conflict.example
+    port: 443
+    password: password
+    anytls-network: tcp
+    udp: true
+  - name: anytls-unsupported
+    type: anytls
+    server: unsupported.example
+    port: 443
+    password: password
+    network: quic
+"#;
+
+#[test]
+fn c11_clash_anytls_network_aliases_resolve_before_udp() {
+    let nodes = parse_clash_subscription(C11_CLASH_ANYTLS_NETWORK, None).unwrap();
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "anytls-udp-first",
+            "anytls-list-first",
+            "anytls-boolean-only",
+            "anytls-tcp",
+            "anytls-empty"
+        ]
+    );
+    assert_eq!(nodes[0].anytls().unwrap().network.as_deref(), Some("udp"));
+    assert_eq!(
+        nodes[1].anytls().unwrap().network.as_deref(),
+        Some("tcp,udp")
+    );
+    assert_eq!(
+        nodes[2].anytls().unwrap().network.as_deref(),
+        Some("tcp,udp")
+    );
+    assert_eq!(nodes[3].anytls().unwrap().network.as_deref(), Some("tcp"));
+    assert_eq!(nodes[4].anytls().unwrap().network, None);
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| (honk_outbound::descriptor::descriptor(node.protocol()).supports_udp)(node))
+            .collect::<Vec<_>>(),
+        [true, true, true, false, true]
+    );
+}

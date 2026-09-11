@@ -4,7 +4,7 @@ mod fields;
 pub(super) mod options;
 
 use honk_config::node::{Node, OutboundConfig};
-use honk_config::options::vocab::{optional_flow, stream_transport};
+use honk_config::options::vocab::{optional_flow, packet_network, stream_transport};
 use honk_config::types::NodeProtocol;
 use serde_yaml::Mapping;
 
@@ -359,7 +359,6 @@ fn apply_protocol(mapping: &Mapping, node: &mut Node) -> Result<(), &'static str
         }
         OutboundConfig::AnyTls(config) => {
             config.password = password;
-            config.network = yaml_text_alias(mapping, &["anytls-network"])?;
             config.min_idle_session =
                 yaml_u64_alias(mapping, &["min-idle-session", "min_idle_session"])?
                     .map(|value| {
@@ -377,29 +376,60 @@ fn apply_protocol(mapping: &Mapping, node: &mut Node) -> Result<(), &'static str
     }
     Ok(())
 }
-
-fn apply_stream(mapping: &Mapping, node: &mut Node, udp: Option<bool>) -> Result<(), &'static str> {
-    if let Some(network) =
-        yaml_text_alias(mapping, &["network"])?.filter(|network| !network.trim().is_empty())
-    {
-        if let Some(transport) = node.transport_mut() {
-            stream_transport(&network)?;
-            transport.transport = network;
-        } else if let Some(config) = node.anytls_mut() {
-            if !matches!(network.as_str(), "tcp" | "udp") {
-                return Err("unsupported AnyTLS network");
-            }
-            config.network = Some(network);
+fn resolve_anytls_network(
+    mapping: &Mapping,
+    udp: Option<bool>,
+) -> Result<Option<String>, &'static str> {
+    let mut selected = None::<(&str, bool)>;
+    for key in ["anytls-network", "network"] {
+        let Some(value) = yaml_value(mapping, key) else {
+            continue;
+        };
+        if matches!(value, serde_yaml::Value::Null) {
+            continue;
+        }
+        let serde_yaml::Value::String(value) = value else {
+            return Err("AnyTLS network must be a string");
+        };
+        let Some(network_udp) = packet_network(value)? else {
+            continue;
+        };
+        match selected {
+            None => selected = Some((value, network_udp)),
+            Some((_, previous)) if previous == network_udp => {}
+            Some(_) => return Err("AnyTLS network aliases conflict"),
         }
     }
-    if let Some(udp) = udp {
-        let network = if udp { "tcp,udp" } else { "tcp" }.to_string();
-        match &mut node.outbound {
-            OutboundConfig::Trojan(config) => config.network = Some(network),
-            OutboundConfig::Vmess(config) => config.network = Some(network),
-            OutboundConfig::Vless(config) => config.network = Some(network),
-            OutboundConfig::AnyTls(config) => config.network = Some(network),
-            _ => {}
+    if let (Some((_, network_udp)), Some(udp)) = (selected, udp)
+        && network_udp != udp
+    {
+        return Err("AnyTLS network conflicts with udp");
+    }
+    if let Some((value, _)) = selected {
+        return Ok(Some(value.to_owned()));
+    }
+    Ok(udp.map(|udp| if udp { "tcp,udp" } else { "tcp" }.to_owned()))
+}
+
+fn apply_stream(mapping: &Mapping, node: &mut Node, udp: Option<bool>) -> Result<(), &'static str> {
+    if let Some(config) = node.anytls_mut() {
+        config.network = resolve_anytls_network(mapping, udp)?;
+    } else {
+        if let Some(network) =
+            yaml_text_alias(mapping, &["network"])?.filter(|network| !network.trim().is_empty())
+            && let Some(transport) = node.transport_mut()
+        {
+            stream_transport(&network)?;
+            transport.transport = network;
+        }
+        if let Some(udp) = udp {
+            let network = if udp { "tcp,udp" } else { "tcp" }.to_string();
+            match &mut node.outbound {
+                OutboundConfig::Trojan(config) => config.network = Some(network),
+                OutboundConfig::Vmess(config) => config.network = Some(network),
+                OutboundConfig::Vless(config) => config.network = Some(network),
+                _ => {}
+            }
         }
     }
 

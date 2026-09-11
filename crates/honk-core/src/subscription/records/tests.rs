@@ -564,3 +564,25 @@ fn c10_record_transport_aliases_resolve_before_loss() {
     assert_eq!(nodes[1].transport().unwrap().transport, "ws");
     assert_eq!(nodes[2].transport().unwrap().transport, "grpc");
 }
+
+const B4_RECORD_PACKET_REJECTIONS: &[&str] = &[
+    "anytls=example.com:443,password=fixture,network=quic,network=tcp,udp=false,tag=invalid",
+    "anytls=example.com:443,password=fixture,network=udp,network=tcp,tag=conflict",
+    "anytls=example.com:443,password=fixture,udp=true,udp=false,tag=conflict",
+    "anytls=example.com:443,password=fixture,udp-relay=true,udp-relay=false,tag=conflict",
+];
+const B4_RECORD_PACKET_AGREEMENT: &str =
+    r#"anytls=example.com:443,password=fixture,network=udp,network="tcp,udp",udp=true,udp-relay=on,tag=agreement"#;
+
+#[test]
+fn b4_record_packet_occurrences_cannot_hide_invalid_claims() {
+    for record in B4_RECORD_PACKET_REJECTIONS {
+        assert!(parse_records_subscription(record, None).is_err());
+    }
+}
+
+#[test]
+fn b4_record_equivalent_packet_claims_keep_first_spelling() {
+    let nodes = parse_records_subscription(B4_RECORD_PACKET_AGREEMENT, None).unwrap();
+    assert_eq!(nodes[0].network(), Some("udp"));
+}

@@ -1984,3 +1984,54 @@ fn c10_share_link_stream_transport_aliases_resolve_before_storage() {
         );
     }
 }
+
+#[test]
+fn c11_flat_packet_network_validates_and_preserves_spelling() {
+    for protocol in ["trojan", "anytls"] {
+        for network in ["tcp", "udp", "tcp,udp"] {
+            let node = flat_node_with(
+                protocol,
+                &[
+                    ("password", serde_json::json!("packet-password")),
+                    ("tls", serde_json::json!(true)),
+                    ("network", serde_json::json!(network)),
+                ],
+            )
+            .unwrap();
+            assert_eq!(node.network(), Some(network), "{protocol}:{network}");
+        }
+
+        let omitted = flat_node_with(
+            protocol,
+            &[
+                ("password", serde_json::json!("packet-password")),
+                ("tls", serde_json::json!(true)),
+            ],
+        )
+        .unwrap();
+        for empty in ["", " \t "] {
+            let node = flat_node_with(
+                protocol,
+                &[
+                    ("password", serde_json::json!("packet-password")),
+                    ("tls", serde_json::json!(true)),
+                    ("network", serde_json::json!(empty)),
+                ],
+            )
+            .unwrap();
+            assert_eq!(node.outbound, omitted.outbound, "{protocol}:{empty:?}");
+        }
+
+        for invalid in ["quic", "tcp,quic", "tcp,"] {
+            let result = flat_node_with(
+                protocol,
+                &[
+                    ("password", serde_json::json!("packet-password")),
+                    ("tls", serde_json::json!(true)),
+                    ("network", serde_json::json!(invalid)),
+                ],
+            );
+            assert!(result.is_err(), "{protocol}:{invalid}");
+        }
+    }
+}

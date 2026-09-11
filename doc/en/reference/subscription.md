@@ -134,6 +134,8 @@ Hysteria2 imports `password`/`auth`, `obfs: salamander` with `obfs-password`, up
 
 Explicit disabled feature blocks are treated as disabled, not as unsupported active features. `udp: true` is accepted for intrinsically UDP-capable protocols; an explicit UDP restriction is rejected where the node model cannot preserve it. TUIC permits an absent or empty password. Hysteria2 and Juicity accept an explicit `h3` ALPN matching their fixed runtime selection; Juicity receive windows remain fixed at 8 MiB, so non-default overrides are rejected.
 
+AnyTLS packet claims are resolved once in this order: `anytls-network`, applicable `network`, then `udp`. Empty or null network text supplies no claim. Network strings use comma-separated `tcp`/`udp` tokens; aliases are compared by UDP allowance, so `udp` and `tcp,udp` agree, while `tcp` with `udp: true` conflicts. Unknown tokens such as `quic` reject the entry even beside a valid alias. Equivalent claims retain the first explicit network spelling; only a boolean-only input synthesizes `tcp` or `tcp,udp`.
+
 TCP TLS ALPN list members are preserved verbatim, including order; each name must occupy 1–255 UTF-8 bytes and the length-prefixed list may not exceed 65,533 bytes. This is a syntactic ceiling; the complete ClientHello also has TLS-library size limits. Absent, null, or empty imported `alpn` lists preserve existing TLS-profile defaults and node IDs; the flat `tls_alpn` field accepts omission or a string array, not null. Nonempty overrides participate in identity and are rejected with disabled TLS, REALITY, WebSocket, or gRPC rather than silently discarded. Chrome ALPS is offered only when the actual ALPN list contains `h2`. Share-link ALPN compatibility is unchanged; this applies to structured subscription imports and the flat `tls_alpn` model field.
 
 #### VLESS transport and REALITY
@@ -191,6 +193,8 @@ sing-box profiles import supported entries from `outbounds`: Shadowsocks, SOCKS5
 
 In sing-box input, `network` is packet capability, not a stream type; `transport.type` selects the stream. Unsupported stream names such as `h2` reject the entry rather than becoming raw TCP.
 
+Where the sing-box mapping supports packet restrictions, `network: udp` and `network: tcp,udp` permit UDP, while `network: tcp` disables it. These values do not introduce UDP-only TCP rejection. Existing VLESS packet-mode requirements and restrictions for protocols without a representable packet-network field still apply.
+
 Explicit sing-box native VLESS UDP (`packet_encoding: ""` without TCP-only or an enabled wrapper) is unsupported and skipped; enabled H2MUX owns the packet path even when the source also spells out `packet_encoding: "xudp"`.
 
 ### Surge, Surfboard, Loon, and Quantumult X
@@ -202,6 +206,8 @@ Explicit credential and cipher aliases must agree before conversion. In named re
 Permitted optional record credentials retain empty strings and quoted whitespace byte for byte: SOCKS username/password, Hysteria2 authentication, and TUIC password. An explicit empty value still overrides a positional fallback; protocols requiring nonempty credentials continue to reject it.
 
 Record `transport`/`network` stream claims are compared before assignment, including repeated keys. Empty text and `tcp` have the same raw-TCP meaning; conflicting or unsupported stream claims reject the entry.
+
+AnyTLS record `network` occurrences are packet claims, not stream claims. Every repeated `network`, `udp`, and `udp-relay` value is validated before selection. Equivalent packet claims retain the first explicit network spelling; an invalid or conflicting occurrence rejects the record.
 
 Supported records map credentials, TLS/SNI, WebSocket/gRPC, REALITY, and implemented protocol options to the same node model. Quantumult X `obfs=wss` uses `obfs-host` for both WebSocket Host and the default TLS SNI; an explicit TLS hostname wins. SSR, unsupported plugins/obfuscation, and unsupported transports are skipped rather than imported as another protocol.
 

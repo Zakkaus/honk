@@ -69,7 +69,7 @@ Node 模型包含下列字段。分享链接从 scheme、userinfo、authority、
 | `reality_short_id` | string? | null | 来自 `sid` 的 REALITY short ID |
 | `reality_spider_x` | string? | null | 存储的 `spx`；REALITY 链接默认设为 `/` |
 | `flow` | string? | null | 来自非空 `flow` 或 Shadowrocket `xtls=2` 的 VLESS flow；只支持 `xtls-rprx-vision` |
-| `network` | string? | null | 协议网络/能力提示；VMess JSON `net` 与订阅导入会填充它 |
+| `network` | string? | null | 受支持协议的数据包网络能力；与 VMess JSON `net` 等流传输字段独立 |
 | `ws_path` / `ws_host` | string? | null | WebSocket `path` 与 Host header |
 | `grpc_service` | string? | null | gRPC `serviceName` 或 `service_name` |
 | `hy2_auth` / `hy2_obfs` | string? | null | Hysteria2 认证与 salamander 密码 |
@@ -121,6 +121,8 @@ TOML、YAML 与 JSON 继续使用旧的扁平节点键。加载时只读取所�
 | `block` | — | 否 | 否 | 保留的内置拒绝出站；没有分享链接 scheme |
 
 `network` 还可关闭 Trojan、AnyTLS 与非 legacy VLESS 的 packet 拨号。AnyTLS 会拒绝超过 16 KiB 的 UDP payload，与 anytls-go 0.0.13 的 relay buffer 一致。Legacy VLESS 没有 UDP，VMess UDP 尚未实现。
+
+对于支持 `network` 的协议，扁平结构化输入接受逗号分隔的 `tcp`/`udp`，忽略各项首尾空白和 ASCII 大小写。`tcp` 关闭 UDP；`udp` 与 `tcp,udp` 都允许 UDP。空文本或纯空白规范化为未指定，保留协议的默认能力。`quic` 等未知值，或非空列表中的空项，会使节点被拒绝。该字段只控制 UDP 准入；`udp` 不会额外禁止 TCP。
 
 没有 `rprx` Cargo feature 时，VMess 与 VLESS 节点仍能解析，但不会注册 handler，拨号以 `No handler for protocol` 失败。`honk-core` 默认启用 `rprx`。
 

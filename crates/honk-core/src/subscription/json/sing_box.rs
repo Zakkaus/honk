@@ -1,6 +1,6 @@
 //! Normalize sing-box outbounds into the shared Clash-shaped vocabulary.
 
-use honk_config::options::vocab::{optional_text, stream_transport};
+use honk_config::options::vocab::{optional_text, packet_network, stream_transport};
 use honk_config::types::NodeProtocol;
 use serde_yaml::{Mapping, Value};
 
@@ -298,7 +298,17 @@ fn normalize_juicity(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping,
 
 fn normalize_anytls(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, &'static str> {
     move_credential_strings(&mut source, &mut proxy, &[("password", "password")])?;
-    normalize_packet_network(&mut source, &mut proxy)?;
+    if let Some(network) = source.remove("network") {
+        match network {
+            Value::Null => {}
+            Value::String(network) => {
+                if packet_network(&network)?.is_some() {
+                    put(&mut proxy, "anytls-network", Value::String(network));
+                }
+            }
+            _ => return Err("sing-box packet network must be a string"),
+        }
+    }
     for (source_key, target_key) in [
         ("min_idle_session", "min-idle-session"),
         ("idle_session_check_interval", "idle-session-check-interval"),
@@ -327,20 +337,23 @@ fn normalize_packet_network(
     source: &mut Mapping,
     proxy: &mut Mapping,
 ) -> Result<PacketNetwork, &'static str> {
-    let Some(network) = source.remove("network") else {
-        return Ok(PacketNetwork::Both);
+    let network = match source.remove("network") {
+        None | Some(Value::Null) => return Ok(PacketNetwork::Both),
+        Some(network) => network,
     };
     let Value::String(network) = network else {
         return Err("sing-box packet network must be a string");
     };
-    match network.as_str() {
-        "" => Ok(PacketNetwork::Both),
-        "tcp" => {
+    match packet_network(&network)? {
+        None => Ok(PacketNetwork::Both),
+        Some(false) => {
             put(proxy, "udp", Value::Bool(false));
             Ok(PacketNetwork::TcpOnly)
         }
-        "udp" => Err("UDP-only sing-box packet capability is unsupported"),
-        _ => Err("unsupported sing-box packet network"),
+        Some(true) => {
+            put(proxy, "udp", Value::Bool(true));
+            Ok(PacketNetwork::Both)
+        }
     }
 }
 

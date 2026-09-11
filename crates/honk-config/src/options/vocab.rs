@@ -50,6 +50,27 @@ pub fn stream_transport(value: &str) -> Result<&'static str, &'static str> {
     }
 }
 
+/// Resolve a packet-network capability list into the consumer's UDP flag.
+pub fn packet_network(value: &str) -> Result<Option<bool>, &'static str> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let mut allows_udp = false;
+    for token in value.split(',') {
+        let token = token.trim();
+        if token.eq_ignore_ascii_case("tcp") {
+            continue;
+        }
+        if token.eq_ignore_ascii_case("udp") {
+            allows_udp = true;
+            continue;
+        }
+        return Err("invalid packet network");
+    }
+    Ok(Some(allows_udp))
+}
+
 /// Decode share-link certificate-verification text into the skip-verification
 /// boolean used by the canonical TLS options.
 pub fn verification_text(value: &str) -> Result<bool, &'static str> {

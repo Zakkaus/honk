@@ -6,7 +6,7 @@ use crate::diagnostic::{
     DetailedDiagnostic, DiagnosticSources, SafeValue, SettingPath, SourceRef,
     report_detailed_diagnostics,
 };
-use crate::options::vocab::optional_flow;
+use crate::options::vocab::{optional_flow, packet_network};
 use crate::types::NodeProtocol;
 
 use super::{
@@ -421,6 +421,13 @@ impl FlatNode {
     ) -> Result<Node, crate::ConfigError> {
         self.resolve_credential_aliases()?;
         self.strip_protocol_incompatible_fields(diagnostics, source, setting);
+        if let Some(value) = self.network.as_deref()
+            && packet_network(value)
+                .map_err(|_| crate::ConfigError::Validation("invalid packet network".into()))?
+                .is_none()
+        {
+            self.network = None;
+        }
         if self.protocol == NodeProtocol::VLess
             && optional_flow(self.flow.as_deref())
                 .map_err(|_| crate::ConfigError::Validation("unsupported VLESS flow".into()))?

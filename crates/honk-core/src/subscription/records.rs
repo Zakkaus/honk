@@ -256,14 +256,7 @@ fn consume_record_controls(protocol: &str, options: &mut RecordOptions) -> Recor
 }
 
 fn apply_udp_options(map: &mut Mapping, options: &mut RecordOptions) -> RecordResult<()> {
-    let udp = take_bool(options, &["udp"])?;
-    let relay = take_bool(options, &["udp-relay"])?;
-    if let (Some(udp), Some(relay)) = (udp, relay)
-        && udp != relay
-    {
-        return Err("record UDP aliases conflict");
-    }
-    if let Some(enabled) = relay.or(udp) {
+    if let Some(enabled) = take_bool_alias(options, &["udp", "udp-relay"])? {
         put_bool(map, "udp", enabled);
     }
     Ok(())
@@ -524,7 +517,7 @@ fn apply_protocol(
                     .flatten()
             });
             set_required(map, "password", password)?;
-            set_optional(map, "network", take_option(options, &["network"]));
+            set_optional(map, "network", take_packet_network(options)?);
         }
         _ => return Err("record protocol is unsupported"),
     }
@@ -931,6 +924,26 @@ fn take_stream_transport_alias(
     }
     Ok(selected)
 }
+fn take_packet_network(options: &mut RecordOptions) -> RecordResult<Option<String>> {
+    let mut selected = None;
+    for (index, (key, value)) in options.occurrences.iter().enumerate() {
+        if key != "network" {
+            continue;
+        }
+        let Some(udp) = honk_config::options::vocab::packet_network(value)? else {
+            continue;
+        };
+        match selected {
+            None => selected = Some((index, udp)),
+            Some((_, previous)) if previous == udp => {}
+            Some(_) => return Err("record packet network aliases conflict"),
+        }
+    }
+    let value = selected.map(|(index, _)| options.occurrences.remove(index).1);
+    options.remove("network");
+    Ok(value)
+}
+
 fn take_option(options: &mut RecordOptions, keys: &[&str]) -> Option<String> {
     take_raw(options, keys).filter(|value| !value.is_empty())
 }
