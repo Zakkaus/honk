@@ -106,6 +106,8 @@ TOML、YAML 与 JSON 继续使用旧的扁平节点键。加载时只读取所�
 
 VMess 加密方式接受 `auto` 和 `aes-128-gcm`，忽略大小写并存储为小写；空的可选声明使用默认值。JSON 的 `scy`/`security`、编码分享链接的 `encryption`/`scy`/表示加密方式的 `security`，以及订阅支持的加密方式别名，须在赋值前比较。不支持的值或冲突会使节点被拒绝。编码分享链接中的 `security=none` 和 `security=tls` 仍控制 TLS，不表示加密方式。记录格式的位置参数仍是低优先级备用值。
 
+TUIC 分享链接和订阅的转发模式只接受未指定、空值或 `native`；即使存在有效别名，不支持的 `udp-relay-mode`/`udp_relay_mode` 仍会使条目被拒绝。Hy2 分享链接只接受小写的 `obfs=salamander`；未指定或空值关闭混淆，未知名称（包括 `SALAMANDER`）会被拒绝。Salamander 未提供非空密码时仍关闭混淆。重复密码声明与 `obfs-password`/`obfs_password` 须一致。Clash 仍接受不区分大小写的 Salamander，并要求非空白密码；sing-box 仍要求小写类型，并拒绝已配置有效字段但缺少类型或密码的混淆对象。
+
 ## 协议
 
 | 协议 | 别名 | TCP | UDP | 说明 |

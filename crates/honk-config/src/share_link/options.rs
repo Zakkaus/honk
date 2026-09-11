@@ -404,6 +404,14 @@ pub(super) fn apply_protocol(
             apply_mtu(&mut config.quic, query);
         }
         OutboundConfig::Tuic(config) => {
+            for value in query
+                .values("udp-relay-mode")
+                .chain(query.values("udp_relay_mode"))
+            {
+                if !matches!(value, "" | "native") {
+                    return Err(ConfigError::Parse("unsupported TUIC UDP relay mode".into()));
+                }
+            }
             config.init_stream_recv_window = query
                 .get("initStreamReceiveWindow")
                 .and_then(|value| value.parse().ok());
@@ -445,11 +453,34 @@ fn apply_hysteria2(
     query: &Query,
     embedded_hop_ports: Option<String>,
 ) -> Result<(), ConfigError> {
-    if query.get("obfs").is_some_and(|value| value == "salamander") {
-        config.obfs = query
-            .get("obfs-password")
+    let mut obfs = false;
+    for value in query.values("obfs") {
+        match value {
+            "" => {}
+            "salamander" => obfs = true,
+            _ => {
+                return Err(ConfigError::Parse(
+                    "unsupported Hysteria2 obfuscation".into(),
+                ));
+            }
+        }
+    }
+    let mut password = None;
+    for value in query
+        .values("obfs-password")
+        .chain(query.values("obfs_password"))
+    {
+        if password.is_some_and(|previous| previous != value) {
+            return Err(ConfigError::Parse(
+                "conflicting Hysteria2 obfuscation passwords".into(),
+            ));
+        }
+        password = Some(value);
+    }
+    if obfs {
+        config.obfs = password
             .filter(|value| !value.is_empty())
-            .cloned();
+            .map(str::to_owned);
     }
     config.up_mbps = query.get("upmbps").and_then(|value| value.parse().ok());
     config.down_mbps = query.get("downmbps").and_then(|value| value.parse().ok());

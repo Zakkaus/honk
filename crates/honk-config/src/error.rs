@@ -101,6 +101,17 @@ impl DetailedConfigError {
         };
         if let Some(text) = text {
             let reason = match text {
+                "unsupported TUIC UDP relay mode" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes").field("udp_relay_mode"),
+                    "TUIC supports only native UDP relay",
+                )),
+                "unsupported Hysteria2 obfuscation"
+                | "conflicting Hysteria2 obfuscation passwords" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes").field("hy2_obfs"),
+                    "Hysteria2 obfuscation must use the supported algorithm and agreeing password claims",
+                )),
                 "unsupported VMess cipher" | "conflicting VMess cipher aliases" => Some((
                     "invalid-config-value",
                     SettingPath::new("nodes").field("encryption"),

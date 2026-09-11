@@ -106,6 +106,8 @@ Share-link verification booleans ignore surrounding whitespace and ASCII case. `
 
 VMess cipher claims accept `auto` and `aes-128-gcm`, case-insensitively, and store lowercase names; empty optional claims use the default. JSON `scy`/`security`, encoded share-link `encryption`/`scy`/cipher-valued `security`, and supported feed cipher aliases must agree before assignment. Unsupported or conflicting values reject the node. In encoded share links, `security=none` and `security=tls` still select TLS behavior, not a cipher. Record positional ciphers remain lower-priority fallbacks.
 
+TUIC share links and feeds accept only absent, empty, or `native` relay mode; unsupported `udp-relay-mode`/`udp_relay_mode` claims reject even beside a valid alias. Hy2 share links require exact lowercase `obfs=salamander`; absent/empty disables obfuscation, and unknown names (including `SALAMANDER`) reject. Salamander without a nonempty password still disables obfuscation. Repeated password claims and `obfs-password`/`obfs_password` must agree. Clash keeps case-insensitive Salamander with a nonblank password; sing-box keeps exact lowercase type and rejects active incomplete obfuscation objects.
+
 ## Protocols
 
 | Protocol | Alias | TCP | UDP | Notes |

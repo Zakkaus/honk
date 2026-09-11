@@ -2078,3 +2078,51 @@ fn c12_shadowrocket_cipher_aliases_keep_security_tls_meaning() {
         assert!(Node::from_share_link(&format!("vmess://{authority}?{query}")).is_err());
     }
 }
+
+#[test]
+fn c13_tuic_relay_claims_cannot_be_discarded() {
+    let link = format!("tuic://{UUID_A}:password@example.com:443");
+    let control = Node::from_share_link(&link).unwrap();
+    for query in [
+        "udp-relay-mode=",
+        "udp_relay_mode=native",
+        "udp-relay-mode=&udp_relay_mode=native",
+    ] {
+        assert_eq!(
+            Node::from_share_link(&format!("{link}?{query}"))
+                .unwrap()
+                .outbound,
+            control.outbound
+        );
+    }
+    for query in [
+        "udp-relay-mode=quic",
+        "udp_relay_mode=unknown",
+        "udp-relay-mode=quic&udp-relay-mode=native",
+    ] {
+        assert!(Node::from_share_link(&format!("{link}?{query}")).is_err());
+    }
+}
+
+#[test]
+fn c13_hy2_obfs_claims_preserve_exact_source_grammar() {
+    const LINK: &str = "hy2://password@example.com:443";
+    for query in ["obfs=", "obfs=salamander", "obfs=salamander&obfs-password="] {
+        assert_eq!(
+            Node::from_share_link(&format!("{LINK}?{query}"))
+                .unwrap()
+                .hysteria2()
+                .unwrap()
+                .obfs,
+            None
+        );
+    }
+    for query in [
+        "obfs=SALAMANDER",
+        "obfs=unknown",
+        "obfs=unknown&obfs=salamander",
+        "obfs=salamander&obfs-password=a&obfs_password=b",
+    ] {
+        assert!(Node::from_share_link(&format!("{LINK}?{query}")).is_err());
+    }
+}

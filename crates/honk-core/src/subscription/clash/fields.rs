@@ -87,6 +87,18 @@ pub(super) fn vmess_cipher_alias(
     })
 }
 
+pub(super) fn tuic_relay_alias(mapping: &Mapping) -> Result<Option<()>, &'static str> {
+    parsed_alias(
+        mapping,
+        &["udp-relay-mode", "udp_relay_mode"],
+        |value| match text(value)?.as_deref().map(str::trim) {
+            None => Ok(None),
+            Some("" | "native") => Ok(Some(())),
+            Some(_) => Err("unsupported TUIC UDP relay mode"),
+        },
+    )
+}
+
 pub(super) fn bool_alias(mapping: &Mapping, keys: &[&str]) -> Result<Option<bool>, &'static str> {
     parsed_alias(mapping, keys, |value| match value {
         Value::Null => Ok(None),

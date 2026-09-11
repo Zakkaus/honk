@@ -566,9 +566,7 @@ fn apply_quic(mapping: &Mapping, node: &mut Node) -> Result<(), &'static str> {
             return Err("unsupported fixed QUIC ALPN");
         }
     }
-    if let Some(mode) = yaml_text_alias(mapping, &["udp-relay-mode", "udp_relay_mode"])?
-        && (protocol != NodeProtocol::Tuic || !matches!(mode.trim(), "" | "native"))
-    {
+    if fields::tuic_relay_alias(mapping)?.is_some() && protocol != NodeProtocol::Tuic {
         return Err("unsupported TUIC UDP relay mode");
     }
     if protocol == NodeProtocol::Juicity {
