@@ -522,8 +522,14 @@ fn resolve_group_filters_inner(
             .iter()
             .enumerate()
             .map(|(index, filter)| (index, filter.trim()))
-            // Non-standalone group references must not trigger the all-nodes fallback.
-            .filter(|(_, filter)| standalone_group_reference(filter).is_none())
+            .filter(|(_, filter)| {
+                standalone_group_reference(filter).is_none_or(|args| {
+                    split_unquoted(args, ",")
+                        .map(unquote_filter_argument)
+                        .flat_map(|tag| tag.split(['|', ',']))
+                        .all(|tag| tag.trim().is_empty())
+                })
+            })
             .collect();
 
         if filters.is_empty() {
@@ -539,6 +545,9 @@ fn resolve_group_filters_inner(
 
         let mut parsed_filters = Vec::new();
         for (index, filter) in filters {
+            if standalone_group_reference(filter).is_some() {
+                continue;
+            }
             if let Some(parsed) = parse_group_filter_expression(filter) {
                 parsed_filters.push(parsed);
             } else if let Some(diagnostics) = diagnostics.as_deref_mut() {
@@ -1112,14 +1121,28 @@ fn parse_group_section(
                 .map(|(_, v)| strip_unquoted_comment(v.trim()).trim())
                 .unwrap_or("");
             if let Some(args) = standalone_group_reference(val) {
+                let mut has_tag = false;
                 for tag in split_unquoted(args, ",")
                     .map(unquote_filter_argument)
                     .flat_map(|tag| tag.split(['|', ',']).map(str::trim))
                     .map(str::to_string)
                 {
+                    has_tag |= !tag.is_empty();
                     if !tag.is_empty() && !group.groups.contains(&tag) {
                         group.groups.push(tag);
                     }
+                }
+                if !has_tag {
+                    diagnostics.remember_filter(line);
+                    diagnostics.at_line(line);
+                    group.filters.push(val.to_string());
+                    diagnostics.emit(DetailedDiagnostic::warning(
+                        "empty-subgroup",
+                        diagnostics.source(),
+                        SettingPath::new("groups").index(groups.len() + 1).field("filter").index(group.filters.len()),
+                        SafeValue::Ordinal(group.filters.len()),
+                        "empty subgroup contribution selects no nodes; remove the filter to select all nodes",
+                    ));
                 }
             } else {
                 diagnostics.remember_filter(line);

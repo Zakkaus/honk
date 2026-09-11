@@ -71,7 +71,7 @@ honk reads dae's configuration syntax, but it is a dialect: where honk and dae r
 | Input | dae grammar | honk |
 |---|---|---|
 | `group('hk,jp')` | one literal | Two subgroup tags, split on `,` and `\|`. |
-| `filter: group()` | call without parameters | The empty subgroup filter is dropped; with no other `filter:` line the group falls back to every node. See issue #161. |
+| `filter: group()` | call without parameters | Retained as an explicit empty contribution through serde and refresh, with `empty-subgroup`. Remove the filter for all nodes; explicit `group()` now selects none. |
 
 ## Sections and includes
 
