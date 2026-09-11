@@ -579,20 +579,21 @@ fn load_operator_config(
         || DiagnosticSources::new(Some(path.into())).root(),
         |diagnostic| diagnostic.source.sources().root(),
     );
-    let result = config
-        .validate()
-        .map_err(|error| DetailedConfigError::from_legacy(error, source.clone()))
-        .and_then(|()| {
-            subscription::validate_subscription_ids(&config.subscriptions).map_err(|_| {
-                DetailedConfigError::new(
-                    ErrorCategory::Validation,
-                    "invalid-subscription-id",
-                    source,
-                    SettingPath::new("subscriptions").field("id"),
-                    "subscription IDs must be non-nil and unique",
-                )
-            })
-        });
+    let result = config.validate_detailed().and_then(|()| {
+        subscription::validate_subscription_ids(&config.subscriptions).map_err(|_| {
+            DetailedConfigError::new(
+                ErrorCategory::Validation,
+                "invalid-subscription-id",
+                source.clone(),
+                SettingPath::new("subscriptions").field("id"),
+                "subscription IDs must be non-nil and unique",
+            )
+        })
+    });
+    let result = result.map_err(|mut error| {
+        error.diagnostic.source = source;
+        error
+    });
     finish_attempt(result.map(|()| config), diagnostics)
 }
 
@@ -607,6 +608,18 @@ fn report_startup_failure(diagnostics: &[DetailedDiagnostic]) {
             diagnostic.message,
         );
     }
+}
+
+/// Render one runtime admission rejection at the process reporting boundary.
+pub(crate) fn report_runtime_admission_error(error: &DetailedConfigError) {
+    let diagnostic = error.diagnostic.as_ref();
+    tracing::error!(
+        code = diagnostic.code,
+        setting = %diagnostic.setting,
+        value = %diagnostic.value,
+        "runtime configuration rejected: {}",
+        diagnostic.message
+    );
 }
 
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
@@ -779,6 +792,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         &config.nodes,
         &config.subscriptions,
     );
+    config
+        .validate_assembled()
+        .map_err(|error| anyhow::anyhow!("invalid assembled configuration: {error}"))?;
     for group in &config.groups {
         info!(
             "Group '{}' resolved {} node(s)",
@@ -1968,8 +1984,9 @@ mod local_time_tests {
 #[cfg(test)]
 mod startup_lifecycle_tests {
     use super::{
-        ClashCommand, Cli, open_log_file, prepare_nfqueue_startup, prepare_runtime_data_dir,
-        prepare_runtime_data_dir_with_fallback, publish_instance_pid, running_instance_pid,
+        ClashCommand, Cli, load_operator_config, open_log_file, prepare_nfqueue_startup,
+        prepare_runtime_data_dir, prepare_runtime_data_dir_with_fallback, publish_instance_pid,
+        running_instance_pid,
     };
     use clap::Parser;
 
@@ -2224,5 +2241,25 @@ mod startup_lifecycle_tests {
                 assert!(!captured.contains(secret), "{name}");
             }
         }
+    }
+
+    #[test]
+    fn startup_load_reports_duplicate_node_identity() {
+        let file = tempfile::Builder::new().suffix(".dae").tempfile().unwrap();
+        std::fs::write(
+            file.path(),
+            "node {\n a: 'socks5://127.0.0.1:1080'\n b: 'socks5://127.0.0.1:1080'\n}\n",
+        )
+        .unwrap();
+
+        let mut diagnostics = Vec::new();
+        let error = load_operator_config(file.path().to_str().unwrap(), &mut diagnostics)
+            .expect_err("duplicate node IDs must reject startup");
+        assert_eq!(error.diagnostic.code, "duplicate-node-id");
+        assert_eq!(error.diagnostic.setting.to_string(), "nodes[2]");
+        assert_eq!(error.diagnostic.related_indices, [1]);
+        let rendered = error.to_string();
+        assert!(rendered.contains("node ID duplicates another node"));
+        assert!(!rendered.contains("configuration validation failed"));
     }
 }

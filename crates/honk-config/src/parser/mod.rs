@@ -1050,7 +1050,9 @@ fn parse_node_section(
             }
             // A recognized-but-removed protocol in the config file is a hard
             // error (subscriptions skip such entries with a warning instead).
-            Err(e @ crate::ConfigError::UnknownProtocol(_)) => return Err(e),
+            Err(error) if error.category == crate::error::ErrorCategory::UnknownProtocol => {
+                return Err(error.into_legacy());
+            }
             Err(_) => diagnostics.emit(DetailedDiagnostic::warning(
                 "invalid-node-entry",
                 diagnostics.source(),

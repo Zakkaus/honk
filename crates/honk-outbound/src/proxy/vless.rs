@@ -2023,6 +2023,8 @@ mod tests {
             port,
             ..vless_node("b5bc10a6-5c72-4fd0-9f62-15c2b9f8a7d3", WireMode::H2mux)
         };
+        let mut node = node;
+        node.id = node.derive_id();
         let generation = Arc::new(
             crate::runtime::OutboundRuntimeRegistry::build(std::slice::from_ref(&node)).unwrap(),
         );

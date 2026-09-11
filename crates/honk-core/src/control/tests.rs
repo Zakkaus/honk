@@ -2184,6 +2184,21 @@ async fn tcp_proxy_protocols_pass_domain_without_local_resolution() -> anyhow::R
             port: 9,
             ..Default::default()
         };
+        match &mut node.outbound {
+            honk_config::node::OutboundConfig::Vmess(config) => {
+                config.uuid = Some("12345678-1234-1234-1234-123456789abc".into());
+            }
+            honk_config::node::OutboundConfig::Vless(config) => {
+                config.uuid = Some("12345678-1234-1234-1234-123456789abc".into());
+            }
+            honk_config::node::OutboundConfig::Tuic(config) => {
+                config.uuid = Some("12345678-1234-1234-1234-123456789abc".into());
+            }
+            honk_config::node::OutboundConfig::Juicity(config) => {
+                config.uuid = Some("12345678-1234-1234-1234-123456789abc".into());
+            }
+            _ => {}
+        }
         node.id = node.derive_id();
         let mut config = udp_test_config(name, vec![node], vec![]);
         config.ensure_builtin_nodes();
@@ -3367,8 +3382,7 @@ async fn udp_stats_lifecycle_first_send_error_closes_guard_and_records_error() {
 #[tokio::test]
 async fn udp_first_send_failure_does_not_replay_to_another_candidate() {
     let first = udp_test_node();
-    let second = Node {
-        id: uuid::Uuid::new_v4(),
+    let mut second = Node {
         name: "udp-test-second".into(),
         outbound: honk_config::node::OutboundConfig::from_protocol(
             honk_config::types::NodeProtocol::Socks5,
@@ -3377,6 +3391,7 @@ async fn udp_first_send_failure_does_not_replay_to_another_candidate() {
         port: 10,
         ..Default::default()
     };
+    second.id = second.derive_id();
     let config = udp_test_config(
         "udp-group",
         vec![first.clone(), second.clone()],
@@ -3597,8 +3612,7 @@ async fn udp_dns_udp_liveness_keeps_explicit_node_selectable_in_production() {
 #[tokio::test]
 async fn udp_authoritative_selection_stops_after_single_candidate_dial_failure() {
     let first = udp_test_node();
-    let second = Node {
-        id: uuid::Uuid::new_v4(),
+    let mut second = Node {
         name: "udp-test-second".into(),
         outbound: honk_config::node::OutboundConfig::from_protocol(
             honk_config::types::NodeProtocol::Socks5,
@@ -3607,6 +3621,7 @@ async fn udp_authoritative_selection_stops_after_single_candidate_dial_failure()
         port: 10,
         ..Default::default()
     };
+    second.id = second.derive_id();
     let config = udp_test_config(
         "udp-group",
         vec![first.clone(), second.clone()],
@@ -3642,8 +3657,7 @@ async fn udp_production_death_during_unbound_preparation_prevents_send() {
     let dials = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let target = udp_test_node();
-    let unrelated = Node {
-        id: uuid::Uuid::new_v4(),
+    let mut unrelated = Node {
         name: "health-registered-other".into(),
         outbound: honk_config::node::OutboundConfig::from_protocol(
             honk_config::types::NodeProtocol::Socks5,
@@ -3652,6 +3666,7 @@ async fn udp_production_death_during_unbound_preparation_prevents_send() {
         port: 10,
         ..Default::default()
     };
+    unrelated.id = unrelated.derive_id();
     // Keep the selected direct node out of the health-check registration so
     // the public death transition is not hidden by the startup grace period.
     let config = udp_test_config(

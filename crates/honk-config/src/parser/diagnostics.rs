@@ -51,7 +51,7 @@ impl<'a> ParserDiagnostics<'a> {
     pub fn parse_share_link(
         &mut self,
         link: &str,
-    ) -> Result<crate::node::Node, crate::ConfigError> {
+    ) -> Result<crate::node::Node, crate::error::DetailedConfigError> {
         let source = self.source();
         crate::node::Node::parse_share_link(link, &source, &mut |mut diagnostic| {
             if let Some(index) = self.entry {

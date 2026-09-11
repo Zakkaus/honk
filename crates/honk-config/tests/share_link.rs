@@ -2243,3 +2243,20 @@ fn c16_constructed_config_cannot_bypass_canonical_node_checks() {
         assert!(config.validate().is_err(), "{field}");
     }
 }
+
+#[test]
+fn detailed_share_link_validation_preserves_intrinsic_cause() {
+    let mut diagnostics = Vec::new();
+    let error = Node::from_share_link_with_detailed_diagnostics(
+        "vless://b831381d-6324-4d53-ad4f-8cda48b30811@example.com:443?security=none&flow=xtls-rprx-vision",
+        &mut diagnostics,
+    )
+    .expect_err("flow without TLS must fail intrinsic validation");
+    assert_eq!(error.diagnostic.code, "invalid-config-value");
+    assert_eq!(error.diagnostic.setting.to_string(), "nodes.flow");
+    assert!(
+        error
+            .to_string()
+            .contains("VLESS flow requires TLS or REALITY")
+    );
+}

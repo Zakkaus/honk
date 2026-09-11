@@ -868,12 +868,17 @@ mod tests {
     }
 
     fn make_node(name: &str) -> Node {
-        Node {
-            id: uuid::Uuid::new_v4(),
+        let host = format!("{name}.example");
+        let mut node = Node {
             name: name.into(),
+            address: format!("{host}:443"),
+            host,
+            port: 443,
             outbound: honk_config::node::OutboundConfig::from_protocol(NodeProtocol::Socks5),
             ..Default::default()
-        }
+        };
+        node.id = node.derive_id();
+        node
     }
 
     struct RecordingWarmable {
@@ -923,9 +928,22 @@ mod tests {
     fn reusable_node(name: &str, protocol: NodeProtocol) -> Node {
         let mut node = make_node(name);
         node.outbound = honk_config::node::OutboundConfig::from_protocol(protocol);
-        if let Some(vless) = node.vless_mut() {
-            vless.mode = honk_config::node::WireMode::H2mux;
+        let credential = "00000000-0000-4000-8000-000000000001".to_string();
+        match &mut node.outbound {
+            honk_config::node::OutboundConfig::Vmess(config) => {
+                config.uuid = Some(credential.clone())
+            }
+            honk_config::node::OutboundConfig::Vless(config) => {
+                config.uuid = Some(credential.clone());
+                config.mode = honk_config::node::WireMode::H2mux;
+            }
+            honk_config::node::OutboundConfig::Tuic(config) => {
+                config.uuid = Some(credential.clone())
+            }
+            honk_config::node::OutboundConfig::Juicity(config) => config.uuid = Some(credential),
+            _ => {}
         }
+        node.id = node.derive_id();
         node
     }
 

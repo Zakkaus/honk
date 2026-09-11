@@ -46,8 +46,7 @@ impl Node {
         let result = {
             let mut emit = |diagnostic| diagnostics.push(diagnostic);
             Self::parse_share_link(link, &source, &mut emit)
-        }
-        .map_err(|error| crate::error::DetailedConfigError::from_legacy(error, source));
+        };
         crate::diagnostic::finish_attempt(result, diagnostics)
     }
 
@@ -66,6 +65,22 @@ impl Node {
     }
 
     pub(crate) fn parse_share_link(
+        link: &str,
+        source: &crate::diagnostic::SourceRef,
+        emit: &mut impl FnMut(crate::diagnostic::DetailedDiagnostic),
+    ) -> Result<Node, crate::error::DetailedConfigError> {
+        let mut node = Self::decode_share_link(link, source, emit).map_err(|error| {
+            crate::error::DetailedConfigError::from_legacy(error, source.clone())
+        })?;
+        node.validate_detailed().map_err(|mut error| {
+            error.diagnostic.source = source.clone();
+            error
+        })?;
+        node.id = node.derive_id();
+        Ok(node)
+    }
+
+    fn decode_share_link(
         link: &str,
         source: &crate::diagnostic::SourceRef,
         emit: &mut impl FnMut(crate::diagnostic::DetailedDiagnostic),
@@ -120,8 +135,6 @@ impl Node {
             source,
             emit,
         )?;
-        node.validate()?;
-        node.id = node.derive_id();
         Ok(node)
     }
 }
@@ -294,7 +307,7 @@ impl VmessLinkJson {
                 _ => {}
             }
         }
-        let mut node = Node {
+        let node = Node {
             host: host.clone(),
             address: format!("{}:{}", host, port),
             port,
@@ -318,8 +331,6 @@ impl VmessLinkJson {
             }),
             ..Default::default()
         };
-        node.validate()?;
-        node.id = node.derive_id();
         Ok(node)
     }
 }

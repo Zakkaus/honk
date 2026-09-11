@@ -670,14 +670,17 @@ impl Config {
     /// their fixed IDs.
     fn derive_node_ids(&mut self) {
         for node in &mut self.nodes {
-            if node.id == DIRECT_NODE_ID || node.id == BLOCK_NODE_ID {
+            if matches!(
+                node.outbound,
+                crate::node::OutboundConfig::Direct | crate::node::OutboundConfig::Block
+            ) {
                 continue;
             }
             node.id = node.derive_id();
         }
     }
 
-    pub fn validate(&self) -> Result<(), crate::ConfigError> {
+    fn validate_globals(&self) -> Result<(), crate::ConfigError> {
         if self.global.dial_mode.parse::<DialMode>().is_err() {
             return Err(crate::ConfigError::Validation(format!(
                 "global.dial_mode must be one of: ip, domain, domain+, domain++ (got '{}')",
@@ -738,25 +741,11 @@ impl Config {
                 rule.mark
             )));
         }
-        // Content-derived IDs collide when two nodes share protocol, server,
-        // and credentials — they are the same endpoint and cannot coexist
-        // in the runtime registry.
-        let mut ids: std::collections::HashMap<uuid::Uuid, &str> = std::collections::HashMap::new();
+        Ok(())
+    }
+
+    fn validate_reserved_names(&self) -> Result<(), crate::ConfigError> {
         for node in &self.nodes {
-            if node.id.is_nil() {
-                continue;
-            }
-            if let Some(prev) = ids.insert(node.id, &node.name)
-                && prev != node.name
-            {
-                return Err(crate::ConfigError::Validation(format!(
-                    "Nodes '{}' and '{}' derive the same ID (identical protocol, server and credentials)",
-                    prev, node.name
-                )));
-            }
-        }
-        for node in &self.nodes {
-            node.validate()?;
             if matches!(
                 node.protocol(),
                 crate::types::NodeProtocol::Direct | crate::types::NodeProtocol::Block
@@ -773,6 +762,10 @@ impl Config {
                 )));
             }
         }
+        Ok(())
+    }
+
+    fn validate_references(&self) -> Result<(), crate::ConfigError> {
         // User groups occupy ordinals 2..=251; 252 and above are reserved
         // protocol values (must/control-plane/logical operators).
         const MAX_USER_GROUPS: usize = 0xFC - 2;
@@ -847,6 +840,123 @@ impl Config {
                     "subscription '{}' url must use http:// or https://",
                     subscription.name
                 )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate operator configuration through the legacy error API.
+    pub fn validate(&self) -> Result<(), crate::ConfigError> {
+        self.validate_globals()?;
+        crate::node::validate_node_collection(&self.nodes)
+            .map_err(crate::error::DetailedConfigError::into_legacy)?;
+        self.validate_reserved_names()?;
+        self.validate_references()
+    }
+
+    /// Validate operator configuration while retaining typed diagnostics.
+    pub fn validate_detailed(&self) -> Result<(), DetailedConfigError> {
+        let source = DiagnosticSources::new(None).root();
+        self.validate_globals()
+            .map_err(|error| DetailedConfigError::from_legacy(error, source.clone()))?;
+        crate::node::validate_node_collection(&self.nodes)?;
+        self.validate_reserved_names()
+            .map_err(|error| DetailedConfigError::from_legacy(error, source.clone()))?;
+        self.validate_references()
+            .map_err(|error| DetailedConfigError::from_legacy(error, source))
+    }
+    /// Validate a fully assembled runtime snapshot.
+    ///
+    /// This retains the operator validator's global, DNS, routing, and
+    /// subscription checks, then verifies references materialized by runtime
+    /// providers. The latter must run after membership rebuilding so a failed
+    /// refresh cannot publish dangling direct or nested-group members.
+    pub fn validate_assembled(&self) -> Result<(), DetailedConfigError> {
+        let source = DiagnosticSources::new(None).root();
+        self.validate_globals()
+            .map_err(|error| DetailedConfigError::from_legacy(error, source.clone()))?;
+        crate::node::validate_node_collection(&self.nodes)?;
+        self.validate_references()
+            .map_err(|error| DetailedConfigError::from_legacy(error, source))?;
+
+        let node_ids: std::collections::HashSet<_> =
+            self.nodes.iter().map(|node| node.id).collect();
+        let group_names: std::collections::HashSet<_> = self
+            .groups
+            .iter()
+            .map(|group| group.name.as_str())
+            .collect();
+        let target_exists = |target: &str| {
+            matches!(target, Self::BUILTIN_DIRECT_NODE | Self::BUILTIN_BLOCK_NODE)
+                || self.nodes.iter().any(|node| node.name == target)
+                || group_names.contains(target)
+        };
+        let error = |setting, code, message, ordinal| {
+            let mut error = DetailedConfigError::new(
+                ErrorCategory::Validation,
+                code,
+                DiagnosticSources::new(None).root(),
+                setting,
+                message,
+            );
+            error.diagnostic.value = crate::diagnostic::SafeValue::Ordinal(ordinal);
+            error.diagnostic.entry_index = Some(ordinal);
+            error
+        };
+
+        for (group_index, group) in self.groups.iter().enumerate() {
+            for (member_index, node_id) in group.nodes.iter().enumerate() {
+                if !node_ids.contains(node_id) {
+                    return Err(error(
+                        SettingPath::new("groups")
+                            .index(group_index + 1)
+                            .field("nodes")
+                            .index(member_index + 1),
+                        "invalid-group-node-reference",
+                        "group references a node outside the assembled collection",
+                        group_index + 1,
+                    ));
+                }
+            }
+            for (nested_index, nested_name) in group.groups.iter().enumerate() {
+                if !group_names.contains(nested_name.as_str()) {
+                    return Err(error(
+                        SettingPath::new("groups")
+                            .index(group_index + 1)
+                            .field("groups")
+                            .index(nested_index + 1),
+                        "invalid-nested-group-reference",
+                        "group references an unknown nested group",
+                        group_index + 1,
+                    ));
+                }
+            }
+            if let Some(final_outbound) = group.final_outbound.as_deref()
+                && !target_exists(final_outbound)
+            {
+                return Err(error(
+                    SettingPath::new("groups")
+                        .index(group_index + 1)
+                        .field("final"),
+                    "invalid-group-final-target",
+                    "group final target is not an assembled node, group, or builtin",
+                    group_index + 1,
+                ));
+            }
+        }
+        for (upstream_index, upstream) in self.dns.upstream.iter().enumerate() {
+            if let Some(outbound) = upstream.outbound.as_deref()
+                && !target_exists(outbound)
+            {
+                return Err(error(
+                    SettingPath::new("dns")
+                        .field("upstream")
+                        .index(upstream_index + 1)
+                        .field("outbound"),
+                    "invalid-dns-detour-target",
+                    "DNS detour target is not an assembled node, group, or builtin",
+                    upstream_index + 1,
+                ));
             }
         }
         Ok(())
@@ -1160,6 +1270,9 @@ fn yaml_has_global_nfqueue_enable(content: &str) -> bool {
 }
 
 #[cfg(test)]
+mod c20_tests;
+
+#[cfg(test)]
 mod builtin_nodes_tests {
     use super::*;
 
@@ -1323,9 +1436,11 @@ mod builtin_nodes_tests {
             .nodes
             .push(crate::node::Node::from_share_link("trojan://secret@1.2.3.4:443#bad").unwrap());
         config.nodes[0].transport_mut().unwrap().transport = "kcp".into();
+        config.nodes[0].id = config.nodes[0].derive_id();
         assert!(config.validate().is_err());
         for ok in ["", "tcp", "ws", "grpc"] {
             config.nodes[0].transport_mut().unwrap().transport = ok.into();
+            config.nodes[0].id = config.nodes[0].derive_id();
             assert!(config.validate().is_ok(), "transport '{ok}' must pass");
         }
     }
@@ -1351,17 +1466,20 @@ mod builtin_nodes_tests {
             let vless = config.nodes[0].vless_mut().unwrap();
             vless.mode = mode;
             vless.flow = Some("xtls-rprx-vision".into());
+            config.nodes[0].id = config.nodes[0].derive_id();
             assert!(config.validate().is_err());
         }
         config.nodes[0] = base.clone();
         let vless = config.nodes[0].vless_mut().unwrap();
         vless.mode = crate::node::WireMode::Xudp;
         vless.flow = Some("xtls-rprx-vision".into());
+        config.nodes[0].id = config.nodes[0].derive_id();
         assert!(config.validate().is_ok());
 
         config.nodes[0] = base;
         config.nodes[0].vless_mut().unwrap().encryption =
             Some("mlkem768x25519plus.native.1rtt.key".into());
+        config.nodes[0].id = config.nodes[0].derive_id();
         assert!(config.validate().is_err());
     }
 
@@ -1389,28 +1507,6 @@ mod builtin_nodes_tests {
             config.nodes.push(node);
             assert!(config.validate().is_err(), "{name}/{protocol:?}");
         }
-    }
-
-    #[test]
-    fn test_validate_rejects_derived_id_conflicts() {
-        let node = |name: &str| {
-            let mut n =
-                crate::node::Node::from_share_link("trojan://secret@example.com:443").unwrap();
-            n.name = name.into();
-            n
-        };
-        let mut config = Config::default();
-        config.nodes.push(node("alpha"));
-        config.nodes.push(node("beta"));
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.to_string().contains("'alpha' and 'beta'"),
-            "conflict error must name both nodes: {err}"
-        );
-        // A credential change breaks the tie.
-        config.nodes[1].trojan_mut().unwrap().password = Some("other".into());
-        config.nodes[1].id = config.nodes[1].derive_id();
-        assert!(config.validate().is_ok());
     }
 
     #[test]

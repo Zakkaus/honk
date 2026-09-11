@@ -10,6 +10,35 @@ use crate::dns;
 use crate::ebpf::mock::MockEbpfBackend;
 use crate::ebpf::{DatapathFlagsWriteOrigin, RoutingPushPhase};
 use crate::stats::StatsManager;
+
+#[derive(Clone)]
+struct RuntimeAdmissionCapture(Arc<parking_lot::Mutex<Vec<u8>>>);
+
+impl std::io::Write for RuntimeAdmissionCapture {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+async fn capture_runtime_admission(future: impl Future) -> String {
+    let captured = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_writer({
+            let captured = Arc::clone(&captured);
+            move || RuntimeAdmissionCapture(Arc::clone(&captured))
+        })
+        .finish();
+    let _subscriber = tracing::subscriber::set_default(subscriber);
+    future.await;
+    String::from_utf8(captured.lock().clone()).unwrap()
+}
 fn restart_required_changes(current: &Config, candidate: &Config) -> Vec<&'static str> {
     let current_log_file = crate::resolved_log_file_path(current, None);
     let candidate_log_file = crate::resolved_log_file_path(candidate, None);
@@ -158,7 +187,7 @@ fn equivalent_resolved_log_file_path_does_not_require_restart() {
     assert!(restart_required_changes(&current, &replacement).is_empty());
 }
 
-fn test_dns_forwarder() -> std::sync::Arc<dns::forwarder::DnsForwarder> {
+pub(super) fn test_dns_forwarder() -> std::sync::Arc<dns::forwarder::DnsForwarder> {
     let cache = Arc::new(tokio::sync::Mutex::new(dns::cache::DnsCache::new(100)));
     let router = Arc::new(
         dns::routing::DnsRouter::new(&honk_config::dns::DnsRouting {
@@ -313,12 +342,17 @@ fn changed_routing_config() -> Config {
 }
 
 fn score_reload_config(interval: u64) -> Config {
-    let nodes = ["score-a", "score-b"].map(|name| Node {
-        id: uuid::Uuid::new_v5(&honk_config::node::NODE_ID_NAMESPACE, name.as_bytes()),
-        name: name.into(),
-        outbound: honk_config::node::OutboundConfig::from_protocol(NodeProtocol::Socks5),
-        address: "127.0.0.1:9".into(),
-        ..Default::default()
+    let nodes = [("score-a", 9), ("score-b", 10)].map(|(name, port)| {
+        let mut node = Node {
+            name: name.into(),
+            outbound: honk_config::node::OutboundConfig::from_protocol(NodeProtocol::Socks5),
+            address: format!("127.0.0.1:{port}"),
+            host: "127.0.0.1".into(),
+            port,
+            ..Default::default()
+        };
+        node.id = node.derive_id();
+        node
     });
     let mut config = Config::default();
     config.global.check_interval_secs = interval;
@@ -668,7 +702,6 @@ async fn reload_dispatch_assigns_worker_revision_and_accepts_only_that_revision(
             ControlCommand::MergeSubscription {
                 subscription_id,
                 revision: revision.wrapping_sub(1),
-                name: "stale".into(),
                 nodes: vec![Node {
                     name: "stale".into(),
                     subscription_id: Some(subscription_id),
@@ -1230,6 +1263,8 @@ async fn identical_subscription_merge_skips_runtime_generation() {
         name: "subscription-node".into(),
         outbound: honk_config::node::OutboundConfig::from_protocol(NodeProtocol::Socks5),
         address: "127.0.0.1:1080".into(),
+        host: "127.0.0.1".into(),
+        port: 1080,
         subscription_id: Some(subscription_id),
         ..Default::default()
     };
@@ -1472,16 +1507,21 @@ async fn default_udp_warm_is_disabled_without_a_task_or_metrics() {
 
 #[test]
 fn selector_warm_candidates_follow_configured_leaves_and_deduplicate() {
-    let node = |name: &str, protocol| Node {
-        id: uuid::Uuid::new_v4(),
-        name: name.into(),
-        address: "127.0.0.1:9".into(),
-        outbound: honk_config::node::OutboundConfig::from_protocol(protocol),
-        ..Default::default()
+    let node = |name: &str, protocol, port| {
+        let mut node = Node {
+            name: name.into(),
+            address: format!("127.0.0.1:{port}"),
+            host: "127.0.0.1".into(),
+            port,
+            outbound: honk_config::node::OutboundConfig::from_protocol(protocol),
+            ..Default::default()
+        };
+        node.id = node.derive_id();
+        node
     };
-    let anytls = node("selector-anytls", NodeProtocol::AnyTLS);
-    let socks = node("selector-socks", NodeProtocol::Socks5);
-    let direct = node("selector-direct", NodeProtocol::Direct);
+    let anytls = node("selector-anytls", NodeProtocol::AnyTLS, 9);
+    let socks = node("selector-socks", NodeProtocol::Socks5, 10);
+    let direct = Config::builtin_direct_node();
     let groups = vec![
         Group {
             name: "first".into(),
@@ -1533,8 +1573,7 @@ async fn selector_choice_switch_replaces_bare_tcp_pin_immediately() {
     let second_socket = second_listener.local_addr().unwrap();
     let first_addr = first_socket.to_string();
     let second_addr = second_socket.to_string();
-    let first = Node {
-        id: uuid::Uuid::new_v4(),
+    let mut first = Node {
         name: "selector-first".into(),
         outbound: honk_config::node::OutboundConfig::from_protocol(NodeProtocol::Socks5),
         address: first_addr.clone(),
@@ -1542,8 +1581,8 @@ async fn selector_choice_switch_replaces_bare_tcp_pin_immediately() {
         port: first_socket.port(),
         ..Default::default()
     };
-    let second = Node {
-        id: uuid::Uuid::new_v4(),
+    first.id = first.derive_id();
+    let mut second = Node {
         name: "selector-second".into(),
         outbound: honk_config::node::OutboundConfig::from_protocol(NodeProtocol::Socks5),
         address: second_addr.clone(),
@@ -1551,6 +1590,7 @@ async fn selector_choice_switch_replaces_bare_tcp_pin_immediately() {
         port: second_socket.port(),
         ..Default::default()
     };
+    second.id = second.derive_id();
     let config = Config {
         nodes: vec![first.clone(), second.clone()],
         groups: vec![Group {
@@ -1616,8 +1656,7 @@ async fn changed_selector_bare_endpoint_is_purged_before_failed_replacement() {
     let old_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let old_socket = old_listener.local_addr().unwrap();
     let old_addr = old_socket.to_string();
-    let node = Node {
-        id: uuid::Uuid::new_v4(),
+    let mut node = Node {
         name: "selector-moved".into(),
         outbound: honk_config::node::OutboundConfig::from_protocol(NodeProtocol::Socks5),
         address: old_addr.clone(),
@@ -1625,6 +1664,7 @@ async fn changed_selector_bare_endpoint_is_purged_before_failed_replacement() {
         port: old_socket.port(),
         ..Default::default()
     };
+    node.id = node.derive_id();
     let generation = Arc::new(
         honk_outbound::runtime::OutboundRuntimeRegistry::build(std::slice::from_ref(&node))
             .unwrap(),
@@ -1672,17 +1712,25 @@ async fn changed_selector_bare_endpoint_is_purged_before_failed_replacement() {
 
 #[test]
 fn udp_warm_candidates_only_use_authoritative_group_leaves() {
-    let node = |name: &str, protocol| Node {
-        id: uuid::Uuid::new_v4(),
-        name: name.into(),
-        address: "127.0.0.1:9".into(),
-        outbound: honk_config::node::OutboundConfig::from_protocol(protocol),
-        ..Default::default()
+    let node = |name: &str, protocol, port| {
+        let mut node = Node {
+            name: name.into(),
+            address: format!("127.0.0.1:{port}"),
+            host: "127.0.0.1".into(),
+            port,
+            outbound: honk_config::node::OutboundConfig::from_protocol(protocol),
+            ..Default::default()
+        };
+        if let Some(vmess) = node.vmess_mut() {
+            vmess.uuid = Some("11111111-1111-4111-8111-111111111111".into());
+        }
+        node.id = node.derive_id();
+        node
     };
-    let anytls = node("anytls", honk_config::types::NodeProtocol::AnyTLS);
-    let nested_warmable = node("socks", honk_config::types::NodeProtocol::AnyTLS);
-    let cold = node("cold", honk_config::types::NodeProtocol::VMess);
-    let standalone = node("standalone", honk_config::types::NodeProtocol::VMess);
+    let anytls = node("anytls", honk_config::types::NodeProtocol::AnyTLS, 9);
+    let nested_warmable = node("socks", honk_config::types::NodeProtocol::AnyTLS, 10);
+    let cold = node("cold", honk_config::types::NodeProtocol::VMess, 11);
+    let standalone = node("standalone", honk_config::types::NodeProtocol::VMess, 12);
     let groups = vec![
         Group {
             name: "first".into(),
@@ -1744,18 +1792,23 @@ fn udp_warm_candidates_only_use_authoritative_group_leaves() {
 
 #[test]
 fn udp_warm_candidates_bound_capacity_and_exclude_explicitly_dead_udp_leaves() {
-    let node = |name: &str| Node {
-        id: uuid::Uuid::new_v4(),
-        name: name.into(),
-        outbound: honk_config::node::OutboundConfig::from_protocol(
-            honk_config::types::NodeProtocol::AnyTLS,
-        ),
-        address: "127.0.0.1:9".into(),
-        ..Default::default()
+    let node = |name: &str, port| {
+        let mut node = Node {
+            name: name.into(),
+            outbound: honk_config::node::OutboundConfig::from_protocol(
+                honk_config::types::NodeProtocol::AnyTLS,
+            ),
+            address: format!("127.0.0.1:{port}"),
+            host: "127.0.0.1".into(),
+            port,
+            ..Default::default()
+        };
+        node.id = node.derive_id();
+        node
     };
-    let dead = node("dead-udp");
-    let selected = node("selected");
-    let second = node("second");
+    let dead = node("dead-udp", 9);
+    let selected = node("selected", 10);
+    let second = node("second", 11);
     let config = Config {
         nodes: vec![dead.clone(), selected.clone(), second.clone()],
         groups: vec![
@@ -1805,15 +1858,18 @@ fn udp_warm_candidates_enforce_a_process_wide_latency_ordered_cap() {
     for g in 0..6 {
         let mut ids = Vec::new();
         for i in 0..2 {
-            let node = Node {
-                id: uuid::Uuid::new_v4(),
+            let port = 9 + g * 2 + i;
+            let mut node = Node {
                 name: format!("n{g}-{i}"),
                 outbound: honk_config::node::OutboundConfig::from_protocol(
                     honk_config::types::NodeProtocol::AnyTLS,
                 ),
-                address: "127.0.0.1:9".into(),
+                address: format!("127.0.0.1:{port}"),
+                host: "127.0.0.1".into(),
+                port,
                 ..Default::default()
             };
+            node.id = node.derive_id();
             ids.push(node.id);
             nodes.push(node);
         }
@@ -1850,17 +1906,26 @@ fn udp_warm_candidates_enforce_a_process_wide_latency_ordered_cap() {
 
 #[test]
 fn udp_warm_candidates_do_not_mutate_group_selection_state() {
-    let node = |name: &str| Node {
-        id: uuid::Uuid::new_v4(),
-        name: name.into(),
-        outbound: honk_config::node::OutboundConfig::from_protocol(
-            honk_config::types::NodeProtocol::AnyTLS,
-        ),
-        address: "127.0.0.1:9".into(),
-        ..Default::default()
+    let node = |name: &str, port| {
+        let mut node = Node {
+            name: name.into(),
+            outbound: honk_config::node::OutboundConfig::from_protocol(
+                honk_config::types::NodeProtocol::AnyTLS,
+            ),
+            address: format!("127.0.0.1:{port}"),
+            host: "127.0.0.1".into(),
+            port,
+            ..Default::default()
+        };
+        node.id = node.derive_id();
+        node
     };
-    let (lb_a, lb_b, lb_c) = (node("lb-a"), node("lb-b"), node("lb-c"));
-    let (fallback_a, fallback_b, cold) = (node("fallback-a"), node("fallback-b"), node("cold"));
+    let (lb_a, lb_b, lb_c) = (node("lb-a", 9), node("lb-b", 10), node("lb-c", 11));
+    let (fallback_a, fallback_b, cold) = (
+        node("fallback-a", 12),
+        node("fallback-b", 13),
+        node("cold", 14),
+    );
     let fallback = Group {
         name: "fallback".into(),
         policy: GroupPolicy::Fallback,
@@ -1955,14 +2020,20 @@ fn udp_warm_candidates_do_not_mutate_group_selection_state() {
 #[tokio::test]
 async fn udp_warm_coordinator_limits_concurrency_and_keeps_shutdown_errors_neutral() {
     let nodes: Vec<Node> = (0..5)
-        .map(|n| Node {
-            id: uuid::Uuid::new_v4(),
-            name: format!("node-{n}"),
-            outbound: honk_config::node::OutboundConfig::from_protocol(
-                honk_config::types::NodeProtocol::Socks5,
-            ),
-            address: "127.0.0.1:9".into(),
-            ..Default::default()
+        .map(|n| {
+            let port = 9 + n;
+            let mut node = Node {
+                name: format!("node-{n}"),
+                outbound: honk_config::node::OutboundConfig::from_protocol(
+                    honk_config::types::NodeProtocol::Socks5,
+                ),
+                address: format!("127.0.0.1:{port}"),
+                host: "127.0.0.1".into(),
+                port,
+                ..Default::default()
+            };
+            node.id = node.derive_id();
+            node
         })
         .collect();
     let ids = nodes.iter().map(|node| node.id).collect::<Vec<_>>();
@@ -2040,15 +2111,17 @@ async fn udp_warm_dispatch_metrics_distinguish_live_and_terminal_errors_and_pani
         ("live-panic", Outcome::LivePanic, 0, 1),
         ("terminal-panic", Outcome::TerminalPanic, 0, 0),
     ];
-    let node = Node {
-        id: uuid::Uuid::new_v4(),
+    let mut node = Node {
         name: "warm-node".into(),
         outbound: honk_config::node::OutboundConfig::from_protocol(
             honk_config::types::NodeProtocol::Socks5,
         ),
         address: "127.0.0.1:9".into(),
+        host: "127.0.0.1".into(),
+        port: 9,
         ..Default::default()
     };
+    node.id = node.derive_id();
 
     for (name, outcome, expected_successes, expected_failures) in cases {
         let generation = Arc::new(
@@ -2139,15 +2212,17 @@ async fn reload_retires_only_the_old_warm_generation_and_starts_the_new_one() {
         }
     }
 
-    let node = Node {
-        id: uuid::Uuid::new_v4(),
+    let mut node = Node {
         name: "warm-node".into(),
         outbound: honk_config::node::OutboundConfig::from_protocol(
             honk_config::types::NodeProtocol::AnyTLS,
         ),
         address: "127.0.0.1:9".into(),
+        host: "127.0.0.1".into(),
+        port: 9,
         ..Default::default()
     };
+    node.id = node.derive_id();
     let mut config = Config::default();
     config.global.udp_warm_node_count = 1;
     config.routing.default_outbound = "warm-group".into();
@@ -2367,4 +2442,66 @@ async fn ready_pool_reload_rejection_preserves_stream() {
     cp.connection_pool.check_invariants();
     assert!(cp.connection_pool.acquire_ready(&key).await.is_some());
     cp.connection_pool.check_invariants();
+}
+
+#[tokio::test]
+async fn subscription_refresh_duplicate_static_node_reports_one_safe_rejection() {
+    let subscription = honk_config::subscription::Subscription {
+        name: "private-provider".into(),
+        url: "http://127.0.0.1:9".into(),
+        ..Default::default()
+    };
+    let body = include_str!("../../tests/fixtures/c20-direct-provider.txt");
+    let nodes = crate::subscription::parse_subscription_content(&subscription, body).unwrap();
+    let mut current = Config::default();
+    current.global.nfqueue_enable = false;
+    current.ensure_builtin_nodes();
+    let mut static_node = nodes[0].clone();
+    static_node.name = "static".into();
+    static_node.subscription_id = None;
+    current.nodes.push(static_node);
+    current.subscriptions.push(subscription.clone());
+    let mut cp = super::c20_tests::control_plane(current.clone()).await;
+    let mut authorizations =
+        crate::subscription::SubscriptionAuthorizations::new(&current.subscriptions).unwrap();
+    let command = ControlCommand::MergeSubscription {
+        subscription_id: subscription.id,
+        revision: authorizations.revision(subscription.id).unwrap(),
+        nodes,
+    };
+    let log = capture_runtime_admission(cp.dispatch_control_command(
+        command,
+        &DrainTracker::new(),
+        &mut authorizations,
+    ))
+    .await;
+    assert_eq!(cp.config_handle().read().await.as_ref(), &current);
+    assert_eq!(log.matches("duplicate-node-id").count(), 1, "{log}");
+    assert!(
+        !log.contains("127.0.0.1") && !log.contains("private-provider"),
+        "{log}"
+    );
+}
+
+#[tokio::test]
+async fn subscription_refresh_stale_id_reports_one_safe_rejection() {
+    let subscription = honk_config::subscription::Subscription {
+        name: "provider".into(),
+        url: "http://127.0.0.1:9".into(),
+        ..Default::default()
+    };
+    let node =
+        super::c20_tests::canonical_socks5("provider", "192.0.2.10", 1080, Some(subscription.id));
+    let mut current = Config::default();
+    current.global.nfqueue_enable = false;
+    current.nodes.push(node.clone());
+    current.subscriptions.push(subscription.clone());
+    let cp = super::c20_tests::control_plane(current.clone()).await;
+    let mut stale = node;
+    stale.address = "192.0.2.11".into();
+    let log =
+        capture_runtime_admission(cp.merge_subscription_nodes(subscription.id, vec![stale])).await;
+    assert_eq!(cp.config_handle().read().await.as_ref(), &current);
+    assert_eq!(log.matches("noncanonical-node-id").count(), 1, "{log}");
+    assert!(!log.contains("192.0.2.11"), "{log}");
 }

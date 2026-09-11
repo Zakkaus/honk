@@ -785,16 +785,10 @@ fn same_node_config(a: &Node, b: &Node) -> bool {
 /// (the current generation stays live).
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeRegistryError {
-    #[error("node '{0}' has a nil UUID")]
-    NilId(String),
-    #[error("duplicate node UUID {0} (nodes '{1}' and '{2}')")]
-    DuplicateId(uuid::Uuid, String, String),
-    #[error("node '{node}' has invalid TLS configuration: {source}")]
-    Tls {
-        node: String,
-        #[source]
-        source: anyhow::Error,
-    },
+    #[error("registry node admission failed")]
+    Admission(#[source] honk_config::error::DetailedConfigError),
+    #[error("node TLS configuration rejected")]
+    Tls(#[source] Option<std::io::Error>),
 }
 
 /// The single owner of per-node session runtimes for one config
@@ -909,23 +903,24 @@ impl OutboundRuntimeRegistry {
         dial_ceiling_limit: usize,
         previous: Option<&Self>,
     ) -> Result<(Self, HashSet<uuid::Uuid>), RuntimeRegistryError> {
+        honk_config::node::validate_node_collection(nodes)
+            .map_err(RuntimeRegistryError::Admission)?;
         let mut map = HashMap::with_capacity(nodes.len());
         let mut reused = HashSet::new();
         for node in nodes {
-            if node.id.is_nil() {
-                return Err(RuntimeRegistryError::NilId(node.name.clone()));
-            }
             // Validate cheap, fail-closed TLS inputs before publishing the
             // generation. The heavyweight SSL_CTX/root store stays lazy.
             if node
                 .tls()
                 .is_some_and(|tls| tls.enabled || !tls.alpn.is_empty())
             {
-                crate::tls::validate_connector_config(node).map_err(|source| {
-                    RuntimeRegistryError::Tls {
-                        node: node.name.clone(),
-                        source,
-                    }
+                crate::tls::validate_connector_config(node).map_err(|error| {
+                    // Preserve typed I/O failures without retaining paths or raw TLS values.
+                    RuntimeRegistryError::Tls(error.chain().find_map(|cause| {
+                        cause
+                            .downcast_ref::<std::io::Error>()
+                            .map(|error| std::io::Error::from(error.kind()))
+                    }))
                 })?;
             }
             let reused_runtime = previous.and_then(|previous| {
@@ -949,13 +944,7 @@ impl OutboundRuntimeRegistry {
                     warm_retention: Arc::new(tokio::sync::Mutex::new(0)),
                 }),
             };
-            if let Some(prev) = map.insert(node.id, runtime) {
-                return Err(RuntimeRegistryError::DuplicateId(
-                    node.id,
-                    prev.node.name.clone(),
-                    node.name.clone(),
-                ));
-            }
+            map.insert(node.id, runtime);
         }
         Ok((
             Self {

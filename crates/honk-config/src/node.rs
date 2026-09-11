@@ -287,14 +287,19 @@ impl Node {
         self.outbound.network()
     }
 
-    /// Validate intrinsic node settings without resources or collection admission.
+    /// Validate intrinsic node settings through the legacy error API.
     pub fn validate(&self) -> Result<(), crate::ConfigError> {
+        self.validate_detailed()
+            .map_err(crate::error::DetailedConfigError::into_legacy)
+    }
+
+    /// Validate intrinsic node settings while retaining the structured diagnostic.
+    pub(crate) fn validate_detailed(&self) -> Result<(), crate::error::DetailedConfigError> {
         self.validate_inner().map_err(|error| {
             crate::error::DetailedConfigError::from_legacy(
                 error,
                 crate::diagnostic::DiagnosticSources::new(None).root(),
             )
-            .into_legacy()
         })
     }
 
@@ -446,6 +451,80 @@ impl Node {
             legacy_id
         }
     }
+}
+
+/// Validate an assembled node collection without changing any supplied value.
+///
+/// Collection admission is deliberately separate from operator-only Config
+/// validation so runtime providers can share the intrinsic and identity checks.
+pub fn validate_node_collection(nodes: &[Node]) -> Result<(), crate::error::DetailedConfigError> {
+    fn error(
+        index: usize,
+        code: &'static str,
+        message: &'static str,
+    ) -> crate::error::DetailedConfigError {
+        let ordinal = index + 1;
+        let source = crate::diagnostic::DiagnosticSources::new(None).root();
+        let mut error = crate::error::DetailedConfigError::new(
+            crate::error::ErrorCategory::Validation,
+            code,
+            source,
+            crate::diagnostic::SettingPath::new("nodes").index(ordinal),
+            message,
+        );
+        error.diagnostic.value = crate::diagnostic::SafeValue::Ordinal(ordinal);
+        error.diagnostic.entry_index = Some(ordinal);
+        error
+    }
+
+    for (index, node) in nodes.iter().enumerate() {
+        if node.id.is_nil() {
+            return Err(error(index, "nil-node-id", "node ID must not be nil"));
+        }
+    }
+
+    for (index, node) in nodes.iter().enumerate() {
+        if node.validate_detailed().is_err() {
+            return Err(error(
+                index,
+                "invalid-node",
+                "node failed intrinsic validation",
+            ));
+        }
+    }
+
+    for (index, node) in nodes.iter().enumerate() {
+        if matches!(
+            node.outbound,
+            OutboundConfig::Direct | OutboundConfig::Block
+        ) {
+            continue;
+        }
+        if node.id != node.derive_id() {
+            return Err(error(
+                index,
+                "noncanonical-node-id",
+                "node ID does not match canonical identity",
+            ));
+        }
+    }
+
+    if nodes.len() > 1 {
+        let mut ids = std::collections::HashMap::with_capacity(nodes.len());
+        for (index, node) in nodes.iter().enumerate() {
+            if let Some(first) = ids.insert(node.id, index) {
+                let mut error = error(
+                    index,
+                    "duplicate-node-id",
+                    "node ID duplicates another node",
+                );
+                error.diagnostic.related_indices.push(first + 1);
+                return Err(error);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Escape raw identity fields without changing ordinary nodes' legacy material.
