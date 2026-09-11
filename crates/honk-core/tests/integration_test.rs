@@ -1081,22 +1081,27 @@ protocol = "udp"
                 std::thread::sleep(Duration::from_millis(10));
             }
         };
-        let diagnostic = |log: &str, value: &str| {
-            log.lines().any(|line| {
-                line.contains("WARN")
-                    && line.contains("global.check_tolerance")
-                    && line.contains(value)
-            })
-        };
-        let filter_diagnostic_count = |log: &str| {
+        let diagnostic_count = |log: &str, setting: &str| {
             log.lines()
-                .filter(|line| line.contains("WARN") && line.contains("group.proxy.filter"))
+                .filter(|line| {
+                    line.contains("WARN")
+                        && line.contains("legacy-config-warning")
+                        && line.contains(setting)
+                })
                 .count()
         };
-        let result = (|| -> Result<(usize, usize), String> {
-            wait_for("startup diagnostic (1m)", &|log| diagnostic(log, "1m"))?;
+        let result = (|| -> Result<([usize; 2], [usize; 2]), String> {
+            wait_for("startup diagnostic", &|log| {
+                diagnostic_count(log, "global.check_tolerance") >= 1
+            })?;
             wait_for("Router ready", &|log| log.contains("Router ready"))?;
-            let startup_filter_diagnostics = filter_diagnostic_count(&output.lock());
+            let startup_diagnostics = {
+                let output = output.lock();
+                [
+                    diagnostic_count(&output, "global.check_tolerance"),
+                    diagnostic_count(&output, "groups[1].filter"),
+                ]
+            };
             // Router construction precedes the spawned SIGHUP handler; do not
             // deliver a terminating default-action signal during that window.
             wait_for("SIGHUP handler registration", &|_| {
@@ -1116,12 +1121,20 @@ protocol = "udp"
                 nix::sys::signal::Signal::SIGHUP,
             )
             .map_err(|error| error.to_string())?;
-            wait_for("SIGHUP diagnostic (2h)", &|log| diagnostic(log, "2h"))?;
+            wait_for("SIGHUP diagnostic", &|log| {
+                diagnostic_count(log, "global.check_tolerance") >= 2
+            })?;
             wait_for("SIGHUP reload request 1 applied", &|log| {
                 log.contains("SIGHUP reload request 1 applied")
             })?;
-            let cumulative_filter_diagnostics = filter_diagnostic_count(&output.lock());
-            Ok((startup_filter_diagnostics, cumulative_filter_diagnostics))
+            let cumulative_diagnostics = {
+                let output = output.lock();
+                [
+                    diagnostic_count(&output, "global.check_tolerance"),
+                    diagnostic_count(&output, "groups[1].filter"),
+                ]
+            };
+            Ok((startup_diagnostics, cumulative_diagnostics))
         })();
         let _ = child.kill();
         let status = child.wait();
@@ -1129,13 +1142,13 @@ protocol = "udp"
             reader.join().expect("join daemon output reader");
         }
         status.expect("reap mock daemon");
-        let (startup_filter_diagnostics, cumulative_filter_diagnostics) = match result {
+        let (startup_diagnostics, cumulative_diagnostics) = match result {
             Ok(counts) => counts,
             Err(error) => panic!("{}\n{}", error, output.lock()),
         };
         assert_eq!(
-            (startup_filter_diagnostics, cumulative_filter_diagnostics),
-            (1, 2)
+            (startup_diagnostics, cumulative_diagnostics),
+            ([1, 1], [2, 2])
         );
     }
 

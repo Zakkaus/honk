@@ -35,6 +35,10 @@ pub const VERSION: &str = env!("HONK_VERSION");
 
 use clap::Parser;
 use honk_config::Config;
+use honk_config::diagnostic::{
+    DetailedDiagnostic, DiagnosticSources, SettingPath, finish_attempt, report_detailed_diagnostics,
+};
+use honk_config::error::{DetailedConfigError, ErrorCategory};
 use std::path::PathBuf;
 use tracing::{info, warn};
 
@@ -564,59 +568,122 @@ fn warn_api_exposure(listen: std::net::SocketAddr, secret: &str) {
     }
 }
 
+fn load_operator_config(
+    path: &str,
+    diagnostics: &mut Vec<DetailedDiagnostic>,
+) -> Result<Config, DetailedConfigError> {
+    let start = diagnostics.len();
+    // The file loader already owns parse failures; only validation finishes here.
+    let config = Config::from_file_with_detailed_diagnostics(path, diagnostics)?;
+    let source = diagnostics.get(start).map_or_else(
+        || DiagnosticSources::new(Some(path.into())).root(),
+        |diagnostic| diagnostic.source.sources().root(),
+    );
+    let result = config
+        .validate()
+        .map_err(|error| DetailedConfigError::from_legacy(error, source.clone()))
+        .and_then(|()| {
+            subscription::validate_subscription_ids(&config.subscriptions).map_err(|_| {
+                DetailedConfigError::new(
+                    ErrorCategory::Validation,
+                    "invalid-subscription-id",
+                    source,
+                    SettingPath::new("subscriptions").field("id"),
+                    "subscription IDs must be non-nil and unique",
+                )
+            })
+        });
+    finish_attempt(result.map(|()| config), diagnostics)
+}
+
+fn report_startup_failure(diagnostics: &[DetailedDiagnostic]) {
+    for diagnostic in diagnostics.iter().filter(|diagnostic| !diagnostic.terminal) {
+        eprintln!(
+            "{:?} code={} setting={} value={}: {}",
+            diagnostic.severity,
+            diagnostic.code,
+            diagnostic.setting,
+            diagnostic.value,
+            diagnostic.message,
+        );
+    }
+}
+
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     // Load the configuration before initializing logging so `log_level` in
     // the config file is honored (previously only --debug/RUST_LOG had any
     // effect and config log_level was silently ignored).
     let mut diagnostics = Vec::new();
-    let mut config =
-        Config::from_file_with_diagnostics(cli.config.to_str().unwrap(), &mut diagnostics)?;
-    config.validate()?;
-    subscription::validate_subscription_ids(&config.subscriptions)?;
-    let requested_data_dir = PathBuf::from(&config.global.data_dir);
-    let (runtime_data_dir, data_dir_creation_error) =
-        prepare_runtime_data_dir(&requested_data_dir)?;
-    honk_config::paths::set_data_dir(runtime_data_dir).map_err(|requested| {
-        anyhow::anyhow!(
-            "runtime data directory is already {}; cannot switch to {}",
-            honk_config::paths::data_dir().display(),
-            requested.display()
-        )
-    })?;
-    // Make `direct`/`block` usable as group members without declaring them
-    // in the config (Direct/Block protocols → DirectHandler/BlockHandler).
-    config.ensure_builtin_nodes();
-    // Traffic to the gateway's own addresses always goes direct (must),
-    // keeping admin/API access alive even when every node is down.
-    config.ensure_local_direct_rules();
+    let startup = (|| -> anyhow::Result<_> {
+        let mut config = load_operator_config(cli.config.to_str().unwrap(), &mut diagnostics)?;
+        let requested_data_dir = PathBuf::from(&config.global.data_dir);
+        let (runtime_data_dir, data_dir_creation_error) =
+            prepare_runtime_data_dir(&requested_data_dir)?;
+        honk_config::paths::set_data_dir(runtime_data_dir).map_err(|requested| {
+            anyhow::anyhow!(
+                "runtime data directory is already {}; cannot switch to {}",
+                honk_config::paths::data_dir().display(),
+                requested.display()
+            )
+        })?;
+        // Make `direct`/`block` usable as group members without declaring them
+        // in the config (Direct/Block protocols → DirectHandler/BlockHandler).
+        config.ensure_builtin_nodes();
+        // Traffic to the gateway's own addresses always goes direct (must),
+        // keeping admin/API access alive even when every node is down.
+        config.ensure_local_direct_rules();
 
-    // Effective log level: --debug flag > RUST_LOG env > config log_level >
-    // "info".
-    let config_level = match config.global.log_level.trim() {
-        "" => "info",
-        other => other,
-    };
-    let default_level = if cli.debug { "debug" } else { config_level };
-    // quinn logs every endpoint-driver death at ERROR; probe/warm endpoints
-    // over retiring AnyTLS sessions die as a matter of course (the SYNACK
-    // watchdog kills them on purpose), so that target is silenced unless
-    // RUST_LOG says otherwise.
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        tracing_subscriber::EnvFilter::new(format!("{default_level},quinn::endpoint=off"))
-    });
+        // Effective log level: --debug flag > RUST_LOG env > config log_level >
+        // "info".
+        let config_level = match config.global.log_level.trim() {
+            "" => "info",
+            other => other,
+        };
+        let default_level = if cli.debug { "debug" } else { config_level };
+        // quinn logs every endpoint-driver death at ERROR; probe/warm endpoints
+        // over retiring AnyTLS sessions die as a matter of course (the SYNACK
+        // watchdog kills them on purpose), so that target is silenced unless
+        // RUST_LOG says otherwise.
+        let env_filter =
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new(format!("{default_level},quinn::endpoint=off"))
+            });
 
-    let log_file_path = resolved_log_file_path(&config, cli.log_file.as_deref());
-    let log_file_layer = if let Some(path) = log_file_path.as_ref() {
-        let file = open_log_file(path)?;
-        Some(
-            tracing_subscriber::fmt::layer()
-                .with_timer(LocalTime)
-                .with_ansi(false)
-                .with_writer(std::sync::Mutex::new(file))
-                .with_filter(env_filter.clone()),
-        )
-    } else {
-        None
+        let log_file_path = resolved_log_file_path(&config, cli.log_file.as_deref());
+        let log_file_layer = if let Some(path) = log_file_path.as_ref() {
+            let file = open_log_file(path)?;
+            Some(
+                tracing_subscriber::fmt::layer()
+                    .with_timer(LocalTime)
+                    .with_ansi(false)
+                    .with_writer(std::sync::Mutex::new(file))
+                    .with_filter(env_filter.clone()),
+            )
+        } else {
+            None
+        };
+        Ok((
+            config,
+            requested_data_dir,
+            data_dir_creation_error,
+            log_file_path,
+            log_file_layer,
+            env_filter,
+        ))
+    })();
+    let (
+        mut config,
+        requested_data_dir,
+        data_dir_creation_error,
+        log_file_path,
+        log_file_layer,
+        env_filter,
+    ) = match startup {
+        Ok(startup) => startup,
+        Err(error) => {
+            report_startup_failure(&diagnostics);
+            return Err(error);
+        }
     };
 
     // Console, optional file, and Clash API output use independent layers.
@@ -646,7 +713,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             "Runtime data directory is unusable; using process working directory"
         );
     }
-    honk_config::diagnostic::report_diagnostics(&diagnostics);
+    report_detailed_diagnostics(&diagnostics);
     info!(directory = %honk_config::paths::data_dir().display(), "Runtime data directory configured");
     if let Some(path) = log_file_path.as_ref() {
         info!(path = %path.display(), "File logging enabled");
@@ -1225,26 +1292,13 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             request_id = request_id.wrapping_add(1).max(1);
             info!("SIGHUP reload request {request_id} received");
             let mut diagnostics = Vec::new();
-            match Config::from_file_with_diagnostics(
+            let result = load_operator_config(
                 config_path.to_str().unwrap_or("/etc/honk/config.dae"),
                 &mut diagnostics,
-            ) {
+            );
+            report_detailed_diagnostics(&diagnostics);
+            match result {
                 Ok(mut new_config) => {
-                    honk_config::diagnostic::report_diagnostics(&diagnostics);
-                    if let Err(error) = new_config.validate() {
-                        warn!(
-                            "SIGHUP reload request {request_id} rejected: invalid config: {error}"
-                        );
-                        continue;
-                    }
-                    if let Err(error) =
-                        subscription::validate_subscription_ids(&new_config.subscriptions)
-                    {
-                        warn!(
-                            "SIGHUP reload request {request_id} rejected: invalid config: {error}"
-                        );
-                        continue;
-                    }
                     new_config.ensure_builtin_nodes();
                     new_config.ensure_local_direct_rules();
                     if let Err(error) = request_runtime_reload(
@@ -1260,9 +1314,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                         break;
                     }
                 }
-                Err(e) => {
-                    honk_config::diagnostic::report_diagnostics(&diagnostics);
-                    warn!("SIGHUP reload request {request_id} rejected: config load failed: {e}")
+                Err(error) => {
+                    warn!("SIGHUP reload request {request_id} rejected: {error}")
                 }
             }
         }

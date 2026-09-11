@@ -10,6 +10,8 @@
 
 ## 启动与关闭
 
+配置诊断在初始化 tracing 前收集。加载或配置校验提前失败时，先向标准错误输出已有的非终止诊断，每条仅输出一次，再由二进制程序返回一次脱敏后的终止错误。加载成功时，诊断延迟到配置指定的 tracing 订阅器就绪后输出。后续运行时致命错误仍保留原有的日志文件记录。
+
 启动时保持内核准入关闭，直到用户态能够接收每个重定向流：
 
 1. 加载并校验配置、选择 `global.data_dir`，提升 `RLIMIT_NOFILE`，并取得一次不可变的描述符预算快照。
@@ -126,6 +128,8 @@ Reload 在等待前推进 cancellation epoch。Initializer 捕获该 epoch 和 i
 Accepted TCP socket 只有在其规范正向 `CONN_STATE_MAP` 条目仍存在时才会被接管。`TcpFlowPins` 为每个 accepted owner 引用计数该方向 tuple。BPF janitor 跳过已 pin 的 conn-state 和匹配的 redirect 元数据。最后一个 owner 退役时读取当前条目，并且只在 state 与 timestamp 仍匹配已观察 incarnation 时条件删除；旧 relay 不能删除复用的 tuple。
 
 ## Reload 与运行时 generation
+
+SIGHUP 为每次尝试单独收集诊断。无论加载和配置校验成功与否，警告都只报告一次；被拒绝的尝试另报告一次脱敏后的原因，不进入运行时发布流程。报告本次诊断不会替换当前运行时状态，也不会新增最近失败尝试的缓存。
 
 `apply_runtime_config` 首先构建替代 Router、GroupManager、出站 registry、DNS 运行时与路由计划，不修改 live state。提交顺序为：
 
