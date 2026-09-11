@@ -4,7 +4,9 @@ use honk_config::options::vocab::{optional_text, packet_network, stream_transpor
 use honk_config::types::NodeProtocol;
 use serde_yaml::{Mapping, Value};
 
-use super::{NodeResult, move_credential_strings, move_strings, put, take_optional_string};
+use super::{
+    NodeResult, NormalizedEntry, move_credential_strings, move_strings, put, take_optional_string,
+};
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PacketNetwork {
     Both,
@@ -28,8 +30,16 @@ pub(super) fn normalize(value: Value) -> NodeResult {
         "tuic" => NodeProtocol::Tuic,
         "juicity" => NodeProtocol::Juicity,
         "anytls" => NodeProtocol::AnyTLS,
-        "selector" | "urltest" | "direct" | "block" | "dns" => return Ok(None),
-        _ => return Ok(None),
+        "selector" | "urltest" | "direct" | "block" | "dns" => {
+            return Ok(NormalizedEntry::Profile(
+                "sing-box non-proxy profile outbound",
+            ));
+        }
+        _ => {
+            return Ok(NormalizedEntry::Unsupported(
+                "sing-box outbound type is unsupported",
+            ));
+        }
     };
     if source.remove("detour").is_some_and(|value| active(&value)) {
         return Err("sing-box detour chaining is unsupported");
@@ -70,7 +80,7 @@ pub(super) fn normalize(value: Value) -> NodeResult {
         NodeProtocol::AnyTLS => normalize_anytls(source, proxy),
         NodeProtocol::Direct | NodeProtocol::Block => unreachable!(),
     }
-    .map(Some)
+    .map(NormalizedEntry::Node)
 }
 
 fn normalize_shadowsocks(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, &'static str> {

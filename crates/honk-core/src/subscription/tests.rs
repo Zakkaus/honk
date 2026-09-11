@@ -4,6 +4,18 @@ use honk_config::types::NodeProtocol;
 
 mod clash;
 
+fn parse_clash_subscription(
+    content: &str,
+    subscription_id: Option<uuid::Uuid>,
+) -> anyhow::Result<Vec<Node>> {
+    let yaml = parse_structured_value(content)?;
+    let proxies = yaml
+        .get("proxies")
+        .and_then(serde_yaml::Value::as_sequence)
+        .ok_or_else(|| anyhow::anyhow!("no 'proxies' array found in Clash YAML"))?;
+    parse_clash_proxies(proxies, subscription_id)
+}
+
 #[tokio::test]
 async fn body_reader_refuses_one_byte_past_the_cap() {
     let at_cap = http::Response::new(vec![b'a'; MAX_SUBSCRIPTION_BYTES]);
@@ -579,4 +591,98 @@ fn subscription_store_rejects_symlink_directory() {
     let link = temp.path().join(SUBSCRIPTION_STORE_DIR);
     symlink(target, &link).unwrap();
     assert!(SubscriptionStore::open(link).is_err());
+}
+fn assert_c17_original_indices(
+    sub_type: SubscriptionType,
+    fixture: &str,
+    expected_indices: &[(usize, honk_config::diagnostic::Severity)],
+    expected_codes: &[&str],
+) {
+    let subscription = Subscription {
+        sub_type,
+        ..Subscription::default()
+    };
+    let mut diagnostics = Vec::new();
+    let nodes =
+        parse_subscription_content_with_diagnostics(&subscription, fixture, &mut diagnostics)
+            .unwrap();
+
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>(),
+        ["usable-proxy"]
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.entry_index, diagnostic.severity))
+            .collect::<Vec<_>>(),
+        expected_indices
+            .iter()
+            .map(|&(index, severity)| (Some(index), severity))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        expected_codes
+    );
+    let rendered = diagnostics
+        .iter()
+        .map(|diagnostic| format!("{diagnostic:?}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!rendered.contains("secret.example"));
+    assert!(!rendered.contains("secret-password"));
+}
+
+#[test]
+fn c17_structured_adapters_retain_original_mixed_entry_indices() {
+    use honk_config::diagnostic::Severity;
+
+    assert_c17_original_indices(
+        SubscriptionType::Simple,
+        include_str!("../../tests/fixtures/c17-mixed-structured.json"),
+        &[
+            (1, Severity::Info),
+            (2, Severity::Warning),
+            (3, Severity::Warning),
+            (4, Severity::Warning),
+        ],
+        &[
+            "subscription-profile-entry",
+            "malformed-subscription-entry",
+            "unsupported-subscription-entry",
+            "malformed-subscription-entry",
+        ],
+    );
+    assert_c17_original_indices(
+        SubscriptionType::Sip008,
+        include_str!("../../tests/fixtures/c17-mixed-sip008.json"),
+        &[(1, Severity::Warning), (2, Severity::Warning)],
+        &[
+            "malformed-subscription-entry",
+            "malformed-subscription-entry",
+        ],
+    );
+    assert_c17_original_indices(
+        SubscriptionType::Clash,
+        include_str!("../../tests/fixtures/c17-mixed-clash.json"),
+        &[
+            (1, Severity::Warning),
+            (2, Severity::Warning),
+            (3, Severity::Warning),
+            (4, Severity::Warning),
+        ],
+        &[
+            "unsupported-subscription-entry",
+            "malformed-subscription-entry",
+            "unsupported-subscription-entry",
+            "malformed-subscription-entry",
+        ],
+    );
 }

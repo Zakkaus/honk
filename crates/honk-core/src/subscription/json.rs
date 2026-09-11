@@ -1,25 +1,59 @@
 //! SIP008 and sing-box node imports normalized through the common Clash builder.
 
+#[cfg(test)]
 use honk_config::node::Node;
 use serde_yaml::{Mapping, Value};
 
+use super::IndexedOutcome;
+#[cfg(test)]
+use super::IndexedOutcomeKind;
+
 mod sing_box;
 
-type NodeResult = Result<Option<Mapping>, &'static str>;
+enum NormalizedEntry {
+    Node(Mapping),
+    Profile(&'static str),
+    Unsupported(&'static str),
+}
 
+type NodeResult = Result<NormalizedEntry, &'static str>;
+
+#[cfg(test)]
 pub(super) fn parse_json_subscription(
     value: Value,
     subscription_id: Option<uuid::Uuid>,
 ) -> anyhow::Result<Vec<Node>> {
+    let outcomes = parse_json_subscription_outcomes(value, subscription_id)?;
+    let nodes = outcomes
+        .into_iter()
+        .filter_map(|outcome| match outcome.kind {
+            IndexedOutcomeKind::Node(node) => Some(node),
+            IndexedOutcomeKind::Malformed(_)
+            | IndexedOutcomeKind::Unsupported(_)
+            | IndexedOutcomeKind::Profile(_) => None,
+        })
+        .collect::<Vec<_>>();
+    if nodes.is_empty() {
+        anyhow::bail!("no supported nodes found in JSON subscription");
+    }
+    Ok(nodes)
+}
+
+pub(super) fn parse_json_subscription_outcomes(
+    value: Value,
+    subscription_id: Option<uuid::Uuid>,
+) -> anyhow::Result<Vec<IndexedOutcome>> {
     match value {
-        Value::Sequence(servers) => parse_entries(servers, subscription_id, normalize_sip008),
+        Value::Sequence(servers) => {
+            parse_entries(servers, subscription_id, normalize_sip008, "servers")
+        }
         Value::Mapping(mut root) => {
             let outbounds = root.remove("outbounds");
             let servers = root.remove("servers");
             match (outbounds, servers) {
                 (Some(_), Some(_)) => anyhow::bail!("ambiguous JSON subscription wrapper"),
                 (Some(Value::Sequence(outbounds)), None) => {
-                    parse_entries(outbounds, subscription_id, sing_box::normalize)
+                    parse_entries(outbounds, subscription_id, sing_box::normalize, "outbounds")
                 }
                 (Some(_), None) => anyhow::bail!("sing-box 'outbounds' must be an array"),
                 (None, Some(Value::Sequence(servers))) => {
@@ -28,7 +62,7 @@ pub(super) fn parse_json_subscription(
                     {
                         anyhow::bail!("unsupported SIP008 version");
                     }
-                    parse_entries(servers, subscription_id, normalize_sip008)
+                    parse_entries(servers, subscription_id, normalize_sip008, "servers")
                 }
                 (None, Some(_)) => anyhow::bail!("SIP008 'servers' must be an array"),
                 (None, None) => anyhow::bail!("unsupported JSON subscription wrapper"),
@@ -42,24 +76,30 @@ fn parse_entries(
     entries: Vec<Value>,
     subscription_id: Option<uuid::Uuid>,
     normalize: fn(Value) -> NodeResult,
-) -> anyhow::Result<Vec<Node>> {
-    let mut proxies = Vec::with_capacity(entries.len());
-    let mut first_error = None;
-    for entry in entries {
-        match normalize(entry) {
-            Ok(Some(proxy)) => proxies.push(Value::Mapping(proxy)),
-            Ok(None) => {}
-            Err(error) => {
-                first_error.get_or_insert(error);
+    path: &'static str,
+) -> anyhow::Result<Vec<IndexedOutcome>> {
+    let mut outcomes = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.into_iter().enumerate() {
+        let ordinal = index + 1;
+        let outcome = match normalize(entry) {
+            Ok(NormalizedEntry::Node(proxy)) => {
+                match super::clash::parse_clash_proxy(&proxy, subscription_id) {
+                    Ok(node) => IndexedOutcome::node(ordinal, path, node),
+                    Err(reason) if reason.contains("unsupported") => {
+                        IndexedOutcome::unsupported(ordinal, path, reason)
+                    }
+                    Err(reason) => IndexedOutcome::malformed(ordinal, path, reason),
+                }
             }
+            Ok(NormalizedEntry::Profile(reason)) => IndexedOutcome::profile(ordinal, path, reason),
+            Ok(NormalizedEntry::Unsupported(reason)) => {
+                IndexedOutcome::unsupported(ordinal, path, reason)
+            }
+            Err(reason) => IndexedOutcome::malformed(ordinal, path, reason),
         };
+        outcomes.push(outcome);
     }
-    if proxies.is_empty()
-        && let Some(error) = first_error
-    {
-        anyhow::bail!(error);
-    }
-    super::parse_clash_proxies(&proxies, subscription_id)
+    Ok(outcomes)
 }
 
 fn normalize_sip008(value: Value) -> NodeResult {
@@ -87,7 +127,7 @@ fn normalize_sip008(value: Value) -> NodeResult {
         }
         Some(_) => return Err("SIP008 server port must be an integer"),
     }
-    Ok(Some(proxy))
+    Ok(NormalizedEntry::Node(proxy))
 }
 
 fn put(mapping: &mut Mapping, key: &str, value: Value) {

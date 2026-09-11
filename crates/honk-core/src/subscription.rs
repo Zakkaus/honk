@@ -11,6 +11,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use honk_config::diagnostic::{
+    DetailedDiagnostic, DiagnosticSources, SafeValue, SettingPath, Severity, finish_attempt,
+    report_detailed_diagnostics,
+};
+use honk_config::error::{DetailedConfigError, ErrorCategory};
 use honk_config::node::Node;
 use honk_config::subscription::Subscription;
 use honk_config::types::SubscriptionType;
@@ -30,6 +35,61 @@ pub(crate) use supervisor::{
 const MAX_SUBSCRIPTION_BYTES: usize = 8 * 1024 * 1024;
 
 const MAX_SUBSCRIPTION_REDIRECTS: usize = 5;
+
+/// One source entry retained through normalization for the common body pass.
+#[derive(Debug)]
+struct IndexedOutcome {
+    ordinal: usize,
+    line: Option<usize>,
+    path: &'static str,
+    kind: IndexedOutcomeKind,
+}
+
+#[derive(Debug)]
+enum IndexedOutcomeKind {
+    Node(Node),
+    Malformed(&'static str),
+    Unsupported(&'static str),
+    Profile(&'static str),
+}
+
+impl IndexedOutcome {
+    fn node(ordinal: usize, path: &'static str, node: Node) -> Self {
+        Self {
+            ordinal,
+            line: None,
+            path,
+            kind: IndexedOutcomeKind::Node(node),
+        }
+    }
+
+    fn malformed(ordinal: usize, path: &'static str, reason: &'static str) -> Self {
+        Self {
+            ordinal,
+            line: None,
+            path,
+            kind: IndexedOutcomeKind::Malformed(reason),
+        }
+    }
+
+    fn unsupported(ordinal: usize, path: &'static str, reason: &'static str) -> Self {
+        Self {
+            ordinal,
+            line: None,
+            path,
+            kind: IndexedOutcomeKind::Unsupported(reason),
+        }
+    }
+
+    fn profile(ordinal: usize, path: &'static str, reason: &'static str) -> Self {
+        Self {
+            ordinal,
+            line: None,
+            path,
+            kind: IndexedOutcomeKind::Profile(reason),
+        }
+    }
+}
 
 /// A hostname that resolves to a private address is not detected here; this
 /// only refuses a destination the redirect states outright.
@@ -376,50 +436,169 @@ impl SubscriptionManager {
 
 /// Parse a fetched or locally supplied subscription body using its shape.
 pub fn parse_subscription_content(sub: &Subscription, content: &str) -> anyhow::Result<Vec<Node>> {
-    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
-    let nodes = match sub.sub_type {
-        SubscriptionType::Sip008 => parse_sip008_subscription(content, Some(sub.id)),
-        SubscriptionType::Clash => parse_clash_subscription(content, Some(sub.id)),
-        SubscriptionType::Simple | SubscriptionType::Custom => {
-            parse_auto_subscription(content, Some(sub.id), &sub.name)
-        }
-    }?;
+    let mut diagnostics = Vec::new();
+    let result = parse_subscription_content_with_diagnostics(sub, content, &mut diagnostics);
+    report_detailed_diagnostics(&diagnostics);
+    result.map_err(|error| anyhow::anyhow!(error.to_string()))
+}
 
-    let mut seen = std::collections::HashSet::new();
-    let nodes = nodes
-        .into_iter()
-        .filter(|node| {
-            if node.shadowsocks().is_some_and(|config| {
-                config
-                    .plugin
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
-                    || config
-                        .plugin_opts
+/// Parse a subscription body while retaining redacted, indexed entry outcomes.
+pub fn parse_subscription_content_with_diagnostics(
+    sub: &Subscription,
+    content: &str,
+    diagnostics: &mut Vec<DetailedDiagnostic>,
+) -> Result<Vec<Node>, DetailedConfigError> {
+    let source = DiagnosticSources::new(None).root();
+    let result = parse_subscription_content_attempt(sub, content, &source, diagnostics);
+    finish_attempt(result, diagnostics)
+}
+
+fn parse_subscription_content_attempt(
+    sub: &Subscription,
+    content: &str,
+    source: &honk_config::diagnostic::SourceRef,
+    diagnostics: &mut Vec<DetailedDiagnostic>,
+) -> Result<Vec<Node>, DetailedConfigError> {
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let outcomes = match sub.sub_type {
+        SubscriptionType::Sip008 => parse_sip008_subscription_outcomes(content, Some(sub.id)),
+        SubscriptionType::Clash => parse_clash_subscription_outcomes(content, Some(sub.id)),
+        SubscriptionType::Simple | SubscriptionType::Custom => {
+            parse_auto_subscription_outcomes(content, Some(sub.id), &sub.name)
+        }
+    }
+    .map_err(|_| subscription_error(source.clone(), "invalid-subscription-body"))?;
+    collect_indexed_outcomes(outcomes, source, diagnostics)
+}
+
+fn subscription_error(
+    source: honk_config::diagnostic::SourceRef,
+    code: &'static str,
+) -> DetailedConfigError {
+    DetailedConfigError::new(
+        ErrorCategory::Parse,
+        code,
+        source,
+        SettingPath::new("subscription"),
+        "subscription body could not be accepted",
+    )
+}
+
+fn collect_indexed_outcomes(
+    outcomes: Vec<IndexedOutcome>,
+    source: &honk_config::diagnostic::SourceRef,
+    diagnostics: &mut Vec<DetailedDiagnostic>,
+) -> Result<Vec<Node>, DetailedConfigError> {
+    let mut nodes = Vec::new();
+    let mut seen = std::collections::HashSet::<uuid::Uuid>::new();
+    for outcome in outcomes {
+        let ordinal = outcome.ordinal;
+        let line = outcome.line;
+        let path = outcome.path;
+        match outcome.kind {
+            IndexedOutcomeKind::Node(node) => {
+                if node.shadowsocks().is_some_and(|config| {
+                    config
+                        .plugin
                         .as_deref()
                         .is_some_and(|value| !value.trim().is_empty())
-            }) {
-                tracing::warn!(
-                    node = %node.name,
-                    "skipping subscription node with unsupported proxy plugin"
-                );
-                return false;
+                        || config
+                            .plugin_opts
+                            .as_deref()
+                            .is_some_and(|value| !value.trim().is_empty())
+                }) {
+                    diagnostics.push(indexed_diagnostic(
+                        "unsupported-subscription-entry",
+                        Severity::Warning,
+                        source,
+                        ordinal,
+                        line,
+                        path,
+                        "subscription node uses an unsupported proxy plugin; ignored",
+                    ));
+                    continue;
+                }
+                if seen.insert(node.id) {
+                    nodes.push(node);
+                }
             }
-            if seen.insert(node.id) {
-                true
-            } else {
-                tracing::warn!(
-                    node = %node.name,
-                    "skipping subscription node with a duplicate endpoint identity"
-                );
-                false
-            }
-        })
-        .collect::<Vec<_>>();
+            IndexedOutcomeKind::Malformed(reason) => diagnostics.push(indexed_diagnostic(
+                "malformed-subscription-entry",
+                Severity::Warning,
+                source,
+                ordinal,
+                line,
+                path,
+                reason,
+            )),
+            IndexedOutcomeKind::Unsupported(reason) => diagnostics.push(indexed_diagnostic(
+                "unsupported-subscription-entry",
+                Severity::Warning,
+                source,
+                ordinal,
+                line,
+                path,
+                reason,
+            )),
+            IndexedOutcomeKind::Profile(reason) => diagnostics.push(indexed_diagnostic(
+                "subscription-profile-entry",
+                Severity::Info,
+                source,
+                ordinal,
+                line,
+                path,
+                reason,
+            )),
+        }
+    }
     if nodes.is_empty() {
-        anyhow::bail!("no usable nodes found in subscription");
+        return Err(subscription_error(
+            source.clone(),
+            "empty-subscription-body",
+        ));
     }
     Ok(nodes)
+}
+
+fn indexed_diagnostic(
+    code: &'static str,
+    severity: Severity,
+    source: &honk_config::diagnostic::SourceRef,
+    ordinal: usize,
+    line: Option<usize>,
+    path: &'static str,
+    message: &'static str,
+) -> DetailedDiagnostic {
+    let mut diagnostic = DetailedDiagnostic::warning(
+        code,
+        source.clone(),
+        SettingPath::new(path).index(ordinal),
+        SafeValue::Ordinal(ordinal),
+        message,
+    );
+    diagnostic.severity = severity;
+    diagnostic.entry_index = Some(ordinal);
+    diagnostic.line = line;
+    diagnostic
+}
+fn parse_sip008_subscription_outcomes(
+    content: &str,
+    subscription_id: Option<uuid::Uuid>,
+) -> anyhow::Result<Vec<IndexedOutcome>> {
+    let value = parse_structured_value(content)?;
+    match &value {
+        serde_yaml::Value::Sequence(_) => {
+            json::parse_json_subscription_outcomes(value, subscription_id)
+        }
+        serde_yaml::Value::Mapping(root)
+            if yaml_value(root, "servers").is_some()
+                && yaml_value(root, "outbounds").is_none()
+                && yaml_value(root, "proxies").is_none() =>
+        {
+            json::parse_json_subscription_outcomes(value, subscription_id)
+        }
+        _ => anyhow::bail!("invalid SIP008 subscription shape"),
+    }
 }
 
 fn parse_structured_value(content: &str) -> Result<serde_yaml::Value, serde_yaml::Error> {
@@ -428,29 +607,11 @@ fn parse_structured_value(content: &str) -> Result<serde_yaml::Value, serde_yaml
     serde_json::from_str(content).or_else(|_| serde_yaml::from_str(content))
 }
 
-fn parse_sip008_subscription(
-    content: &str,
-    subscription_id: Option<uuid::Uuid>,
-) -> anyhow::Result<Vec<Node>> {
-    let value = parse_structured_value(content)?;
-    match &value {
-        serde_yaml::Value::Sequence(_) => json::parse_json_subscription(value, subscription_id),
-        serde_yaml::Value::Mapping(root)
-            if yaml_value(root, "servers").is_some()
-                && yaml_value(root, "outbounds").is_none()
-                && yaml_value(root, "proxies").is_none() =>
-        {
-            json::parse_json_subscription(value, subscription_id)
-        }
-        _ => anyhow::bail!("invalid SIP008 subscription shape"),
-    }
-}
-
-fn parse_auto_subscription(
+fn parse_auto_subscription_outcomes(
     content: &str,
     subscription_id: Option<uuid::Uuid>,
     subscription_tag: &str,
-) -> anyhow::Result<Vec<Node>> {
+) -> anyhow::Result<Vec<IndexedOutcome>> {
     let content = content.trim().trim_start_matches('\u{feff}');
     if content.is_empty() {
         anyhow::bail!("empty subscription body");
@@ -463,8 +624,8 @@ fn parse_auto_subscription(
         .unwrap_or(content)
         .trim()
         .trim_start_matches('\u{feff}');
-    if let Some(nodes) = parse_structured_subscription(text, subscription_id)? {
-        return Ok(nodes);
+    if let Some(outcomes) = parse_structured_subscription_outcomes(text, subscription_id)? {
+        return Ok(outcomes);
     }
     let has_uri = text.lines().map(str::trim).any(|line| {
         line.split_once("://").is_some_and(|(scheme, _)| {
@@ -474,17 +635,22 @@ fn parse_auto_subscription(
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
         })
     });
-    if has_uri {
-        parse_uri_subscription(text, subscription_id, subscription_tag)
+    let nodes = if has_uri {
+        parse_uri_subscription(text, subscription_id, subscription_tag)?
     } else {
-        records::parse_records_subscription(text, subscription_id)
-    }
+        records::parse_records_subscription(text, subscription_id)?
+    };
+    Ok(nodes
+        .into_iter()
+        .enumerate()
+        .map(|(index, node)| IndexedOutcome::node(index + 1, "subscription", node))
+        .collect())
 }
 
-fn parse_structured_subscription(
+fn parse_structured_subscription_outcomes(
     text: &str,
     subscription_id: Option<uuid::Uuid>,
-) -> anyhow::Result<Option<Vec<Node>>> {
+) -> anyhow::Result<Option<Vec<IndexedOutcome>>> {
     let Ok(value) = parse_structured_value(text) else {
         let first = text
             .lines()
@@ -515,11 +681,11 @@ fn parse_structured_subscription(
     if let serde_yaml::Value::Mapping(root) = &value
         && let Some(proxies) = yaml_value(root, "proxies").and_then(serde_yaml::Value::as_sequence)
     {
-        return Ok(Some(parse_clash_proxies(proxies, subscription_id)?));
+        return Ok(Some(parse_clash_proxies_outcomes(proxies, subscription_id)));
     }
     match value {
         serde_yaml::Value::Mapping(_) | serde_yaml::Value::Sequence(_) => {
-            json::parse_json_subscription(value, subscription_id).map(Some)
+            json::parse_json_subscription_outcomes(value, subscription_id).map(Some)
         }
         _ => Ok(None),
     }
@@ -598,38 +764,59 @@ fn parse_clash_proxies(
     proxies: &[serde_yaml::Value],
     subscription_id: Option<uuid::Uuid>,
 ) -> anyhow::Result<Vec<Node>> {
-    let mut nodes = Vec::new();
-    for (index, proxy) in proxies.iter().enumerate() {
-        let Some(mapping) = proxy.as_mapping() else {
-            continue;
-        };
-        match clash::parse_clash_proxy(mapping, subscription_id) {
-            Ok(node) => nodes.push(node),
-            Err(reason) => {
-                tracing::warn!(
-                    proxy_index = index + 1,
-                    reason,
-                    "skipping unsupported or malformed subscription proxy"
-                );
-            }
-        }
-    }
+    let outcomes = parse_clash_proxies_outcomes(proxies, subscription_id);
+    let nodes = outcomes
+        .into_iter()
+        .filter_map(|outcome| match outcome.kind {
+            IndexedOutcomeKind::Node(node) => Some(node),
+            IndexedOutcomeKind::Malformed(_)
+            | IndexedOutcomeKind::Unsupported(_)
+            | IndexedOutcomeKind::Profile(_) => None,
+        })
+        .collect::<Vec<_>>();
     if nodes.is_empty() {
         anyhow::bail!("no supported proxies found in Clash subscription");
     }
     Ok(nodes)
 }
 
-fn parse_clash_subscription(
+fn parse_clash_proxies_outcomes(
+    proxies: &[serde_yaml::Value],
+    subscription_id: Option<uuid::Uuid>,
+) -> Vec<IndexedOutcome> {
+    proxies
+        .iter()
+        .enumerate()
+        .map(|(index, proxy)| {
+            let ordinal = index + 1;
+            let Some(mapping) = proxy.as_mapping() else {
+                return IndexedOutcome::malformed(
+                    ordinal,
+                    "proxies",
+                    "Clash proxy entry must be an object",
+                );
+            };
+            match clash::parse_clash_proxy(mapping, subscription_id) {
+                Ok(node) => IndexedOutcome::node(ordinal, "proxies", node),
+                Err(reason) if reason.contains("unsupported") => {
+                    IndexedOutcome::unsupported(ordinal, "proxies", reason)
+                }
+                Err(reason) => IndexedOutcome::malformed(ordinal, "proxies", reason),
+            }
+        })
+        .collect()
+}
+
+fn parse_clash_subscription_outcomes(
     content: &str,
     subscription_id: Option<uuid::Uuid>,
-) -> anyhow::Result<Vec<Node>> {
+) -> anyhow::Result<Vec<IndexedOutcome>> {
     let yaml = parse_structured_value(content)?;
     let proxies = yaml
         .get("proxies")
         .and_then(serde_yaml::Value::as_sequence)
         .ok_or_else(|| anyhow::anyhow!("no 'proxies' array found in Clash YAML"))?;
-    parse_clash_proxies(proxies, subscription_id)
+    Ok(parse_clash_proxies_outcomes(proxies, subscription_id))
 }
 
 #[cfg(test)]
