@@ -132,7 +132,11 @@ impl ControlPlane {
     /// subscription merges. Direct callers cannot reconcile process-owned workers;
     /// use SIGHUP to add, remove, or change subscription worker specifications.
     pub async fn reload_runtime_config(&self, new_config: Config) -> bool {
-        if let Err(error) = new_config.validate_detailed() {
+        // A candidate equal to the admitted active configuration has already
+        // passed exactly these checks; re-deriving 512 node identities on an
+        // identical SIGHUP is the cost the reload benchmark guards against.
+        let unchanged = *self.config.read().await.as_ref() == new_config;
+        if !unchanged && let Err(error) = new_config.validate_detailed() {
             crate::report_runtime_admission_error(&error);
             return false;
         }
@@ -172,7 +176,11 @@ impl ControlPlane {
             error!("reload rejected: subscription worker changes require the control command path");
             return Ok(false);
         }
-        new_config.validate_assembled()?;
+        // Same proof as at the public entry: equality with the admitted active
+        // configuration is admission. Anything else is verified before any shortcut.
+        if new_config != *current_config.as_ref() {
+            new_config.validate_assembled()?;
+        }
 
         let config_unchanged = effective_config_unchanged(current_config.as_ref(), &mut new_config);
         let current_dns_forwarder = self.dns_controller.forwarder();
