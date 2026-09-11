@@ -1,6 +1,6 @@
+use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 use tracing::warn;
 

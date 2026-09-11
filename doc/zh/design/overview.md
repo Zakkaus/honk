@@ -50,6 +50,8 @@ flowchart LR
 
 共享 map 键、值、常量或布局的修改必须同步落到 `honk-ebpf-common`、`honk-ebpf` 和 `honk-core` 的 map 写入逻辑。
 
+独立 Node 反序列化会报告忽略的协议不兼容字段；后续转换失败也不会丢失这些警告，每条只记录一次。诊断只包含配置字段名，不包含节点名称或字段值。`node::NodeSeed` 将警告写入调用方提供的列表，不自行记录日志；`FlatNode` 仍是唯一的扁平格式适配器。
+
 ## 高层数据路径
 
 ```mermaid

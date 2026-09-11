@@ -6,6 +6,7 @@ mod protocol;
 mod wire;
 
 pub use protocol::*;
+pub use wire::NodeSeed;
 
 /// Deserialize a group-tag list from either an array (`["hk", "jp"]`) or a
 /// single delimited string (`"hk|jp"` / `"hk, jp"`). Entries themselves may

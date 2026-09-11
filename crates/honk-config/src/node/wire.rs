@@ -1,7 +1,11 @@
-use serde::de::Error as _;
+use serde::de::{DeserializeSeed, Error as _};
 use serde::ser::SerializeStruct as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::diagnostic::{
+    DetailedDiagnostic, DiagnosticSources, SafeValue, SettingPath, SourceRef,
+    report_detailed_diagnostics,
+};
 use crate::types::NodeProtocol;
 
 use super::{
@@ -125,7 +129,12 @@ struct FlatNode {
 }
 
 impl FlatNode {
-    fn strip_protocol_incompatible_fields(&mut self) {
+    fn strip_protocol_incompatible_fields(
+        &mut self,
+        diagnostics: &mut Vec<DetailedDiagnostic>,
+        source: &SourceRef,
+        setting: &SettingPath,
+    ) {
         let stream = matches!(
             self.protocol,
             NodeProtocol::Trojan | NodeProtocol::VMess | NodeProtocol::VLess
@@ -326,23 +335,17 @@ impl FlatNode {
         );
 
         if !dropped.is_empty() {
-            if let Some(credential) = unused_username_credential {
-                tracing::warn!(
-                    node = %self.name,
-                    protocol = %self.protocol.as_str(),
-                    fields = %dropped.join(", "),
-                    "credential field '{}' is empty; 'username' is not used by {}",
-                    credential,
-                    self.protocol.as_str()
-                );
-            } else {
-                tracing::warn!(
-                    node = %self.name,
-                    protocol = %self.protocol.as_str(),
-                    fields = %dropped.join(", "),
+            diagnostics.push(DetailedDiagnostic::warning(
+                "incompatible-node-fields",
+                source.clone(),
+                setting.clone(),
+                SafeValue::Fields(dropped),
+                if unused_username_credential.is_some() {
+                    "credential field is empty; username is not used by this protocol"
+                } else {
                     "ignoring protocol-incompatible fields"
-                );
-            }
+                },
+            ));
         }
     }
 
@@ -372,11 +375,15 @@ impl FlatNode {
     }
 }
 
-impl TryFrom<FlatNode> for Node {
-    type Error = crate::ConfigError;
-
-    fn try_from(mut flat: FlatNode) -> Result<Self, Self::Error> {
-        flat.strip_protocol_incompatible_fields();
+impl FlatNode {
+    fn into_node(
+        mut self,
+        diagnostics: &mut Vec<DetailedDiagnostic>,
+        source: &SourceRef,
+        setting: &SettingPath,
+    ) -> Result<Node, crate::ConfigError> {
+        self.strip_protocol_incompatible_fields(diagnostics, source, setting);
+        let mut flat = self;
         let outbound = match flat.protocol {
             NodeProtocol::SS => OutboundConfig::Shadowsocks(ShadowsocksConfig {
                 password: flat.password.take(),
@@ -484,10 +491,9 @@ impl TryFrom<FlatNode> for Node {
             NodeProtocol::Block => OutboundConfig::Block,
         };
         if !flat.tls_alpn.is_empty() {
-            return Err(crate::ConfigError::Validation(format!(
-                "Node '{}' sets tls_alpn on a protocol without TLS",
-                flat.name
-            )));
+            return Err(crate::ConfigError::Validation(
+                "nodes.tls_alpn requires a TLS-capable protocol".into(),
+            ));
         }
         let node = Node {
             id: flat.id,
@@ -763,8 +769,37 @@ impl<'de> Deserialize<'de> for Node {
     where
         D: Deserializer<'de>,
     {
-        FlatNode::deserialize(deserializer)?
-            .try_into()
-            .map_err(D::Error::custom)
+        let mut diagnostics = Vec::new();
+        let result = NodeSeed {
+            diagnostics: &mut diagnostics,
+            source: DiagnosticSources::new(None).root(),
+            setting: SettingPath::new("nodes"),
+        }
+        .deserialize(deserializer);
+        report_detailed_diagnostics(&diagnostics);
+        result
+    }
+}
+
+/// Data-only serde adapter; the enclosing Config/Node attempt owns terminal reporting.
+pub struct NodeSeed<'a> {
+    pub diagnostics: &'a mut Vec<DetailedDiagnostic>,
+    pub source: SourceRef,
+    pub setting: SettingPath,
+}
+
+impl<'de> DeserializeSeed<'de> for NodeSeed<'_> {
+    type Value = Node;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Node, D::Error> {
+        let flat = FlatNode::deserialize(deserializer)
+            .map_err(|_| D::Error::custom("invalid node fields"))?;
+        flat.into_node(self.diagnostics, &self.source, &self.setting)
+            .map_err(|error| {
+                D::Error::custom(crate::error::DetailedConfigError::from_legacy(
+                    error,
+                    self.source,
+                ))
+            })
     }
 }
