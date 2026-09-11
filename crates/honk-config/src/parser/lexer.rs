@@ -1,6 +1,7 @@
 //! Lossless physical-line tokens. Semantic punctuation belongs to section readers.
 
 use crate::diagnostic::{DetailedDiagnostic, SafeValue, SettingPath, Severity, SourceRef};
+use std::sync::Arc;
 
 /// Half-open UTF-8 byte coordinates in the source's attempt-local table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,11 +50,17 @@ pub struct Token {
 }
 
 /// Borrows input once; diagnostics retain only `reference` metadata.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Source<'a> {
-    text: &'a str,
+    text: SourceText<'a>,
     reference: SourceRef,
-    line_starts: Vec<usize>,
+    line_starts: Arc<[usize]>,
+}
+
+#[derive(Debug, Clone)]
+enum SourceText<'a> {
+    Borrowed(&'a str),
+    Shared(Arc<str>),
 }
 
 impl<'a> Source<'a> {
@@ -65,14 +72,36 @@ impl<'a> Source<'a> {
                 .filter_map(|(i, b)| (b == b'\n').then_some(i + 1)),
         );
         Self {
-            text,
+            text: SourceText::Borrowed(text),
+            reference,
+            line_starts: line_starts.into(),
+        }
+    }
+
+    pub(super) fn shared(text: Arc<str>, reference: SourceRef) -> Source<'static> {
+        let line_starts: Arc<[usize]> = std::iter::once(0)
+            .chain(
+                text.bytes()
+                    .enumerate()
+                    .filter_map(|(i, b)| (b == b'\n').then_some(i + 1)),
+            )
+            .collect();
+        Source {
+            text: SourceText::Shared(text),
             reference,
             line_starts,
         }
     }
 
-    pub fn text(&self) -> &'a str {
-        self.text
+    pub fn text(&self) -> &str {
+        match &self.text {
+            SourceText::Borrowed(text) => text,
+            SourceText::Shared(text) => text,
+        }
+    }
+
+    pub(super) fn reference(&self) -> SourceRef {
+        self.reference.clone()
     }
 
     pub fn span(&self, start: usize, end: usize) -> Span {
@@ -83,13 +112,13 @@ impl<'a> Source<'a> {
         }
     }
 
-    pub fn raw(&self, span: Span) -> &'a str {
+    pub fn raw(&self, span: Span) -> &str {
         assert_eq!(span.source, self.reference.index());
-        &self.text[span.start..span.end]
+        &self.text()[span.start..span.end]
     }
 
     pub fn location(&self, offset: usize) -> (usize, usize) {
-        assert!(offset <= self.text.len());
+        assert!(offset <= self.text().len());
         let line = self.line_starts.partition_point(|&start| start <= offset);
         (line, offset - self.line_starts[line - 1] + 1)
     }
@@ -119,7 +148,7 @@ impl<'a> Source<'a> {
     /// Includes trivia, so concatenating raw token spans recovers the entire input.
     /// Quote errors append once and remain nonterminal until the reader decides recovery.
     pub fn tokenize(&self, diagnostics: &mut Vec<DetailedDiagnostic>) -> Vec<Token> {
-        let bytes = self.text.as_bytes();
+        let bytes = self.text().as_bytes();
         let mut tokens = Vec::new();
         for (line_index, &start) in self.line_starts.iter().enumerate() {
             let next = self
@@ -168,7 +197,7 @@ impl<'a> Source<'a> {
                             index = end;
                             break;
                         }
-                        index += self.text[index..].chars().next().unwrap().len_utf8();
+                        index += self.text()[index..].chars().next().unwrap().len_utf8();
                     }
                     kind = if let Some(opener) = error {
                         TokenKind::Error { opener }
@@ -202,11 +231,11 @@ impl<'a> Source<'a> {
     }
 
     fn whitespace_width(&self, index: usize) -> usize {
-        let byte = self.text.as_bytes()[index];
+        let byte = self.text().as_bytes()[index];
         if byte.is_ascii() {
             usize::from(byte.is_ascii_whitespace())
         } else {
-            let ch = self.text[index..].chars().next().unwrap();
+            let ch = self.text()[index..].chars().next().unwrap();
             if ch.is_whitespace() { ch.len_utf8() } else { 0 }
         }
     }

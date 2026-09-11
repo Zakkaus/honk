@@ -1,6 +1,12 @@
 use std::path::Path;
 
 use super::lexer::quoted_end;
+use std::ops::Range;
+use std::sync::Arc;
+
+use super::cursor::{Document, Segment};
+use super::diagnostics::ParserDiagnostics;
+use super::lexer::{Source, TokenKind};
 
 use crate::{ConfigDiagnostic, ConfigError};
 
@@ -12,6 +18,7 @@ pub struct Block {
     pub header: String,
     pub closing: String,
     pub include_body: Option<String>,
+    pub segments: Vec<OwnedSegment>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -19,6 +26,25 @@ pub enum Item {
     Statement(String, usize),
     Block(Block),
 }
+
+#[derive(Debug, Clone)]
+pub struct OwnedSegment {
+    document: Arc<Document<'static>>,
+    range: Range<usize>,
+}
+
+impl OwnedSegment {
+    pub fn get(&self) -> Segment<'_, 'static> {
+        self.document.segment(self.range.clone())
+    }
+}
+
+impl PartialEq for OwnedSegment {
+    fn eq(&self, other: &Self) -> bool {
+        self.range == other.range && self.document.source().text() == other.document.source().text()
+    }
+}
+impl Eq for OwnedSegment {}
 
 impl Block {
     /// Return the ambient lines represented by this block for a consumer that
@@ -91,6 +117,139 @@ pub fn scan(
         position = next?;
     }
 
+    if let Some(frame) = scanner.frames.last() {
+        return Err(ConfigError::Parse(format!(
+            "unclosed block `{}` opened at line {}",
+            frame.name, frame.line
+        )));
+    }
+    Ok(scanner.roots)
+}
+
+/// Keep unmigrated sections on their bounded old adapter until their owning commit.
+pub(super) fn scan_readers(
+    input: &str,
+    path: Option<&Path>,
+    diagnostics: &mut ParserDiagnostics<'_>,
+    saw_include: &mut bool,
+) -> Result<Vec<Block>, ConfigError> {
+    let reference = diagnostics.source();
+    let shared: Arc<str> = Arc::from(input);
+    let source = Source::shared(shared, reference.clone());
+    let mut lexical = Vec::new();
+    let tokens = source.tokenize(&mut lexical);
+    let lines = Line::all(input);
+    let mut scanner = Scanner::default();
+    let mut position = (0, 0);
+    while position.0 < lines.len() {
+        let offset = lines[position.0].start + position.1;
+        let start = tokens.partition_point(|token| token.span.start < offset);
+        let first = (start..tokens.len()).find(|&index| !tokens[index].kind.is_trivia());
+        let migrated = scanner.at_root()
+            && first.is_some_and(|index| {
+                let name = source.raw(tokens[index].span);
+                let named = matches!(name, "global" | "experimental");
+                let glued = name
+                    .strip_suffix('{')
+                    .is_some_and(|name| matches!(name, "global" | "experimental"));
+                let opener = tokens[index + 1..]
+                    .iter()
+                    .find(|token| !token.kind.is_trivia());
+                // Frozen empty-root spelling stays on the old structural adapter until C13.
+                let empty = opener.is_some_and(|token| {
+                    token.line == tokens[index].line
+                        && token.kind == TokenKind::Word
+                        && source.raw(token.span) == "{}"
+                });
+                tokens[index].line == position.0 + 1 && (glued || (named && !empty))
+            });
+        if migrated {
+            let start = first.unwrap();
+            let mut depth = 0usize;
+            let mut opened = false;
+            let mut end = tokens.len();
+            for (index, token) in tokens.iter().enumerate().skip(start) {
+                match token.kind {
+                    TokenKind::OpenBrace => {
+                        depth += 1;
+                        opened = true;
+                    }
+                    TokenKind::CloseBrace if opened => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = index + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let byte_start = tokens[start].span.start;
+            let byte_end = tokens[end - 1].span.end;
+            for token in &tokens[start..end] {
+                if token.kind == TokenKind::Comment && source.raw(token.span).contains(['{', '}']) {
+                    diagnostics.output.push(source.diagnostic(
+                        token.span,
+                        crate::diagnostic::Severity::Warning,
+                        "legacy-comment-brace",
+                        "comments do not close blocks; put the closer outside the comment",
+                    ));
+                }
+            }
+            let selected_errors = lexical
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic
+                        .span
+                        .as_ref()
+                        .is_some_and(|span| byte_start <= span.start && span.start < byte_end)
+                })
+                .cloned()
+                .collect();
+            let document = Arc::new(
+                Document::from_tokens(
+                    source.clone(),
+                    tokens[start..end].to_vec(),
+                    selected_errors,
+                    diagnostics.output,
+                )
+                .map_err(|error| {
+                    if let Some(index) = diagnostics.output.iter().rposition(|diagnostic| {
+                        diagnostic.terminal && diagnostic.span == error.error.diagnostic.span
+                    }) {
+                        diagnostics.output.remove(index);
+                    }
+                    diagnostics.failure = Some((*error.error.diagnostic).clone());
+                    error.error.into_legacy()
+                })?,
+            );
+            for segment in document.sections() {
+                scanner.roots.push(Block {
+                    name: segment.header().to_owned(),
+                    items: Vec::new(),
+                    line: source.location(segment.span().start).0,
+                    header: segment.header().to_owned(),
+                    closing: String::new(),
+                    include_body: None,
+                    segments: vec![OwnedSegment {
+                        document: document.clone(),
+                        range: segment.range(),
+                    }],
+                });
+            }
+            let line = line_for_offset(&lines, byte_end);
+            position = (line, byte_end - lines[line].start);
+            if position.1 >= lines[line].text.len() {
+                position = (line + 1, 0);
+            }
+            continue;
+        }
+        let mut legacy = Vec::new();
+        let next = scanner.process_line(input, &lines, position, path, &mut legacy);
+        *saw_include |= scanner.saw_include;
+        diagnostics.extend(legacy);
+        position = next?;
+    }
     if let Some(frame) = scanner.frames.last() {
         return Err(ConfigError::Parse(format!(
             "unclosed block `{}` opened at line {}",
@@ -230,6 +389,7 @@ impl Scanner {
             header: "include {".to_string(),
             closing: "}".to_string(),
             include_body: Some(input[body_start..close].to_string()),
+            segments: Vec::new(),
         });
 
         let close_line = line_for_offset(lines, close);
@@ -283,6 +443,7 @@ impl Scanner {
                             header: text[segment_start..=index].trim().to_string(),
                             closing: String::new(),
                             include_body: None,
+                            segments: Vec::new(),
                         });
                         self.braces.push(Brace::Named);
                         segment_start = index + 1;

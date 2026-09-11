@@ -4,7 +4,10 @@ mod dns;
 pub mod lexer;
 mod routing;
 
+mod read;
+mod scalars;
 mod structure;
+use scalars::{parse_experimental_section, parse_global_section};
 
 #[cfg(test)]
 mod tests;
@@ -19,20 +22,18 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use self::diagnostics::ParserDiagnostics;
-use crate::config::GlobalConfig;
 use crate::diagnostic::{
     DetailedDiagnostic, DiagnosticSources, SafeValue, SettingPath, finish_attempt,
     report_detailed_diagnostics,
 };
 use crate::error::DetailedConfigError;
-use crate::experimental::ExperimentalConfig;
 use crate::group::Group;
 use crate::node::Node;
 use crate::subscription::Subscription;
 use crate::{Config, ConfigDiagnostic};
 use lexer::quoted_end;
 use regex::Regex;
-use structure::{Block, Item, scan};
+use structure::{Block, Item};
 enum ParseFailure {
     Legacy(crate::ConfigError),
     Detailed(crate::error::DetailedConfigError),
@@ -222,17 +223,11 @@ impl IncludeLoader {
                     path.display()
                 ))
             })?;
-            let mut structural_diagnostics = Vec::new();
-            let roots = scan(
-                &input,
-                Some(path),
-                &mut structural_diagnostics,
-                &mut self.saw_include,
-            );
+            let roots =
+                structure::scan_readers(&input, Some(path), diagnostics, &mut self.saw_include);
             if self.stack.len() == 1 && !matches!(&roots, Err(crate::ConfigError::Include(_))) {
                 check_dae_input(&input)?;
             }
-            diagnostics.extend(structural_diagnostics);
             let roots = roots?;
             diagnostics.register_blocks(&roots, &source);
             if self.stack.len() == 1 {
@@ -433,10 +428,7 @@ pub fn parse_dae_config_with_detailed_diagnostics(
     let mut sink = ParserDiagnostics::new(diagnostics, source.clone());
     let result: Result<Config, ParseFailure> = (|| {
         check_dae_input(input)?;
-        let mut structural = Vec::new();
-        let blocks = scan(input, None, &mut structural, &mut false);
-        sink.extend(structural);
-        let blocks = blocks?;
+        let blocks = structure::scan_readers(input, None, &mut sink, &mut false)?;
         sink.register_blocks(&blocks, &source);
         parse_blocks(blocks, &mut sink)
     })();
@@ -471,6 +463,7 @@ fn parse_blocks(
     for block in blocks {
         if let Some(&index) = indices.get(&block.name) {
             sections[index].items.extend(block.items);
+            sections[index].segments.extend(block.segments);
         } else {
             indices.insert(block.name.clone(), sections.len());
             sections.push(block);
@@ -480,7 +473,7 @@ fn parse_blocks(
     let canonical_nfqueue_present = sections
         .iter()
         .filter(|section| section.name == "global")
-        .any(|section| parse_kv_pairs(section.lines_except(&[])).contains_key("nfqueue_enable"));
+        .any(scalars::nfqueue_present);
     let mut config = Config::default();
 
     for section in &sections {
@@ -819,197 +812,6 @@ fn strip_unquoted_comment(line: &str) -> &str {
         }
     }
     line
-}
-fn parse_global_section(
-    section: &Block,
-    diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<GlobalConfig, ParseFailure> {
-    let mut cfg = GlobalConfig::default();
-    let kv = parse_kv_pairs(section.lines_except(&[]));
-
-    if let Some(v) = kv.get("tproxy_port") {
-        cfg.tproxy_port = lenient(v.parse().ok(), 12345, diagnostics, || ConfigDiagnostic {
-            setting: "global.tproxy_port".to_string(),
-            value: v.clone(),
-            message: "honk could not parse this port as a decimal in 0-65535; using fallback 12345"
-                .to_string(),
-        });
-    }
-    if let Some(v) = kv.get("tproxy_port_protect") {
-        cfg.tproxy_port_protect = lenient_bool(v, "global.tproxy_port_protect", diagnostics);
-    }
-    if let Some(v) = kv.get("pprof_port") {
-        cfg.pprof_port = lenient(v.parse().ok(), 0, diagnostics, || ConfigDiagnostic {
-            setting: "global.pprof_port".to_string(),
-            value: v.clone(),
-            message: "honk could not parse this port as a decimal in 0-65535; using fallback 0"
-                .to_string(),
-        });
-    }
-    if let Some(v) = kv.get("so_mark_from_dae") {
-        cfg.so_mark_from_dae = lenient(parse_hex_or_dec(v), 0, diagnostics, || ConfigDiagnostic {
-            setting: "global.so_mark_from_dae".to_string(),
-            value: v.clone(),
-            message: "honk could not parse this mark as a u32; using fallback 0".to_string(),
-        });
-    }
-    if let Some(v) = kv.get("log_level") {
-        cfg.log_level = v.clone();
-    }
-    if let Some(v) = kv.get("log_file") {
-        cfg.log_file = v.clone();
-    }
-    if let Some(v) = kv.get("disable_waiting_network") {
-        cfg.disable_waiting_network =
-            lenient_bool(v, "global.disable_waiting_network", diagnostics);
-    }
-    if let Some(v) = kv.get("lan_interface") {
-        cfg.lan_interface = v
-            .split(',')
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(str::to_string)
-            .collect();
-    }
-    if let Some(v) = kv.get("wan_interface") {
-        cfg.wan_interface = v
-            .split(',')
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(str::to_string)
-            .collect();
-    }
-    if let Some(v) = kv.get("auto_config_kernel_parameter") {
-        cfg.auto_config_kernel_parameter =
-            lenient_bool(v, "global.auto_config_kernel_parameter", diagnostics);
-    }
-    if let Some(v) = kv.get("data_dir") {
-        cfg.data_dir = v.clone();
-    }
-    if let Some(v) = kv.get("store_subscribe") {
-        cfg.store_subscribe = lenient_bool(v, "global.store_subscribe", diagnostics);
-    }
-    if let Some(v) = kv.get("tcp_check_url") {
-        cfg.tcp_check_url = v
-            .split(',')
-            .map(|s| s.trim().trim_matches('\'').to_string())
-            .collect();
-    }
-    if let Some(v) = kv.get("tcp_check_http_method") {
-        cfg.tcp_check_http_method = v.clone();
-    }
-    if let Some(v) = kv.get("udp_check_dns") {
-        cfg.udp_check_dns = v
-            .split(',')
-            .map(|s| s.trim().trim_matches('\'').to_string())
-            .collect();
-    }
-    if let Some(v) = kv.get("check_interval") {
-        cfg.check_interval_secs =
-            lenient(crate::types::parse_duration_secs(v), 0, diagnostics, || {
-                ConfigDiagnostic {
-                    setting: "global.check_interval".to_string(),
-                    value: v.clone(),
-                    message: "duration is unsupported by honk; using fallback 0s".to_string(),
-                }
-            });
-    }
-    if let Some(v) = kv.get("check_tolerance") {
-        cfg.check_tolerance_ms = lenient_duration_ms(
-            v,
-            "global.check_tolerance",
-            cfg.check_tolerance_ms,
-            diagnostics,
-        );
-    }
-    if let Some(v) = kv.get("dial_mode") {
-        cfg.dial_mode = v.clone();
-    }
-    if let Some(v) = kv.get("nfqueue_enable") {
-        cfg.nfqueue_enable = parse_checked_bool(v, "global.nfqueue_enable").map_err(|_| {
-            let (source, line) = diagnostics.field_location("nfqueue_enable");
-            let mut error = DetailedConfigError::new(
-                crate::error::ErrorCategory::Parse,
-                "invalid-config-value",
-                source,
-                SettingPath::new("global").field("nfqueue_enable"),
-                "expected true/false, yes/no, 1/0 or on/off",
-            );
-            error.diagnostic.line = line;
-            ParseFailure::Detailed(error)
-        })?;
-    }
-    if let Some(v) = kv.get("allow_insecure") {
-        cfg.allow_insecure = lenient_bool(v, "global.allow_insecure", diagnostics);
-    }
-    if let Some(v) = kv.get("sniffing_timeout") {
-        cfg.sniffing_timeout_ms = lenient_duration_ms(
-            v,
-            "global.sniffing_timeout",
-            cfg.sniffing_timeout_ms,
-            diagnostics,
-        );
-    }
-    if let Some(v) = kv.get("tls_implementation") {
-        cfg.tls_implementation = v.clone();
-    }
-    if let Some(v) = kv.get("utls_imitate") {
-        cfg.utls_imitate = v.clone();
-    }
-    if let Some(v) = kv.get("tls_fragment") {
-        cfg.tls_fragment = lenient_bool(v, "global.tls_fragment", diagnostics);
-    }
-    if let Some(v) = kv.get("tls_fragment_length") {
-        cfg.tls_fragment_length = v.clone();
-    }
-    if let Some(v) = kv.get("tls_fragment_interval") {
-        cfg.tls_fragment_interval = v.clone();
-    }
-    if let Some(v) = kv.get("mptcp") {
-        cfg.mptcp = lenient_bool(v, "global.mptcp", diagnostics);
-    }
-    if let Some(v) = kv.get("bootstrap_resolver") {
-        cfg.bootstrap_resolver = v.clone();
-    }
-    if let Some(v) = kv.get("fallback_resolver") {
-        cfg.fallback_resolver = v.clone();
-    }
-    if let Some(v) = kv.get("bandwidth_max_tx") {
-        cfg.bandwidth_max_tx = v.clone();
-    }
-    if let Some(v) = kv.get("bandwidth_max_rx") {
-        cfg.bandwidth_max_rx = v.clone();
-    }
-    if let Some(v) = kv.get("udp_warm_node_count") {
-        cfg.udp_warm_node_count = v
-            .parse()
-            .map_err(|_| crate::ConfigError::Parse(format!("invalid udp_warm_node_count: {v}")))?;
-    }
-    if let Some(v) = kv.get("preconnect_node_count") {
-        let trimmed = v.trim().trim_matches('\'');
-        cfg.preconnect_node_count = if trimmed.eq_ignore_ascii_case("auto") {
-            crate::config::PRECONNECT_NODE_COUNT_AUTO
-        } else {
-            trimmed.parse().map_err(|_| {
-                crate::ConfigError::Parse(format!("invalid preconnect_node_count: {v}"))
-            })?
-        };
-    }
-    if let Some(v) = kv.get("max_concurrent_dials") {
-        cfg.max_concurrent_dials = v
-            .parse()
-            .map_err(|_| crate::ConfigError::Parse(format!("invalid max_concurrent_dials: {v}")))?;
-    }
-
-    crate::check::validate_dns_check_targets(&cfg.udp_check_dns).map_err(|mut error| {
-        let (source, line) = diagnostics.field_location("udp_check_dns");
-        error.diagnostic.source = source;
-        if error.diagnostic.line.is_none() {
-            error.diagnostic.line = line;
-        }
-        ParseFailure::Detailed(error)
-    })?;
-    Ok(cfg)
 }
 
 fn find_unquoted(input: &str, delimiter: &str) -> Option<usize> {
@@ -1393,96 +1195,6 @@ fn parse_subscription_value(value: &str) -> (String, Option<String>) {
         }
     }
     (unquote_filter_argument(value).to_string(), None)
-}
-fn parse_experimental_section(
-    section: &Block,
-    diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<ExperimentalConfig, crate::ConfigError> {
-    let mut cfg = ExperimentalConfig::default();
-    let mut api_location = None;
-    let recognised = ["clash_api", "cache_file", "udp_nfqueue"];
-    let ambient = section.lines_except(&recognised);
-    if let Some(setting) = ambient.into_iter().find(|line| !line.trim().is_empty()) {
-        return Err(crate::ConfigError::Parse(format!(
-            "unknown experimental setting: {}",
-            setting.trim()
-        )));
-    }
-    let subs = section.blocks_matching(&recognised);
-
-    for sub in subs {
-        diagnostics.at_section(sub, &[]);
-        let kv = parse_kv_pairs(sub.lines_except(&[]));
-        match sub.name.as_str() {
-            "clash_api" => {
-                if let Some(v) = kv.get("external_controller") {
-                    cfg.clash_api.external_controller = v.clone();
-                    api_location = Some(diagnostics.field_location("external_controller"));
-                }
-                if let Some(v) = kv.get("external_ui") {
-                    cfg.clash_api.external_ui = v.clone();
-                }
-                if let Some(v) = kv.get("external_ui_download_url") {
-                    cfg.clash_api.external_ui_download_url = v.clone();
-                }
-                if let Some(v) = kv.get("external_ui_download_detour") {
-                    cfg.clash_api.external_ui_download_detour = v.clone();
-                }
-                if let Some(v) = kv.get("secret") {
-                    cfg.clash_api.secret = v.clone();
-                }
-                if let Some(v) = kv.get("default_mode") {
-                    cfg.clash_api.default_mode = v.clone();
-                }
-            }
-            "cache_file" => {
-                if let Some(v) = kv.get("enabled") {
-                    cfg.cache_file.enabled =
-                        lenient_bool(v, "experimental.cache_file.enabled", diagnostics);
-                }
-                if let Some(v) = kv.get("path") {
-                    cfg.cache_file.path = v.clone();
-                }
-                if let Some(v) = kv.get("cache_id") {
-                    cfg.cache_file.cache_id = v.clone();
-                }
-                if let Some(v) = kv.get("store_fakeip") {
-                    cfg.cache_file.store_fakeip =
-                        lenient_bool(v, "experimental.cache_file.store_fakeip", diagnostics);
-                }
-                if let Some(v) = kv.get("store_dns") {
-                    cfg.cache_file.store_dns =
-                        lenient_bool(v, "experimental.cache_file.store_dns", diagnostics);
-                }
-            }
-            "udp_nfqueue" => {
-                if let Some(key) = kv.keys().find(|key| key.as_str() != "enabled") {
-                    return Err(crate::ConfigError::Parse(format!(
-                        "unknown experimental.udp_nfqueue setting: {key}"
-                    )));
-                }
-                let enabled = kv
-                    .get("enabled")
-                    .map(|value| parse_checked_bool(value, "experimental.udp_nfqueue.enabled"))
-                    .transpose()?
-                    .unwrap_or(false);
-                cfg.legacy_udp_nfqueue =
-                    Some(crate::experimental::LegacyUdpNfqueueConfig { enabled });
-                diagnostics.emit(crate::diagnostic::legacy_nfqueue_warning(
-                    diagnostics.source(),
-                ));
-            }
-            _ => {}
-        }
-    }
-    if let Some((source, line)) = api_location
-        && let Some(mut diagnostic) = cfg.clash_api.exposure_diagnostic(source)
-    {
-        diagnostic.line = line;
-        diagnostics.output.push(diagnostic);
-    }
-
-    Ok(cfg)
 }
 
 fn parse_checked_bool(s: &str, setting: &str) -> Result<bool, crate::ConfigError> {

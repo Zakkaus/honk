@@ -48,7 +48,16 @@ impl<'a> Document<'a> {
         diagnostics: &mut Vec<DetailedDiagnostic>,
     ) -> Result<Self, StructureError> {
         let mut lexical = Vec::new();
-        let mut tokens = source.tokenize(&mut lexical);
+        let tokens = source.tokenize(&mut lexical);
+        Self::from_tokens(source, tokens, lexical, diagnostics)
+    }
+
+    pub(super) fn from_tokens(
+        source: Source<'a>,
+        mut tokens: Vec<Token>,
+        lexical: Vec<DetailedDiagnostic>,
+        diagnostics: &mut Vec<DetailedDiagnostic>,
+    ) -> Result<Self, StructureError> {
         tokens.retain(|token| !token.kind.is_trivia());
         let mut doc = Self {
             closes: vec![usize::MAX; tokens.len()],
@@ -256,7 +265,7 @@ impl<'a> Document<'a> {
             .map(|range| self.segment(range.clone()))
     }
 
-    fn segment(&self, range: Range<usize>) -> Segment<'_, 'a> {
+    pub(super) fn segment(&self, range: Range<usize>) -> Segment<'_, 'a> {
         let open = range
             .clone()
             .find(|&i| self.tokens[i].kind == TokenKind::OpenBrace);
@@ -326,7 +335,7 @@ impl<'d, 'a> Segment<'d, 'a> {
         self.doc
             .range_span(self.range.start..self.open.unwrap_or(self.range.end))
     }
-    pub fn header(&self) -> &'a str {
+    pub fn header(&self) -> &'d str {
         self.doc.source.raw(self.header_span())
     }
     pub fn cursor(&self) -> Dispenser<'d, 'a> {
@@ -335,6 +344,15 @@ impl<'d, 'a> Segment<'d, 'a> {
     pub fn body(&self) -> Option<Dispenser<'d, 'a>> {
         self.open
             .map(|open| Dispenser::new(self.doc, open + 1..self.doc.closes[open]))
+    }
+    pub(super) fn source(&self) -> &'d Source<'a> {
+        &self.doc.source
+    }
+    pub(super) fn tokens(&self) -> &'d [Token] {
+        &self.doc.tokens[self.range.clone()]
+    }
+    pub(super) fn range(&self) -> Range<usize> {
+        self.range.clone()
     }
 }
 
@@ -365,7 +383,7 @@ impl<'d, 'a> Dispenser<'d, 'a> {
     pub fn span(&self) -> Option<Span> {
         self.token().map(|token| token.span)
     }
-    pub fn raw(&self) -> Option<&'a str> {
+    pub fn raw(&self) -> Option<&'d str> {
         self.span().map(|span| self.doc.source.raw(span))
     }
 

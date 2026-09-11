@@ -2731,8 +2731,15 @@ experimental {
 }
 "#;
     let mut diagnostics = Vec::new();
-    let config = parse_dae_config_with_diagnostics(valid_input, &mut diagnostics).unwrap();
-    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let config =
+        super::parse_dae_config_with_detailed_diagnostics(valid_input, &mut diagnostics).unwrap();
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        ["legacy-bool-shorthand"; 3]
+    );
     assert!(!config.global.tproxy_port_protect);
     assert!(!config.global.disable_waiting_network);
     assert!(!config.global.auto_config_kernel_parameter);

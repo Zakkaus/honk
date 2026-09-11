@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use super::read::Text;
 use super::structure::{Block, Item};
 use crate::diagnostic::{
     ConfigDiagnostic, DetailedDiagnostic, SafeValue, SettingPath, SourceRef, project_legacy,
@@ -10,6 +11,8 @@ use crate::error::DetailedConfigError;
 struct Location {
     source: SourceRef,
     line: Option<usize>,
+    span: Option<std::ops::Range<usize>>,
+    byte_column: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -28,19 +31,26 @@ pub(super) struct ParserDiagnostics<'a> {
     group: Option<usize>,
     subscription: Option<usize>,
     entry: Option<usize>,
+    pub failure: Option<DetailedDiagnostic>,
 }
 
 impl<'a> ParserDiagnostics<'a> {
     pub fn new(output: &'a mut Vec<DetailedDiagnostic>, source: SourceRef) -> Self {
         Self {
             output,
-            current: Location { source, line: None },
+            current: Location {
+                source,
+                line: None,
+                span: None,
+                byte_column: None,
+            },
             statements: HashMap::new(),
             fields: HashMap::new(),
             groups: Vec::new(),
             group: None,
             subscription: None,
             entry: None,
+            failure: None,
         }
     }
 
@@ -89,7 +99,12 @@ impl<'a> ParserDiagnostics<'a> {
     }
 
     pub fn set_source(&mut self, source: SourceRef) {
-        self.current = Location { source, line: None };
+        self.current = Location {
+            source,
+            line: None,
+            span: None,
+            byte_column: None,
+        };
         self.fields.clear();
     }
 
@@ -105,6 +120,8 @@ impl<'a> ParserDiagnostics<'a> {
             Location {
                 source: source.clone(),
                 line: Some(block.line),
+                span: None,
+                byte_column: None,
             },
         );
         self.statements.insert(
@@ -112,6 +129,8 @@ impl<'a> ParserDiagnostics<'a> {
             Location {
                 source: source.clone(),
                 line: None,
+                span: None,
+                byte_column: None,
             },
         );
         for item in &block.items {
@@ -122,6 +141,8 @@ impl<'a> ParserDiagnostics<'a> {
                         Location {
                             source: source.clone(),
                             line: Some(*line),
+                            span: None,
+                            byte_column: None,
                         },
                     );
                 }
@@ -141,6 +162,57 @@ impl<'a> ParserDiagnostics<'a> {
         self.current = self.location(line);
     }
 
+    fn text_location(text: Text<'_, '_>) -> Location {
+        let (line, column) = text.source.location(text.span.start);
+        Location {
+            source: text.source.reference(),
+            line: Some(line),
+            span: Some(text.span.start..text.span.end),
+            byte_column: Some(column),
+        }
+    }
+
+    pub fn at_text(&mut self, text: Text<'_, '_>) {
+        self.current = Self::text_location(text);
+    }
+
+    pub fn register_field(&mut self, key: &str, text: Text<'_, '_>) {
+        self.fields
+            .insert(key.to_owned(), Self::text_location(text));
+    }
+
+    pub fn entry_text(&mut self, text: Text<'_, '_>, index: usize) {
+        self.at_text(text);
+        self.entry = Some(index);
+    }
+
+    pub fn begin_group_text(&mut self, text: Text<'_, '_>, index: usize) {
+        self.at_text(text);
+        self.fields.clear();
+        self.entry = None;
+        self.subscription = None;
+        self.group = Some(index);
+        self.groups.push(GroupLocation {
+            location: self.current.clone(),
+            filters: Vec::new(),
+        });
+    }
+
+    pub fn remember_filter_text(&mut self, text: Text<'_, '_>) {
+        self.groups
+            .last_mut()
+            .expect("group context")
+            .filters
+            .push(Self::text_location(text));
+    }
+
+    pub fn subscription_text(&mut self, text: Text<'_, '_>, index: usize) {
+        self.at_text(text);
+        self.fields.clear();
+        self.entry = None;
+        self.group = None;
+        self.subscription = Some(index);
+    }
     pub fn at_section(&mut self, section: &Block, excluded: &[&str]) {
         self.at_line(&section.header);
         self.group = None;
@@ -155,6 +227,11 @@ impl<'a> ParserDiagnostics<'a> {
             if let Some((key, _)) = trimmed.split_once(':') {
                 self.fields
                     .insert(key.trim().to_owned(), self.location(line));
+            }
+        }
+        for text in super::read::statements(section) {
+            if let Some((key, value)) = text.kv() {
+                self.register_field(key.raw(), value);
             }
         }
     }
@@ -243,6 +320,8 @@ impl<'a> ParserDiagnostics<'a> {
         if diagnostic.line.is_none() {
             diagnostic.line = location.line;
         }
+        diagnostic.span = location.span;
+        diagnostic.byte_column = location.byte_column;
         self.output.push(diagnostic);
     }
 
@@ -264,14 +343,22 @@ impl<'a> ParserDiagnostics<'a> {
         let location = field
             .and_then(|field| self.fields.get(field))
             .unwrap_or(&self.current);
-        diagnostic.source = location.source.clone();
-        diagnostic.line = location.line;
+        if diagnostic.span.is_none() {
+            diagnostic.source = location.source.clone();
+            diagnostic.line = location.line;
+            diagnostic.span = location.span.clone();
+            diagnostic.byte_column = location.byte_column;
+        }
         diagnostic.entry_index = self.entry;
         self.output.push(diagnostic);
     }
 
     pub fn error(&self, error: crate::ConfigError) -> DetailedConfigError {
         let mut error = DetailedConfigError::from_legacy(error, self.source());
+        if let Some(terminal) = &self.failure {
+            error.diagnostic = Box::new(terminal.clone());
+            return error;
+        }
         let field = error
             .diagnostic
             .setting
@@ -287,6 +374,8 @@ impl<'a> ParserDiagnostics<'a> {
             .unwrap_or(&self.current);
         error.diagnostic.source = location.source.clone();
         error.diagnostic.line = location.line;
+        error.diagnostic.span = location.span.clone();
+        error.diagnostic.byte_column = location.byte_column;
         if error.diagnostic.code == "unknown-traffic-predicate"
             && let Some(index) = self.entry
         {
