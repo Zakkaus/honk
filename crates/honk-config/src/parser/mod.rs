@@ -1,12 +1,15 @@
 mod diagnostics;
 mod dns;
-mod lexer;
+pub mod lexer;
 mod routing;
 
 mod structure;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod lexer_tests;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
