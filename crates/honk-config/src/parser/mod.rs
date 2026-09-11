@@ -445,7 +445,7 @@ fn parse_blocks(
         match section.name.as_str() {
             "global" => config.global = parse_global_section(section, diagnostics)?,
             "dns" => config.dns = dns::parse_section(section, diagnostics)?,
-            "routing" => config.routing = routing::parse_section(section)?,
+            "routing" => config.routing = routing::parse_section(section, diagnostics)?,
             "node" => {
                 for node in parse_node_section(section, diagnostics)? {
                     config.nodes.push(node);
@@ -979,7 +979,11 @@ fn standalone_group_reference(val: &str) -> Option<&str> {
 
 fn extract_fn_args(expr: &str, fn_name: &str) -> Option<Vec<String>> {
     let body = expr.strip_prefix(fn_name)?.strip_prefix('(')?;
-    let args = &body[..find_unquoted(body, ")")?];
+    let end = find_unquoted(body, ")")?;
+    if !body[end + 1..].trim().is_empty() {
+        return None;
+    }
+    let args = &body[..end];
     Some(
         split_unquoted(args, ",")
             .map(unquote_filter_argument)

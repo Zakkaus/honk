@@ -262,6 +262,12 @@ impl<'a> ParserDiagnostics<'a> {
             .unwrap_or(&self.current);
         error.diagnostic.source = location.source.clone();
         error.diagnostic.line = location.line;
+        if error.diagnostic.code == "unknown-traffic-predicate"
+            && let Some(index) = self.entry
+        {
+            error.diagnostic.setting = error.diagnostic.setting.clone().index(index);
+            error.diagnostic.entry_index = Some(index);
+        }
         error
     }
 }

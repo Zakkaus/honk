@@ -101,6 +101,11 @@ impl DetailedConfigError {
         };
         if let Some(text) = text {
             let reason = match text {
+                "unknown traffic predicate" => Some((
+                    "unknown-traffic-predicate",
+                    SettingPath::new("routing").field("rules"),
+                    "unknown or malformed traffic predicate; correct the matcher syntax",
+                )),
                 "invalid node endpoint" => Some((
                     "invalid-config-value",
                     SettingPath::new("nodes"),

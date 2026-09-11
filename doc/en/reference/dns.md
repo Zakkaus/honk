@@ -117,6 +117,8 @@ The upstream-line searches for `->` and `outbound:` are not quote-aware; do not 
 
 In request and response rules, single or double quotes protect `,`, `)`, `&&`, `->`, `#`, and `//` inside matcher arguments. Outside quotes, `//` takes comment precedence; otherwise only the first `#` is considered, and it starts a comment only after an ASCII space. A quoted QTYPE list such as `qtype('a,aaaa')` still selects both types.
 
+Unknown or malformed conditions and unsupported predicates omit the whole rule with a located warning, never just one conjunct. Unknown QTYPE names produce `invalid-qtype`, including mixed and negated lists; correct the name or use its numeric code. Explicit `qtype()` remains match-nothing.
+
 ### Conditions
 
 | Syntax | Scope | Meaning |

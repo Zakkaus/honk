@@ -343,7 +343,6 @@ fn parse_dns_request_routing<'a>(
             let right = trimmed[arrow_pos + 2..].trim();
             let action = crate::dns::DnsRequestAction::parse(right);
             let conditions = parse_dns_conditions(left, false, diagnostics, "request", ordinal);
-            // Skip rules whose conditions were all ignored (e.g. sub()/node()).
             if !conditions.is_empty() {
                 routing
                     .rules
@@ -381,7 +380,6 @@ fn parse_dns_response_routing<'a>(
             let right = trimmed[arrow_pos + 2..].trim();
             let action = crate::dns::DnsResponseAction::parse(right);
             let conditions = parse_dns_conditions(left, true, diagnostics, "response", ordinal);
-            // Skip rules whose conditions were all ignored (e.g. sub()/node()).
             if !conditions.is_empty() {
                 routing
                     .rules
@@ -406,7 +404,8 @@ fn parse_dns_conditions(
     for part in split_unquoted(expr, "&&") {
         let part = part.trim();
         if part.is_empty() {
-            continue;
+            invalid_dns_rule(diagnostics, route_kind, ordinal, "invalid-dns-rule");
+            return Vec::new();
         }
         let (not, inner) = if let Some(rest) = part.strip_prefix('!') {
             (true, rest.trim())
@@ -421,11 +420,15 @@ fn parse_dns_conditions(
         }
 
         if let Some(args) = extract_fn_args(inner, "qtype") {
-            let types: Vec<u16> = args
+            let types: Option<Vec<u16>> = args
                 .iter()
                 .flat_map(|argument| argument.split(','))
-                .filter_map(crate::dns::parse_qtype_token)
+                .map(crate::dns::parse_qtype_token)
                 .collect();
+            let Some(types) = types else {
+                invalid_dns_rule(diagnostics, route_kind, ordinal, "invalid-qtype");
+                return Vec::new();
+            };
             conds.push(crate::dns::DnsCond::Qtype { not, types });
             continue;
         }
@@ -447,27 +450,38 @@ fn parse_dns_conditions(
             }
         }
 
-        if inner.starts_with("sub(") || inner.starts_with("node(") || inner.starts_with("subnode(")
+        let code = if inner.starts_with("sub(")
+            || inner.starts_with("node(")
+            || inner.starts_with("subnode(")
         {
-            let diagnostic = DetailedDiagnostic::warning(
-                "unsupported-dns-condition",
-                diagnostics.source(),
-                SettingPath::new("dns")
-                    .field("routing")
-                    .field(route_kind)
-                    .field("rules")
-                    .index(ordinal),
-                SafeValue::Ordinal(ordinal),
-                "unsupported DNS routing condition; term ignored",
-            );
-            diagnostics.emit(diagnostic);
-            continue;
-        }
-
-        // unknown condition function — silently ignored
+            "unsupported-dns-condition"
+        } else {
+            "invalid-dns-rule"
+        };
+        invalid_dns_rule(diagnostics, route_kind, ordinal, code);
+        return Vec::new();
     }
 
     conds
+}
+
+fn invalid_dns_rule(
+    diagnostics: &mut ParserDiagnostics<'_>,
+    route_kind: &'static str,
+    ordinal: usize,
+    code: &'static str,
+) {
+    diagnostics.emit(DetailedDiagnostic::warning(
+        code,
+        diagnostics.source(),
+        SettingPath::new("dns")
+            .field("routing")
+            .field(route_kind)
+            .field("rules")
+            .index(ordinal),
+        SafeValue::Ordinal(ordinal),
+        "invalid or unsupported DNS condition; whole rule omitted",
+    ));
 }
 
 /// Parse qname(args) into a list of domain matchers.

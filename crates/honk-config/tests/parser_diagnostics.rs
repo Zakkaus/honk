@@ -22,10 +22,8 @@ fn dns_unsupported_conditions_are_safe_data_on_success() {
     let config =
         honk_config::parser::parse_dae_config_with_detailed_diagnostics(input, &mut detailed)
             .unwrap();
-    assert_eq!(config.dns.routing.request.rules.len(), 2);
-    assert_eq!(config.dns.routing.request.rules[0].conditions.len(), 1);
-    assert_eq!(config.dns.routing.response.rules.len(), 2);
-    assert_eq!(config.dns.routing.response.rules[0].conditions.len(), 1);
+    assert_eq!(config.dns.routing.request.rules.len(), 1);
+    assert_eq!(config.dns.routing.response.rules.len(), 1);
 
     let warnings = detailed
         .iter()
