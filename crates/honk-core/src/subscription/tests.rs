@@ -734,3 +734,162 @@ fn c18_physical_lines_and_decoded_parent_survive() {
         }
     }
 }
+
+const C19_PARTIAL: &str = include_str!("../../tests/fixtures/c19-partial-body.txt");
+const C19_INVALID: &str = include_str!("../../tests/fixtures/c19-invalid-body.txt");
+
+#[test]
+fn c19_body_acceptance_retains_first_usable_and_failure_diagnostics() {
+    let sub = Subscription::default();
+    let mut diagnostics = Vec::new();
+    let nodes =
+        parse_subscription_content_with_diagnostics(&sub, C19_PARTIAL, &mut diagnostics).unwrap();
+    assert_eq!(
+        nodes.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(),
+        ["first"]
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|d| d.entry_index)
+            .collect::<Vec<_>>(),
+        [Some(1), Some(3)]
+    );
+    assert_eq!(diagnostics[1].related_indices, [2]);
+    let prefix = diagnostics.clone();
+    assert!(
+        parse_subscription_content_with_diagnostics(&sub, C19_INVALID, &mut diagnostics).is_err()
+    );
+    assert_eq!(&diagnostics[..prefix.len()], &prefix);
+    assert_eq!(
+        diagnostics[prefix.len()..]
+            .iter()
+            .filter(|d| !d.terminal)
+            .count(),
+        2
+    );
+    assert_eq!(diagnostics.iter().filter(|d| d.terminal).count(), 1);
+}
+
+#[tokio::test]
+async fn c19_store_acceptance_is_independent_of_runtime_publication() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let sub = Subscription {
+        url: format!("http://{}/sub", listener.local_addr().unwrap()),
+        ..Subscription::default()
+    };
+    let server = tokio::spawn(async move {
+        for body in [C19_PARTIAL, C19_INVALID, C19_PARTIAL] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 2048];
+            stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let store = SubscriptionStore::open(temp.path().join("store")).unwrap();
+    let manager = SubscriptionManager::new().unwrap();
+    let nodes = manager.fetch_and_store(&sub, Some(&store)).await.unwrap();
+    let saved = store.path_for(&sub);
+    assert_eq!(fs::read_to_string(&saved).unwrap(), C19_PARTIAL);
+    assert!(
+        honk_outbound::runtime::OutboundRuntimeRegistry::build(&[
+            nodes[0].clone(),
+            nodes[0].clone()
+        ])
+        .is_err()
+    );
+    assert_eq!(
+        store.load_nodes(&sub).await.unwrap().unwrap()[0].id,
+        nodes[0].id
+    );
+    assert!(manager.fetch_and_store(&sub, Some(&store)).await.is_err());
+    assert_eq!(fs::read_to_string(&saved).unwrap(), C19_PARTIAL);
+    fs::write(&saved, C19_INVALID).unwrap();
+    assert!(store.load_nodes(&sub).await.is_err());
+    fs::remove_file(&saved).unwrap();
+    fs::remove_dir(store.root()).unwrap();
+    fs::write(store.root(), "not a directory").unwrap();
+    let mut diagnostics = Vec::new();
+    assert_eq!(
+        manager
+            .fetch_and_store_with_diagnostics(&sub, Some(&store), &mut diagnostics)
+            .await
+            .unwrap()[0]
+            .id,
+        nodes[0].id
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code == "subscription-store-write-failed")
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn c19_invalid_http_encoding_preserves_saved_body() {
+    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
+
+    let body = include_bytes!("../../tests/fixtures/c19-invalid-utf8-body.txt");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let sub = Subscription {
+        url: format!("http://{}/sub", listener.local_addr().unwrap()),
+        ..Subscription::default()
+    };
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = tokio::io::BufReader::new(stream);
+        let mut line = String::new();
+        while stream.read_line(&mut line).await.unwrap() != 0 {
+            if line == "\r\n" {
+                break;
+            }
+            line.clear();
+        }
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        stream.write_all(body).await.unwrap();
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let store = SubscriptionStore::open(temp.path().join("store")).unwrap();
+    store.store_content(&sub, C19_PARTIAL.into()).await.unwrap();
+    let manager = SubscriptionManager::new().unwrap();
+    let mut diagnostics = Vec::new();
+    let result = manager
+        .fetch_and_store_with_diagnostics(&sub, Some(&store), &mut diagnostics)
+        .await;
+    server.await.unwrap();
+    assert!(
+        result.is_err(),
+        "invalid HTTP encoding must reject the body"
+    );
+    assert_eq!(
+        fs::read(store.path_for(&sub)).unwrap(),
+        C19_PARTIAL.as_bytes()
+    );
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "invalid-subscription-encoding");
+    assert!(diagnostics[0].terminal);
+    let error = result.unwrap_err();
+    let error = error.downcast_ref::<DetailedConfigError>().unwrap();
+    assert_eq!(error.diagnostic.as_ref(), &diagnostics[0]);
+}

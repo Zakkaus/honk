@@ -365,9 +365,7 @@ fn write_store_file(root: &Path, destination: &Path, content: &[u8]) -> anyhow::
 }
 
 /// `Response::text` buffers the whole body before anything can check its size.
-/// Lossy conversion keeps the previous behaviour: a body with invalid bytes
-/// still parses its valid lines.
-async fn read_capped_body(mut response: reqwest::Response) -> anyhow::Result<String> {
+async fn read_capped_body(mut response: reqwest::Response) -> anyhow::Result<Vec<u8>> {
     let mut body: Vec<u8> = Vec::new();
     while let Some(chunk) = response
         .chunk()
@@ -379,7 +377,7 @@ async fn read_capped_body(mut response: reqwest::Response) -> anyhow::Result<Str
         }
         body.extend_from_slice(&chunk);
     }
-    Ok(String::from_utf8_lossy(&body).into_owned())
+    Ok(body)
 }
 
 /// Manager for fetching and parsing proxy subscriptions.
@@ -401,11 +399,25 @@ impl SubscriptionManager {
     pub async fn fetch(&self, sub: &Subscription) -> anyhow::Result<Vec<Node>> {
         self.fetch_and_store(sub, None).await
     }
-
     pub async fn fetch_and_store(
         &self,
         sub: &Subscription,
         store: Option<&SubscriptionStore>,
+    ) -> anyhow::Result<Vec<Node>> {
+        let mut diagnostics = Vec::new();
+        let result = self
+            .fetch_and_store_with_diagnostics(sub, store, &mut diagnostics)
+            .await;
+        report_detailed_diagnostics(&diagnostics);
+        result
+    }
+
+    /// Body acceptance and persistence precede, and are independent of, runtime publication.
+    pub async fn fetch_and_store_with_diagnostics(
+        &self,
+        sub: &Subscription,
+        store: Option<&SubscriptionStore>,
+        diagnostics: &mut Vec<DetailedDiagnostic>,
     ) -> anyhow::Result<Vec<Node>> {
         let mut request = self
             .client
@@ -420,16 +432,32 @@ impl SubscriptionManager {
         let response = response
             .error_for_status()
             .map_err(reqwest::Error::without_url)?;
-        let content = read_capped_body(response).await?;
-        let nodes = parse_subscription_content(sub, &content)?;
+        let body = read_capped_body(response).await?;
+        let content = finish_attempt(
+            String::from_utf8(body).map_err(|_| {
+                subscription_error(
+                    DiagnosticSources::new(None).root(),
+                    "invalid-subscription-encoding",
+                )
+            }),
+            diagnostics,
+        )?;
+        let start = diagnostics.len();
+        let nodes = parse_subscription_content_with_diagnostics(sub, &content, diagnostics)?;
         if let Some(store) = store
-            && let Err(error) = store.store_content(sub, content).await
+            && store.store_content(sub, content).await.is_err()
         {
-            tracing::warn!(
-                subscription = %sub.name,
-                %error,
-                "failed to persist subscription"
+            let source = diagnostics.get(start).map_or_else(
+                || DiagnosticSources::new(None).root(),
+                |diagnostic| diagnostic.source.sources().root(),
             );
+            diagnostics.push(DetailedDiagnostic::warning(
+                "subscription-store-write-failed",
+                source,
+                SettingPath::new("subscription").field("store"),
+                SafeValue::Redacted,
+                "subscription body accepted but could not be persisted",
+            ));
         }
         Ok(nodes)
     }
@@ -510,7 +538,7 @@ fn collect_indexed_outcomes(
     diagnostics: &mut Vec<DetailedDiagnostic>,
 ) -> Result<Vec<Node>, DetailedConfigError> {
     let mut nodes = Vec::new();
-    let mut seen = std::collections::HashSet::<uuid::Uuid>::new();
+    let mut seen = std::collections::HashMap::<uuid::Uuid, usize>::new();
     for outcome in outcomes {
         let ordinal = outcome.ordinal;
         let line = outcome.line;
@@ -538,7 +566,20 @@ fn collect_indexed_outcomes(
                     ));
                     continue;
                 }
-                if seen.insert(node.id) {
+                if let Some(first) = seen.get(&node.id) {
+                    let mut diagnostic = indexed_diagnostic(
+                        "duplicate-subscription-entry",
+                        Severity::Warning,
+                        source,
+                        ordinal,
+                        line,
+                        path,
+                        "duplicate endpoint identity; retaining the first usable entry",
+                    );
+                    diagnostic.related_indices.push(*first);
+                    diagnostics.push(diagnostic);
+                } else {
+                    seen.insert(node.id, ordinal);
                     nodes.push(node);
                 }
             }
