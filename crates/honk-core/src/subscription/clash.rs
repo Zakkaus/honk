@@ -8,6 +8,7 @@ use honk_config::options::vocab::{optional_flow, packet_network, stream_transpor
 use honk_config::types::NodeProtocol;
 use serde_yaml::Mapping;
 
+pub(super) use self::fields::duration_secs as parse_feed_duration_secs;
 use self::fields::{
     active as yaml_active, active_for_key as yaml_active_for_key, bool_alias as yaml_bool_alias,
     duration_alias as yaml_duration_alias, list_alias as yaml_list_alias, optional_text_alias,

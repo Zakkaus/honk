@@ -803,11 +803,20 @@ fn apply_hysteria(map: &mut Mapping, options: &mut RecordOptions) -> RecordResul
         "mport",
         take_option(options, &["mport", "port-hopping", "port_hopping"]),
     );
-    set_optional(
-        map,
-        "mhop",
-        take_option(options, &["mhop", "hop-interval", "hop_interval"]),
-    );
+    let mut interval = None;
+    for (_, value) in options.occurrences.extract_if(.., |(key, _)| {
+        matches!(key.as_str(), "mhop" | "hop-interval" | "hop_interval")
+    }) {
+        let seconds = super::clash::parse_feed_duration_secs(&Value::String(value))?;
+        match interval {
+            None => interval = Some(seconds),
+            Some(previous) if previous == seconds => {}
+            Some(_) => return Err("record duration aliases conflict"),
+        }
+    }
+    if let Some(seconds) = interval {
+        put_u64(map, "mhop", seconds);
+    }
     if let Some(obfs) = take_option(options, &["obfs"]) {
         if !matches!(obfs.to_ascii_lowercase().as_str(), "none" | "salamander") {
             return Err("Hysteria obfuscation is unsupported");

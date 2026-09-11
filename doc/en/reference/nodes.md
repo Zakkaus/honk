@@ -108,6 +108,10 @@ VMess cipher claims accept `auto` and `aes-128-gcm`, case-insensitively, and sto
 
 TUIC share links and feeds accept only absent, empty, or `native` relay mode; unsupported `udp-relay-mode`/`udp_relay_mode` claims reject even beside a valid alias. Hy2 share links require exact lowercase `obfs=salamander`; absent/empty disables obfuscation, and unknown names (including `SALAMANDER`) reject. Salamander without a nonempty password still disables obfuscation. Repeated password claims and `obfs-password`/`obfs_password` must agree. Clash keeps case-insensitive Salamander with a nonblank password; sing-box keeps exact lowercase type and rejects active incomplete obfuscation objects.
 
+Duration conversion rejects negative, nonfinite, and out-of-range values instead of saturating. Structured feed seconds fields round integer milliseconds up (`500ms` and `1000ms` both become `1`; zero stays zero), then compare aliases. Share-link Hy2 `mhop` remains bare unsigned integer seconds: `500ms` and `1s` are ignored with a redacted warning. AnyTLS share-link durations retain the seconds parser; dae millisecond settings retain bare/ms/s syntax and truncate fractional milliseconds.
+
+Sing-box `hop_interval`, `idle_session_timeout`, and `idle_session_check_interval` preserve native numeric zero as an explicit value; missing or null remains absent. Hysteria2 records compare every `mhop`, `hop-interval`, and `hop_interval` occurrence after conversion to seconds, rejecting conflicts and invalid values even beside a valid alias.
+
 ## Protocols
 
 | Protocol | Alias | TCP | UDP | Notes |

@@ -357,6 +357,8 @@ pub(super) fn apply_protocol(
     query: &Query,
     embedded_hop_ports: Option<String>,
     shadowrocket: bool,
+    source: &crate::diagnostic::SourceRef,
+    emit: &mut impl FnMut(crate::diagnostic::DetailedDiagnostic),
 ) -> Result<(), ConfigError> {
     if node.protocol() != NodeProtocol::SS
         && ["plugin", "plugin-opts", "plugin_opts"]
@@ -401,6 +403,19 @@ pub(super) fn apply_protocol(
         OutboundConfig::Vless(config) => apply_vless(config, query)?,
         OutboundConfig::Hysteria2(config) => {
             apply_hysteria2(config, query, embedded_hop_ports)?;
+            for (ordinal, (key, value)) in query.0.iter().enumerate() {
+                if key == "mhop" && value.parse::<u64>().is_err() {
+                    let mut warning = crate::diagnostic::DetailedDiagnostic::warning(
+                        "legacy-config-warning",
+                        source.clone(),
+                        crate::diagnostic::SettingPath::new("nodes").field("hy2_hop_interval"),
+                        crate::diagnostic::SafeValue::Redacted,
+                        "ignored mhop value; share links require unsigned integer seconds",
+                    );
+                    warning.entry_index = Some(ordinal + 1);
+                    emit(warning);
+                }
+            }
             apply_mtu(&mut config.quic, query);
         }
         OutboundConfig::Tuic(config) => {

@@ -508,4 +508,60 @@ mod tests {
         assert_eq!(nodes[1].hysteria2().unwrap().auth.as_deref(), Some("67890"));
         assert_eq!(nodes[2].socks5().unwrap().password, None);
     }
+    const C14_SING_BOX_DURATIONS: &str = r#"{"outbounds":[
+      {"type":"hysteria2","tag":"hy2-native-zero","server":"hy2-native.example","server_port":443,"password":"password","hop_interval":0,"tls":{"enabled":true}},
+      {"type":"hysteria2","tag":"hy2-text-zero","server":"hy2-text.example","server_port":443,"password":"password","hop_interval":"0","tls":{"enabled":true}},
+      {"type":"hysteria2","tag":"hy2-subsecond","server":"hy2-subsecond.example","server_port":443,"password":"password","hop_interval":"500ms","tls":{"enabled":true}},
+      {"type":"anytls","tag":"anytls-native-zero","server":"anytls-native.example","server_port":443,"password":"password","idle_session_check_interval":0,"idle_session_timeout":0,"tls":{"enabled":true}},
+      {"type":"anytls","tag":"anytls-text-zero-subsecond","server":"anytls-text.example","server_port":443,"password":"password","idle_session_check_interval":"0","idle_session_timeout":"500ms","tls":{"enabled":true}},
+      {"type":"anytls","tag":"anytls-missing","server":"anytls-missing.example","server_port":443,"password":"password","tls":{"enabled":true}},
+      {"type":"anytls","tag":"anytls-null","server":"anytls-null.example","server_port":443,"password":"password","idle_session_check_interval":null,"idle_session_timeout":null,"tls":{"enabled":true}},
+      {"type":"hysteria2","tag":"invalid-hop-type","server":"invalid-hop.example","server_port":443,"password":"password","hop_interval":[],"tls":{"enabled":true}},
+      {"type":"anytls","tag":"invalid-anytls-timeout","server":"invalid-anytls.example","server_port":443,"password":"password","idle_session_timeout":{},"tls":{"enabled":true}}
+    ]}"#;
+
+    #[test]
+    fn c14_sing_box_durations_preserve_zero_round_subsecond_and_absence() {
+        let nodes = parse_json_subscription(json(C14_SING_BOX_DURATIONS), None).unwrap();
+        assert_eq!(nodes[0].hysteria2().unwrap().hop_interval, Some(0));
+        assert_eq!(nodes[1].hysteria2().unwrap().hop_interval, Some(0));
+        assert_eq!(nodes[2].hysteria2().unwrap().hop_interval, Some(1));
+        assert_eq!(
+            nodes[3].anytls().unwrap().idle_session_check_interval,
+            Some(0)
+        );
+        assert_eq!(nodes[3].anytls().unwrap().idle_session_timeout, Some(0));
+        assert_eq!(
+            nodes[4].anytls().unwrap().idle_session_check_interval,
+            Some(0)
+        );
+        assert_eq!(nodes[4].anytls().unwrap().idle_session_timeout, Some(1));
+        assert!(
+            nodes[5]
+                .anytls()
+                .unwrap()
+                .idle_session_check_interval
+                .is_none()
+        );
+        assert!(nodes[5].anytls().unwrap().idle_session_timeout.is_none());
+        assert!(
+            nodes[6]
+                .anytls()
+                .unwrap()
+                .idle_session_check_interval
+                .is_none()
+        );
+        assert!(nodes[6].anytls().unwrap().idle_session_timeout.is_none());
+    }
+
+    #[test]
+    fn c14_sing_box_invalid_duration_types_are_rejected_by_entry_policy() {
+        let mut fixture = json(C14_SING_BOX_DURATIONS);
+        let entries = fixture["outbounds"].as_sequence_mut().unwrap();
+        for invalid in entries.drain(7..) {
+            let mut body = Mapping::new();
+            body.insert("outbounds".into(), Value::Sequence(vec![invalid]));
+            assert!(parse_json_subscription(Value::Mapping(body), None).is_err());
+        }
+    }
 }

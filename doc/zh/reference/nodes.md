@@ -108,6 +108,10 @@ VMess 加密方式接受 `auto` 和 `aes-128-gcm`，忽略大小写并存储为�
 
 TUIC 分享链接和订阅的转发模式只接受未指定、空值或 `native`；即使存在有效别名，不支持的 `udp-relay-mode`/`udp_relay_mode` 仍会使条目被拒绝。Hy2 分享链接只接受小写的 `obfs=salamander`；未指定或空值关闭混淆，未知名称（包括 `SALAMANDER`）会被拒绝。Salamander 未提供非空密码时仍关闭混淆。重复密码声明与 `obfs-password`/`obfs_password` 须一致。Clash 仍接受不区分大小写的 Salamander，并要求非空白密码；sing-box 仍要求小写类型，并拒绝已配置有效字段但缺少类型或密码的混淆对象。
 
+时长转换拒绝负数、非有限值和超出范围的值，不再截为零或上限。结构化订阅的秒数字段将整数毫秒向上取整（`500ms` 和 `1000ms` 均为 `1`，零仍为零），再比较别名。Hy2 分享链接的 `mhop` 仍只接受无后缀的无符号整数秒数；`500ms` 和 `1s` 会被忽略，并产生不含原值的警告。AnyTLS 分享链接保留秒数解析规则；dae 毫秒字段仍只接受裸数值、ms 或 s，并截去不足一毫秒的部分。
+
+sing-box 的 `hop_interval`、`idle_session_timeout` 和 `idle_session_check_interval` 保留原生数字零，缺失或 null 仍表示未提供。Hysteria2 记录会将每个 `mhop`、`hop-interval` 和 `hop_interval` 值转换为秒后比较；即使存在有效别名，冲突或无效值仍会使记录被拒绝。
+
 ## 协议
 
 | 协议 | 别名 | TCP | UDP | 说明 |

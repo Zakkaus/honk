@@ -920,3 +920,22 @@ fn c11_clash_anytls_network_aliases_resolve_before_udp() {
         [true, true, true, false, true]
     );
 }
+
+#[test]
+fn c14_feed_duration_aliases_compare_after_ceiling() {
+    const FEED: &str = r#"proxies:
+      - {name: hy2, type: hysteria2, server: example.com, port: 443, password: password, hop-interval: 500ms, mhop: 1s}
+      - {name: anytls, type: anytls, server: example.com, port: 443, password: password, idle-session-timeout: 1000ms, idle-session-check-interval: 0ms}
+    "#;
+    let nodes = parse_clash_subscription(FEED, None).unwrap();
+    assert_eq!(
+        nodes.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(),
+        ["hy2", "anytls"]
+    );
+    assert_eq!(nodes[0].hysteria2().unwrap().hop_interval, Some(1));
+    assert_eq!(nodes[1].anytls().unwrap().idle_session_timeout, Some(1));
+    assert_eq!(
+        nodes[1].anytls().unwrap().idle_session_check_interval,
+        Some(0)
+    );
+}

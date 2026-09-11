@@ -231,14 +231,13 @@ fn normalize_hysteria2(mut source: Mapping, mut proxy: Mapping) -> Result<Mappin
     {
         return Err("sing-box randomized Hysteria2 hop intervals are unsupported");
     }
-    for (source_key, target_key) in [
-        ("up_mbps", "up"),
-        ("down_mbps", "down"),
-        ("hop_interval", "hop-interval"),
-    ] {
+    for (source_key, target_key) in [("up_mbps", "up"), ("down_mbps", "down")] {
         if let Some(value) = source.remove(source_key).filter(active) {
             put(&mut proxy, target_key, value);
         }
+    }
+    if let Some(value) = source.remove("hop_interval") {
+        put(&mut proxy, "hop-interval", value);
     }
     normalize_hysteria2_obfs(&mut source, &mut proxy)?;
     normalize_quic_fields(&mut source, &mut proxy)?;
@@ -305,12 +304,14 @@ fn normalize_anytls(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, 
             _ => return Err("sing-box packet network must be a string"),
         }
     }
+    if let Some(value) = source.remove("min_idle_session").filter(active) {
+        put(&mut proxy, "min-idle-session", value);
+    }
     for (source_key, target_key) in [
-        ("min_idle_session", "min-idle-session"),
         ("idle_session_check_interval", "idle-session-check-interval"),
         ("idle_session_timeout", "idle-session-timeout"),
     ] {
-        if let Some(value) = source.remove(source_key).filter(active) {
+        if let Some(value) = source.remove(source_key) {
             put(&mut proxy, target_key, value);
         }
     }

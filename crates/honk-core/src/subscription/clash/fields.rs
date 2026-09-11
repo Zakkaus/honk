@@ -125,7 +125,7 @@ pub(super) fn u64_alias(mapping: &Mapping, keys: &[&str]) -> Result<Option<u64>,
     })
 }
 
-fn duration_secs(value: &Value) -> Result<u64, &'static str> {
+pub(in crate::subscription) fn duration_secs(value: &Value) -> Result<u64, &'static str> {
     match value {
         Value::Number(_) => u64_value(value),
         Value::String(raw) => {
@@ -146,7 +146,7 @@ fn duration_secs(value: &Value) -> Result<u64, &'static str> {
                 .parse()
                 .map_err(|_| "field must be a duration")?;
             if multiplier == 0 {
-                Ok(number / 1000)
+                Ok(number / 1000 + u64::from(!number.is_multiple_of(1000)))
             } else {
                 number
                     .checked_mul(multiplier)

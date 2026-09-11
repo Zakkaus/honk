@@ -571,8 +571,7 @@ const B4_RECORD_PACKET_REJECTIONS: &[&str] = &[
     "anytls=example.com:443,password=fixture,udp=true,udp=false,tag=conflict",
     "anytls=example.com:443,password=fixture,udp-relay=true,udp-relay=false,tag=conflict",
 ];
-const B4_RECORD_PACKET_AGREEMENT: &str =
-    r#"anytls=example.com:443,password=fixture,network=udp,network="tcp,udp",udp=true,udp-relay=on,tag=agreement"#;
+const B4_RECORD_PACKET_AGREEMENT: &str = r#"anytls=example.com:443,password=fixture,network=udp,network="tcp,udp",udp=true,udp-relay=on,tag=agreement"#;
 
 #[test]
 fn b4_record_packet_occurrences_cannot_hide_invalid_claims() {
@@ -585,4 +584,22 @@ fn b4_record_packet_occurrences_cannot_hide_invalid_claims() {
 fn b4_record_equivalent_packet_claims_keep_first_spelling() {
     let nodes = parse_records_subscription(B4_RECORD_PACKET_AGREEMENT, None).unwrap();
     assert_eq!(nodes[0].network(), Some("udp"));
+}
+
+const B4_RECORD_DURATION_CONFLICT: &str =
+    "hysteria2=example.com:443,password=fixture,mhop=1s,hop_interval=2s,tag=conflict";
+const B4_RECORD_DURATION_EQUIVALENT: &str = "hysteria2=example.com:443,password=fixture,mhop=500ms,hop-interval=1s,hop_interval=1000ms,tag=equal";
+
+#[test]
+fn b4_record_duration_aliases_compare_converted_seconds() {
+    let nodes = parse_records_subscription(B4_RECORD_DURATION_EQUIVALENT, None).unwrap();
+    assert_eq!(nodes[0].hysteria2().unwrap().hop_interval, Some(1));
+    assert!(parse_records_subscription(B4_RECORD_DURATION_CONFLICT, None).is_err());
+}
+
+#[test]
+fn b4_record_repeated_duration_cannot_hide_invalid_claim() {
+    let invalid =
+        B4_RECORD_DURATION_CONFLICT.replace("mhop=1s,hop_interval=2s", "mhop=bad,mhop=1s");
+    assert!(parse_records_subscription(&invalid, None).is_err());
 }

@@ -112,7 +112,14 @@ impl Node {
 
         options::apply_tls(&mut node, &query, shadowrocket, source, emit)?;
         options::apply_transport(&mut node, &query)?;
-        options::apply_protocol(&mut node, &query, embedded_hop_ports, shadowrocket)?;
+        options::apply_protocol(
+            &mut node,
+            &query,
+            embedded_hop_ports,
+            shadowrocket,
+            source,
+            emit,
+        )?;
         node.validate_protocol()?;
         node.id = node.derive_id();
         Ok(node)
