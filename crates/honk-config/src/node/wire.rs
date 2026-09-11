@@ -421,6 +421,11 @@ impl FlatNode {
     ) -> Result<Node, crate::ConfigError> {
         self.resolve_credential_aliases()?;
         self.strip_protocol_incompatible_fields(diagnostics, source, setting);
+        if self.protocol == NodeProtocol::VMess {
+            self.encryption = crate::options::vocab::vmess_cipher(self.encryption.as_deref())
+                .map_err(|reason| crate::ConfigError::Validation(reason.into()))?
+                .map(str::to_owned);
+        }
         if let Some(value) = self.network.as_deref()
             && packet_network(value)
                 .map_err(|_| crate::ConfigError::Validation("invalid packet network".into()))?

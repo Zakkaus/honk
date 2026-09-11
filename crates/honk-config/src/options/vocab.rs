@@ -50,6 +50,31 @@ pub fn stream_transport(value: &str) -> Result<&'static str, &'static str> {
     }
 }
 
+/// Resolve optional VMess cipher claims before any alias is discarded.
+pub fn vmess_cipher<'a>(
+    values: impl IntoIterator<Item = &'a str>,
+) -> Result<Option<&'static str>, &'static str> {
+    let mut selected = None;
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let cipher = if value.eq_ignore_ascii_case("auto") {
+            "auto"
+        } else if value.eq_ignore_ascii_case("aes-128-gcm") {
+            "aes-128-gcm"
+        } else {
+            return Err("unsupported VMess cipher");
+        };
+        if selected.is_some_and(|previous| previous != cipher) {
+            return Err("conflicting VMess cipher aliases");
+        }
+        selected = Some(cipher);
+    }
+    Ok(selected)
+}
+
 /// Resolve a packet-network capability list into the consumer's UDP flag.
 pub fn packet_network(value: &str) -> Result<Option<bool>, &'static str> {
     let value = value.trim();

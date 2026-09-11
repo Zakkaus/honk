@@ -104,6 +104,8 @@ The new `tls_alpn` field is deliberately excluded from legacy stripping: a nonem
 
 Share-link verification booleans ignore surrounding whitespace and ASCII case. `true`, `yes`, `1`, and `on` disable certificate verification; `false`, `f`, `no`, `n`, `0`, `off`, `t`, and `y` leave verification enabled. Empty or unknown text and conflicting aliases reject the link. **Security change:** `yes` and `on` previously left verification enabled; they now disable it and emit a warning. Use explicit `true` or `false` and review these links before upgrading. Native structured booleans remain typed; strings and numbers are not coerced.
 
+VMess cipher claims accept `auto` and `aes-128-gcm`, case-insensitively, and store lowercase names; empty optional claims use the default. JSON `scy`/`security`, encoded share-link `encryption`/`scy`/cipher-valued `security`, and supported feed cipher aliases must agree before assignment. Unsupported or conflicting values reject the node. In encoded share links, `security=none` and `security=tls` still select TLS behavior, not a cipher. Record positional ciphers remain lower-priority fallbacks.
+
 ## Protocols
 
 | Protocol | Alias | TCP | UDP | Notes |

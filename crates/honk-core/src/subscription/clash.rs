@@ -321,7 +321,7 @@ fn apply_protocol(mapping: &Mapping, node: &mut Node) -> Result<(), &'static str
         OutboundConfig::Trojan(config) => config.password = password,
         OutboundConfig::Vmess(config) => {
             config.uuid = yaml_text_alias(mapping, &["uuid"])?.or(password);
-            config.encryption = yaml_text_alias(mapping, &["encryption"])?.or(cipher);
+            config.encryption = fields::vmess_cipher_alias(mapping, &["encryption", "cipher"])?;
         }
         OutboundConfig::Vless(config) => {
             config.uuid = yaml_text_alias(mapping, &["uuid"])?.or(password);

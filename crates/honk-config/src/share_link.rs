@@ -23,7 +23,7 @@ use base64::Engine as _;
 
 use crate::error::ConfigError;
 use crate::node::{Node, OutboundConfig, ShadowsocksConfig};
-use crate::options::vocab::{optional_text, stream_transport};
+use crate::options::vocab::{optional_text, stream_transport, vmess_cipher};
 
 mod options;
 
@@ -294,7 +294,14 @@ impl VmessLinkJson {
             name: self.ps.unwrap_or_else(|| format!("vmess-{}", host)),
             outbound: crate::node::OutboundConfig::Vmess(crate::node::VmessConfig {
                 uuid: Some(id),
-                encryption: self.scy.or(self.security),
+                encryption: vmess_cipher(
+                    self.scy
+                        .iter()
+                        .chain(self.security.iter())
+                        .map(String::as_str),
+                )
+                .map_err(|reason| ConfigError::Parse(reason.into()))?
+                .map(str::to_owned),
                 network: None,
                 transport: stream,
                 tls,

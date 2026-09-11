@@ -76,6 +76,17 @@ pub(super) fn optional_text_alias(
     })
 }
 
+pub(super) fn vmess_cipher_alias(
+    mapping: &Mapping,
+    keys: &[&str],
+) -> Result<Option<String>, &'static str> {
+    parsed_alias(mapping, keys, |value| {
+        let value = text(value)?;
+        honk_config::options::vocab::vmess_cipher(value.as_deref())
+            .map(|value| value.map(str::to_owned))
+    })
+}
+
 pub(super) fn bool_alias(mapping: &Mapping, keys: &[&str]) -> Result<Option<bool>, &'static str> {
     parsed_alias(mapping, keys, |value| match value {
         Value::Null => Ok(None),

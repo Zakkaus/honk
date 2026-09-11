@@ -428,10 +428,10 @@ fn apply_protocol(
             set_required(map, "uuid", uuid)?;
             let cipher = match dialect {
                 Dialect::Named => {
-                    take_credential_alias(options, &["method", "encryption", "cipher"])?
+                    take_vmess_cipher_alias(options, &["method", "encryption", "cipher"])?
                         .or_else(|| positions.first().filter(|v| !looks_like_uuid(v)).cloned())
                 }
-                Dialect::QuantumultX => take_credential_alias(options, &["method", "cipher"])?,
+                Dialect::QuantumultX => take_vmess_cipher_alias(options, &["method", "cipher"])?,
             };
             set_optional(map, "cipher", cipher);
             if dialect == Dialect::Named {
@@ -889,6 +889,18 @@ fn take_credential_alias(
         }
     }
     Ok(take_raw(options, keys))
+}
+
+fn take_vmess_cipher_alias(
+    options: &mut RecordOptions,
+    keys: &[&str],
+) -> RecordResult<Option<String>> {
+    let cipher =
+        honk_config::options::vocab::vmess_cipher(keys.iter().flat_map(|key| options.claims(key)))?;
+    for key in keys {
+        options.remove(key);
+    }
+    Ok(cipher.map(str::to_owned))
 }
 fn take_stream_transport_alias(
     options: &mut RecordOptions,

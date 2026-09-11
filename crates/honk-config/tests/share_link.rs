@@ -2035,3 +2035,46 @@ fn c11_flat_packet_network_validates_and_preserves_spelling() {
         }
     }
 }
+
+#[test]
+fn c12_vmess_cipher_claims_resolve_before_assignment() {
+    for (scy, security, expected) in [
+        ("", "auto", Some("auto")),
+        ("AUTO", "auto", Some("auto")),
+        ("aes-128-gcm", "AES-128-GCM", Some("aes-128-gcm")),
+        ("", "", None),
+    ] {
+        let mut fixture: serde_json::Value =
+            serde_json::from_str(&vmess_transport_fixture(None)).unwrap();
+        fixture["scy"] = scy.into();
+        fixture["security"] = security.into();
+        let node = Node::from_share_link(&vmess_link(&fixture.to_string())).unwrap();
+        assert_eq!(node.vmess().unwrap().encryption.as_deref(), expected);
+    }
+    for (scy, security) in [("none", "auto"), ("auto", "aes-128-gcm")] {
+        let mut fixture: serde_json::Value =
+            serde_json::from_str(&vmess_transport_fixture(None)).unwrap();
+        fixture["scy"] = scy.into();
+        fixture["security"] = security.into();
+        assert!(Node::from_share_link(&vmess_link(&fixture.to_string())).is_err());
+    }
+}
+
+#[test]
+fn c12_shadowrocket_cipher_aliases_keep_security_tls_meaning() {
+    let authority = b64(&format!("auto:{UUID_A}@example.com:443"));
+    for security in ["none", "tls"] {
+        let node = Node::from_share_link(&format!(
+            "vmess://{authority}?security={security}&scy=AUTO&encryption=auto"
+        ))
+        .unwrap();
+        assert_eq!(node.vmess().unwrap().encryption.as_deref(), Some("auto"));
+        assert_eq!(node.tls().unwrap().enabled, security == "tls");
+    }
+    for query in [
+        "scy=auto&encryption=aes-128-gcm",
+        "scy=bogus&encryption=auto",
+    ] {
+        assert!(Node::from_share_link(&format!("vmess://{authority}?{query}")).is_err());
+    }
+}

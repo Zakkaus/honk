@@ -122,14 +122,10 @@ fn normalize_socks5(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, 
 
 fn normalize_vmess(mut source: Mapping, mut proxy: Mapping) -> Result<Mapping, &'static str> {
     move_credential_strings(&mut source, &mut proxy, &[("uuid", "uuid")])?;
-    if let Some(security) = source.remove("security") {
-        let Value::String(value) = &security else {
-            return Err("sing-box VMess security must be a string");
-        };
-        if !matches!(value.as_str(), "auto" | "aes-128-gcm") {
-            return Err("unsupported sing-box VMess security");
-        }
-        put(&mut proxy, "cipher", security);
+    if let Some(value) = take_optional_string(&mut source, "security")?
+        && let Some(cipher) = honk_config::options::vocab::vmess_cipher([value.as_str()])?
+    {
+        put(&mut proxy, "cipher", Value::String(cipher.into()));
     }
     if source
         .remove("alter_id")

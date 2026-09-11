@@ -2,7 +2,9 @@
 
 use crate::error::ConfigError;
 use crate::node::{Hysteria2Config, Node, OutboundConfig, QuicOptions, VlessConfig};
-use crate::options::vocab::{optional_flow, optional_text, stream_transport, verification_text};
+use crate::options::vocab::{
+    optional_flow, optional_text, stream_transport, verification_text, vmess_cipher,
+};
 use crate::types::{NodeProtocol, parse_duration_secs};
 
 #[derive(Default)]
@@ -67,6 +69,8 @@ pub(super) fn parse_query(
                     | "type"
                     | "network"
                     | "obfs"
+                    | "scy"
+                    | "encryption"
             )
             && query.get(&key).is_some_and(|previous| previous != &value)
         {
@@ -95,14 +99,12 @@ pub(super) fn parse_query(
         ));
     }
     if shadowrocket_vmess {
-        if query
-            .get("security")
-            .is_some_and(|value| !matches!(value.as_str(), "none" | "tls" | "auto" | "aes-128-gcm"))
-        {
-            return Err(ConfigError::Parse(
-                "unsupported encoded VMess security".into(),
-            ));
-        }
+        vmess_cipher(
+            query
+                .values("security")
+                .filter(|value| !matches!(*value, "none" | "tls")),
+        )
+        .map_err(|reason| ConfigError::Parse(reason.into()))?;
         if ["pbk", "sid", "spx"]
             .iter()
             .any(|key| query.get(*key).is_some_and(|value| !value.is_empty()))
@@ -385,22 +387,16 @@ pub(super) fn apply_protocol(
             }
         }
         OutboundConfig::Vmess(config) if shadowrocket => {
-            if let Some(cipher) = query
-                .get("encryption")
-                .or_else(|| query.get("scy"))
-                .or_else(|| {
+            config.encryption = vmess_cipher(
+                query.values("encryption").chain(query.values("scy")).chain(
                     query
-                        .get("security")
-                        .filter(|value| !matches!(value.as_str(), "none" | "tls"))
-                })
-            {
-                if !matches!(cipher.as_str(), "auto" | "aes-128-gcm") {
-                    return Err(ConfigError::Parse(
-                        "unsupported VMess share-link cipher".into(),
-                    ));
-                }
-                config.encryption = Some(cipher.clone());
-            }
+                        .values("security")
+                        .filter(|value| !matches!(*value, "none" | "tls")),
+                ),
+            )
+            .map_err(|reason| ConfigError::Parse(reason.into()))?
+            .map(str::to_owned)
+            .or_else(|| config.encryption.take());
         }
         OutboundConfig::Vless(config) => apply_vless(config, query)?,
         OutboundConfig::Hysteria2(config) => {

@@ -101,6 +101,11 @@ impl DetailedConfigError {
         };
         if let Some(text) = text {
             let reason = match text {
+                "unsupported VMess cipher" | "conflicting VMess cipher aliases" => Some((
+                    "invalid-config-value",
+                    SettingPath::new("nodes").field("encryption"),
+                    "VMess cipher must be auto or aes-128-gcm; aliases must agree",
+                )),
                 "invalid packet network" => Some((
                     "invalid-config-value",
                     SettingPath::new("nodes").field("network"),
