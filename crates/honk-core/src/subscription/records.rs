@@ -9,27 +9,25 @@ use honk_config::options::vocab::{optional_flow, optional_text, stream_transport
 
 use serde_yaml::{Mapping, Value};
 
+use super::IndexedOutcome;
+#[cfg(test)]
 use super::Node;
 
 mod fields;
 use fields::{Field, split_fields};
 
-/// Parse Surge/Surfboard/Loon and Quantumult X record bodies.
-///
-/// The body may be a complete profile or a plain record list. Unsupported
-/// records are discarded individually so supported siblings survive.
-pub(super) fn parse_records_subscription(
+/// Retain physical lines before normalizing Surge-family and Quantumult X records.
+pub(super) fn parse_record_outcomes(
     content: &str,
     subscription_id: Option<uuid::Uuid>,
-) -> anyhow::Result<Vec<Node>> {
-    let body = content;
-    let mut records = Vec::<Value>::new();
+) -> Vec<IndexedOutcome> {
+    let mut outcomes = Vec::new();
     let mut section = None::<String>;
-    let has_sections = body
+    let has_sections = content
         .lines()
         .map(str::trim)
         .any(|line| section_name(line).is_some());
-    for line in body.lines() {
+    for (index, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
@@ -38,31 +36,45 @@ pub(super) fn parse_records_subscription(
             section = Some(name);
             continue;
         }
-        if has_sections && !section.as_deref().is_some_and(is_record_section) {
-            continue;
-        }
-
-        let Some(fields) = split_fields(line) else {
-            tracing::warn!(
-                category = "malformed-record",
-                "skipping subscription record"
-            );
-            continue;
+        let ordinal = index + 1;
+        let mut outcome = if (has_sections && !section.as_deref().is_some_and(is_record_section))
+            || line.starts_with("REMARKS=")
+            || line.starts_with("STATUS=")
+        {
+            IndexedOutcome::profile(ordinal, "entries", "subscription profile metadata")
+        } else {
+            let result = split_fields(line)
+                .ok_or("malformed subscription record")
+                .and_then(|fields| parse_record(&fields))
+                .and_then(|mapping| super::clash::parse_clash_proxy(&mapping, subscription_id));
+            match result {
+                Ok(node) => IndexedOutcome::node(ordinal, "entries", node),
+                Err(reason) if reason.contains("unsupported") => {
+                    IndexedOutcome::unsupported(ordinal, "entries", reason)
+                }
+                Err(reason) => IndexedOutcome::malformed(ordinal, "entries", reason),
+            }
         };
-        match parse_record(&fields) {
-            Ok(record) => records.push(Value::Mapping(record)),
-            Err(reason) => tracing::debug!(
-                category = "unsupported-record",
-                reason,
-                "skipping subscription record"
-            ),
-        }
+        outcome.line = Some(ordinal);
+        outcomes.push(outcome);
     }
+    outcomes
+}
 
-    if records.is_empty() {
-        anyhow::bail!("no supported records found in subscription");
-    }
-    super::parse_clash_proxies(&records, subscription_id)
+#[cfg(test)]
+fn parse_records_subscription(
+    content: &str,
+    subscription_id: Option<uuid::Uuid>,
+) -> anyhow::Result<Vec<Node>> {
+    let nodes: Vec<_> = parse_record_outcomes(content, subscription_id)
+        .into_iter()
+        .filter_map(|outcome| match outcome.kind {
+            super::IndexedOutcomeKind::Node(node) => Some(node),
+            _ => None,
+        })
+        .collect();
+    anyhow::ensure!(!nodes.is_empty(), "no supported subscription records");
+    Ok(nodes)
 }
 
 fn section_name(line: &str) -> Option<String> {

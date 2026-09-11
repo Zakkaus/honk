@@ -28,9 +28,7 @@ pub(super) fn parse_json_subscription(
         .into_iter()
         .filter_map(|outcome| match outcome.kind {
             IndexedOutcomeKind::Node(node) => Some(node),
-            IndexedOutcomeKind::Malformed(_)
-            | IndexedOutcomeKind::Unsupported(_)
-            | IndexedOutcomeKind::Profile(_) => None,
+            _ => None,
         })
         .collect::<Vec<_>>();
     if nodes.is_empty() {

@@ -51,6 +51,7 @@ enum IndexedOutcomeKind {
     Malformed(&'static str),
     Unsupported(&'static str),
     Profile(&'static str),
+    Diagnostic(Box<DetailedDiagnostic>),
 }
 
 impl IndexedOutcome {
@@ -460,15 +461,34 @@ fn parse_subscription_content_attempt(
     diagnostics: &mut Vec<DetailedDiagnostic>,
 ) -> Result<Vec<Node>, DetailedConfigError> {
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let decoded = if matches!(
+        sub.sub_type,
+        SubscriptionType::Simple | SubscriptionType::Custom
+    ) {
+        decode_base64_flexible(content).ok()
+    } else {
+        None
+    };
+    let source = if decoded.is_some() {
+        source.sources().add(None, Some(source.index()))
+    } else {
+        source.clone()
+    };
+    let content = match decoded.as_deref() {
+        Some(bytes) => std::str::from_utf8(bytes)
+            .map_err(|_| subscription_error(source.clone(), "invalid-subscription-encoding"))?,
+        None => content,
+    };
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let outcomes = match sub.sub_type {
         SubscriptionType::Sip008 => parse_sip008_subscription_outcomes(content, Some(sub.id)),
         SubscriptionType::Clash => parse_clash_subscription_outcomes(content, Some(sub.id)),
         SubscriptionType::Simple | SubscriptionType::Custom => {
-            parse_auto_subscription_outcomes(content, Some(sub.id), &sub.name)
+            parse_auto_subscription_outcomes(content, Some(sub.id))
         }
     }
     .map_err(|_| subscription_error(source.clone(), "invalid-subscription-body"))?;
-    collect_indexed_outcomes(outcomes, source, diagnostics)
+    collect_indexed_outcomes(outcomes, &source, diagnostics)
 }
 
 fn subscription_error(
@@ -549,6 +569,15 @@ fn collect_indexed_outcomes(
                 path,
                 reason,
             )),
+            IndexedOutcomeKind::Diagnostic(mut diagnostic) => {
+                diagnostic.source = source.clone();
+                diagnostic.setting = SettingPath::new(path).index(ordinal);
+                diagnostic.entry_index = Some(ordinal);
+                diagnostic.line = line;
+                diagnostic.span = None;
+                diagnostic.byte_column = None;
+                diagnostics.push(*diagnostic);
+            }
         }
     }
     if nodes.is_empty() {
@@ -608,22 +637,12 @@ fn parse_structured_value(content: &str) -> Result<serde_yaml::Value, serde_yaml
 }
 
 fn parse_auto_subscription_outcomes(
-    content: &str,
+    text: &str,
     subscription_id: Option<uuid::Uuid>,
-    subscription_tag: &str,
 ) -> anyhow::Result<Vec<IndexedOutcome>> {
-    let content = content.trim().trim_start_matches('\u{feff}');
-    if content.is_empty() {
+    if text.trim().is_empty() {
         anyhow::bail!("empty subscription body");
     }
-    let decoded = decode_base64_flexible(content)
-        .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok());
-    let text = decoded
-        .as_deref()
-        .unwrap_or(content)
-        .trim()
-        .trim_start_matches('\u{feff}');
     if let Some(outcomes) = parse_structured_subscription_outcomes(text, subscription_id)? {
         return Ok(outcomes);
     }
@@ -635,16 +654,11 @@ fn parse_auto_subscription_outcomes(
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
         })
     });
-    let nodes = if has_uri {
-        parse_uri_subscription(text, subscription_id, subscription_tag)?
+    Ok(if has_uri {
+        parse_uri_subscription(text, subscription_id)
     } else {
-        records::parse_records_subscription(text, subscription_id)?
-    };
-    Ok(nodes
-        .into_iter()
-        .enumerate()
-        .map(|(index, node)| IndexedOutcome::node(index + 1, "subscription", node))
-        .collect())
+        records::parse_record_outcomes(text, subscription_id)
+    })
 }
 
 fn parse_structured_subscription_outcomes(
@@ -691,34 +705,58 @@ fn parse_structured_subscription_outcomes(
     }
 }
 
-fn parse_uri_subscription(
-    text: &str,
-    subscription_id: Option<uuid::Uuid>,
-    subscription_tag: &str,
-) -> anyhow::Result<Vec<Node>> {
-    let mut nodes = Vec::new();
-    for uri in text.lines().map(str::trim).filter(|line| {
-        !line.is_empty()
-            && !["#", ";", "//", "REMARKS=", "STATUS="]
+fn parse_uri_subscription(text: &str, subscription_id: Option<uuid::Uuid>) -> Vec<IndexedOutcome> {
+    let mut outcomes = Vec::new();
+    for (index, uri) in text.lines().enumerate() {
+        let uri = uri.trim();
+        if uri.is_empty()
+            || ["#", ";", "//"]
                 .iter()
-                .any(|prefix| line.starts_with(prefix))
-    }) {
-        match Node::from_share_link(uri) {
-            Ok(mut node) => {
-                node.subscription_id = subscription_id;
-                nodes.push(node);
+                .any(|prefix| uri.starts_with(prefix))
+        {
+            continue;
+        }
+        let ordinal = index + 1;
+        if ["REMARKS=", "STATUS="]
+            .iter()
+            .any(|prefix| uri.starts_with(prefix))
+        {
+            let mut outcome =
+                IndexedOutcome::profile(ordinal, "entries", "subscription profile metadata");
+            outcome.line = Some(ordinal);
+            outcomes.push(outcome);
+            continue;
+        }
+        let mut diagnostics = Vec::new();
+        let result = Node::from_share_link_with_detailed_diagnostics(uri, &mut diagnostics);
+        for mut diagnostic in diagnostics {
+            if diagnostic.terminal {
+                diagnostic.code = if result
+                    .as_ref()
+                    .is_err_and(|error| error.category == ErrorCategory::UnknownProtocol)
+                {
+                    "unsupported-subscription-entry"
+                } else {
+                    "malformed-subscription-entry"
+                };
+                diagnostic.terminal = false;
+                diagnostic.severity = Severity::Warning;
             }
-            Err(_) => tracing::warn!(
-                subscription = subscription_tag,
-                category = "unsupported-node-uri",
-                "skipping subscription node"
-            ),
+            outcomes.push(IndexedOutcome {
+                ordinal,
+                line: Some(ordinal),
+                path: "entries",
+                kind: IndexedOutcomeKind::Diagnostic(Box::new(diagnostic)),
+            });
+        }
+        if let Ok(mut node) = result {
+            node.subscription_id = subscription_id;
+            let mut outcome = IndexedOutcome::node(ordinal, "entries", node);
+            outcome.line = Some(ordinal);
+            outcomes.push(outcome);
         }
     }
-    if nodes.is_empty() {
-        anyhow::bail!("no supported nodes found in subscription");
-    }
-    Ok(nodes)
+    outcomes
 }
 
 fn decode_base64_flexible(input: &str) -> anyhow::Result<Vec<u8>> {
@@ -760,6 +798,7 @@ fn yaml_value<'a>(mapping: &'a serde_yaml::Mapping, key: &str) -> Option<&'a ser
     mapping.get(serde_yaml::Value::String(key.to_string()))
 }
 
+#[cfg(test)]
 fn parse_clash_proxies(
     proxies: &[serde_yaml::Value],
     subscription_id: Option<uuid::Uuid>,
@@ -769,9 +808,7 @@ fn parse_clash_proxies(
         .into_iter()
         .filter_map(|outcome| match outcome.kind {
             IndexedOutcomeKind::Node(node) => Some(node),
-            IndexedOutcomeKind::Malformed(_)
-            | IndexedOutcomeKind::Unsupported(_)
-            | IndexedOutcomeKind::Profile(_) => None,
+            _ => None,
         })
         .collect::<Vec<_>>();
     if nodes.is_empty() {

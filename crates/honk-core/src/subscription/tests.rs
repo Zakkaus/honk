@@ -686,3 +686,51 @@ fn c17_structured_adapters_retain_original_mixed_entry_indices() {
         ],
     );
 }
+
+#[test]
+fn c18_physical_lines_and_decoded_parent_survive() {
+    use honk_config::diagnostic::Severity;
+    for (body, profile, unsupported) in [
+        (include_str!("../../tests/fixtures/c18-uri-lines.txt"), 3, 4),
+        (
+            include_str!("../../tests/fixtures/c18-record-lines.txt"),
+            3,
+            6,
+        ),
+    ] {
+        for encoded in [false, true] {
+            let content = if encoded {
+                base64::engine::general_purpose::STANDARD.encode(body)
+            } else {
+                body.to_string()
+            };
+            let mut diagnostics = Vec::new();
+            let nodes = parse_subscription_content_with_diagnostics(
+                &Subscription::default(),
+                &content,
+                &mut diagnostics,
+            )
+            .unwrap();
+            assert_eq!(nodes[0].name, "usable");
+            assert_eq!(
+                diagnostics
+                    .iter()
+                    .map(|d| (d.line, d.severity))
+                    .collect::<Vec<_>>(),
+                [
+                    (Some(profile), Severity::Info),
+                    (Some(unsupported), Severity::Warning)
+                ]
+            );
+            assert_eq!(diagnostics[1].entry_index, Some(unsupported));
+            assert_eq!(diagnostics[1].code, "unsupported-subscription-entry");
+            let source = &diagnostics[1].source;
+            assert_eq!(source.index(), usize::from(encoded));
+            assert_eq!(
+                source.sources().metadata()[source.index()].parent,
+                encoded.then_some(0)
+            );
+            assert!(diagnostics.iter().all(|d| d.span.is_none()));
+        }
+    }
+}
