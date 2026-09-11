@@ -135,6 +135,8 @@ cloudflare_dot: 'tls://1.1.1.1:853?tls_server_name=cloudflare-dns.com'
 
 透明 53 端口与 `dns.bind` 入口的逻辑来源是 socket peer；代表已接纳 TCP/UDP 流执行的 DNS 解析使用该流的客户端地址。内部、bootstrap、prefetch 与 Clash API 查询没有逻辑来源。来源未知时，正向和取反的 `sip` 条件都为 false，请求路由会继续执行下一条规则或 fallback。response 路由不接受 `sip`。
 
+DNS `sip()` 与 `ip()` 共用 IP/CIDR 解码器。裸 IPv4 和 IPv6 地址分别表示 `/32` 和 `/128`；CIDR 中的主机位会被清零，并产生 `dns-network-host-bits` 警告。无效网络产生带位置的 `invalid-dns-network` 诊断，并省略整条 dae 规则；通过代码构造的无效路由会在路由器或策略构建时失败。等价网络写法使用相同策略标识，不改变参数顺序或删除重复参数。
+
 ### Request 动作
 
 | 动作 | 结果 |

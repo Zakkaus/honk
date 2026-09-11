@@ -434,6 +434,9 @@ fn parse_dns_conditions(
         }
 
         if let Some(cidrs) = extract_fn_args(inner, "sip") {
+            if !validate_dns_networks(&cidrs, diagnostics, route_kind, ordinal) {
+                return Vec::new();
+            }
             conds.push(crate::dns::DnsCond::Sip { not, cidrs });
             continue;
         }
@@ -445,6 +448,9 @@ fn parse_dns_conditions(
             }
             if let Some(args) = extract_fn_args(inner, "ip") {
                 let (cidrs, geoip) = parse_dns_ip_args(&args);
+                if !validate_dns_networks(&cidrs, diagnostics, route_kind, ordinal) {
+                    return Vec::new();
+                }
                 conds.push(crate::dns::DnsCond::Ip { not, cidrs, geoip });
                 continue;
             }
@@ -482,6 +488,36 @@ fn invalid_dns_rule(
         SafeValue::Ordinal(ordinal),
         "invalid or unsupported DNS condition; whole rule omitted",
     ));
+}
+
+fn validate_dns_networks(
+    values: &[String],
+    diagnostics: &mut ParserDiagnostics<'_>,
+    route_kind: &'static str,
+    ordinal: usize,
+) -> bool {
+    let mut truncated = false;
+    for value in values {
+        let Some(decoded) = crate::dns::decode_ip_or_cidr(value) else {
+            invalid_dns_rule(diagnostics, route_kind, ordinal, "invalid-dns-network");
+            return false;
+        };
+        truncated |= decoded.truncated;
+    }
+    if truncated {
+        diagnostics.emit(DetailedDiagnostic::warning(
+            "dns-network-host-bits",
+            diagnostics.source(),
+            SettingPath::new("dns")
+                .field("routing")
+                .field(route_kind)
+                .field("rules")
+                .index(ordinal),
+            SafeValue::Ordinal(ordinal),
+            "DNS network host bits are truncated to the network prefix",
+        ));
+    }
+    true
 }
 
 /// Parse qname(args) into a list of domain matchers.
