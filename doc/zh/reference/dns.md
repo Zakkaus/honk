@@ -104,7 +104,7 @@ cloudflare_dot: 'tls://1.1.1.1:853?tls_server_name=cloudflare-dns.com'
 
 末尾的 `-> tag` 强制该上游经过指定节点或组。省略时，honk 会解析上游目的地址并应用普通流量的 `routing { ... }` 规则；该路由仍可选择代理 leaf。旧版同一行写法 `name: 'uri' outbound: tag` 仍然接受。
 
-上游行中对 `->` 和 `outbound:` 的搜索不区分引号内外，不要在 URI 中嵌入这两个分隔符。
+只有引号外的 `->` 与 `outbound:` 后缀选择出站。它们在 URI 引号内仍是数据；与旧版拆分结果不同的写法产生 `legacy-upstream-separator` 警告。引号外词法单元开头的 `#` 开始行尾注释，行为变化产生 `legacy-upstream-comment`。注释和出站后缀请放在 URI 引号外。
 
 | 协议 | 经过选定节点/组 |
 | --- | --- |

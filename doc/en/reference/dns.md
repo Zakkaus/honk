@@ -104,7 +104,7 @@ The parameter is removed from the dial address and overrides a hostname-derived 
 
 A trailing `-> tag` forces the upstream through that node or group. Without it, honk resolves the upstream destination and applies the ordinary traffic `routing { ... }` rules; that route can still select a proxy leaf. The legacy same-line form `name: 'uri' outbound: tag` remains accepted.
 
-The upstream-line searches for `->` and `outbound:` are not quote-aware; do not embed these separators in the URI.
+Only unquoted `->` and `outbound:` suffixes select detours. Inside a quoted URI they remain data; a changed legacy split emits `legacy-upstream-separator`. An unquoted token-head `#` starts a trailing comment, with `legacy-upstream-comment` for the changed interpretation. Put comments and outbound suffixes outside URI quotes.
 
 | Protocol | Through a selected node/group |
 | --- | --- |

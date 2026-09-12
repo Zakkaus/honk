@@ -60,10 +60,10 @@ honk 读取 dae 的配置语法，但它是一种方言：honk 与 dae 对同一
 | request 或 response 规则里的 `#`，`qname(a#b) -> reject # note` | `a#b` 是字面量，`# note` 是注释 | 只检查引号外第一个 `#`，且仅在其前面是空格时才是注释：此例它紧贴前文，因此不截断，动作变成文本 `reject # note`，不等于 `reject`。注释请独占一行。 |
 | request 或 response 规则里的 `->` | 一个箭头 | 规则在第一个引号外的 `->` 处拆分，后续箭头留在动作里（`-> up->stream` 是名为 `up->stream` 的上游）。整个动作文本会转为小写：`Reject` 即 `reject`，`-> MixedCase` 指向名为 `mixedcase` 的上游，与声明为 `MixedCase` 的上游不匹配。 |
 | 跨行的匹配器调用，`qname(` 换行 `a.example) -> reject` | 空白（含换行）被跳过 | request 与 response 规则逐行读取，两行都不是完整规则，该规则被丢弃且没有诊断。 |
-| 带出站的上游，`u: 'udp://1.1.1.1:53' -> proxy` 或 `u: 'udp://1.1.1.1:53' outbound: proxy` | 箭头形式被拒绝（声明不能带 `->`）；`outbound: proxy` 形式是相邻的两个声明 | honk 扩展：两种形式都让上游 `u` 经出站 `proxy` 拨号。 |
+| 带出站的上游，`u: 'udp://1.1.1.1:53' -> proxy` 或 `u: 'udp://1.1.1.1:53' outbound: proxy` | 箭头形式被拒绝（声明不能带 `->`）；`outbound: proxy` 形式是相邻的两个声明 | honk 扩展：两种形式都让上游 `u` 经出站 `proxy` 拨号；两个后缀都只在 URI 引号外读取。 |
 | 匹配器调用后的文本，`dport(443)junk -> proxy`、`qname(a.example)junk -> reject` | 拒绝：箭头必须紧接调用 | 流量路由以带位置的 `trailing-matcher-text` 错误拒绝配置；DNS 发出警告并省略整条规则。请删除匹配器后的多余文本。 |
-| 上游行的行尾注释，`v: 'udp://8.8.8.8:53' # note` | 注释 | 不剥除：地址变成 `8.8.8.8:53' # note`。上游的注释请独占一行。 |
-| 带引号的上游 URL 内的 `->` 或 `outbound:` | 数据 | 上游读取器搜索整行，包括引号内：`'https://dns.example/q?x=outbound:proxy#frag'` 变成地址 `dns.example/q?x=`、出站 `proxy#frag`。不要在上游 URL 里放这两个分隔符。 |
+| 上游行的行尾注释，`v: 'udp://8.8.8.8:53' # note` | 注释 | 引号外词法单元开头的 `#` 开始注释，因此地址为 `8.8.8.8:53`；行为变化产生 `legacy-upstream-comment`。可以使用普通行尾 `#` 注释；引号保护地址数据。 |
+| 带引号的上游 URL 内的 `->` 或 `outbound:` | 数据 | 只有引号外的描述符后缀选择出站；`'https://dns.example/q?x=outbound:proxy#frag'` 保持为一个 URI。与旧版拆分结果不同的写法产生 `legacy-upstream-separator` 警告；出站后缀请放在 URL 引号外。 |
 | `qtype(...)` | 函数参数 | 名称 `A`、`AAAA`、`CNAME`、`MX`、`TXT`、`NS`、`PTR`、`SOA`、`SRV`、`HTTPS`、`SVCB`、`ANY`、`*`（不区分大小写）或十进制 `u16`；未知名称产生 `invalid-qtype` 警告并省略整条规则，混合列表和取反条件也不例外。请修正名称或使用数字类型码。显式 `qtype()` 仍不匹配任何类型；`qtype('a,aaaa')` 选择两种类型。 |
 
 ## 组

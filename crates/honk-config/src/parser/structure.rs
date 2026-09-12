@@ -72,6 +72,10 @@ impl Block {
     }
 
     /// Return direct named children in source order.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Retained for C13 projection retirement")
+    )]
     pub fn blocks_any(&self) -> impl Iterator<Item = &Block> {
         self.items.iter().filter_map(|item| match item {
             Item::Block(block) => Some(block),
@@ -79,12 +83,14 @@ impl Block {
         })
     }
 
+    #[expect(dead_code, reason = "Retained for C13 projection retirement")]
     pub fn blocks_matching<'a>(&'a self, recognised: &[&str]) -> Vec<&'a Block> {
         let mut blocks = Vec::new();
         self.append_matching(recognised, &mut blocks);
         blocks
     }
 
+    #[expect(dead_code, reason = "Retained for C13 projection retirement")]
     fn append_matching<'a>(&'a self, recognised: &[&str], blocks: &mut Vec<&'a Block>) {
         for block in self.blocks_any() {
             if recognised.contains(&block.name.as_str()) {
@@ -126,6 +132,8 @@ pub fn scan(
     }
     Ok(scanner.roots)
 }
+
+#[expect(dead_code, reason = "Retained for C13 bridge retirement")]
 fn scan_dns_root(
     source: &Source<'static>,
     lines: &[Line<'_>],
@@ -165,7 +173,7 @@ fn scan_dns_root(
                         matches!(name, "upstream" | "routing" | "fixed_domain_ttl")
                     }));
             if legacy_child {
-                // C09-C11 still own these raw subtrees; never rescan scalar text with Scanner.
+                // Retained old-reader adapter; production DNS now uses scan_readers directly.
                 let mut child = Scanner::default();
                 let mut child_position = (position.0, token.span.start - line.start);
                 let mut notices = Vec::new();
@@ -259,7 +267,7 @@ pub(super) fn scan_readers(
     let shared: Arc<str> = Arc::from(input);
     let source = Source::shared(shared, reference.clone());
     let mut lexical = Vec::new();
-    let mut tokens = source.tokenize(&mut lexical);
+    let tokens = source.tokenize(&mut lexical);
     let lines = Line::all(input);
     let mut scanner = Scanner::default();
     let mut position = (0, 0);
@@ -308,23 +316,6 @@ pub(super) fn scan_readers(
             migrated_root_seen = true;
             let start = first.unwrap();
             let byte_start = tokens[start].span.start;
-            if source.raw(tokens[start].span) == "dns" {
-                let dns_position = (position.0, byte_start - lines[position.0].start);
-                let (legacy, byte_end) = scan_dns_root(&source, &lines, dns_position, diagnostics)?;
-                scanner.roots.push(legacy);
-                let line = line_for_offset(&lines, byte_end);
-                position = (line, byte_end - lines[line].start);
-                if position.1 >= lines[line].text.len() {
-                    position = (line + 1, 0);
-                }
-                // A legacy child can end inside a lexer token; resume from its actual boundary.
-                let consumed = tokens.partition_point(|token| token.span.start < byte_end);
-                if consumed > 0 && tokens[consumed - 1].span.end > byte_end {
-                    lexical.clear();
-                    tokens = source.tokenize_span(source.span(byte_end, input.len()), &mut lexical);
-                }
-                continue;
-            }
             let mut opened = false;
             let mut depth = 0usize;
             let mut end = tokens.len();

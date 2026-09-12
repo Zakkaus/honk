@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use super::cursor::Segment;
 use super::read::{self, Text};
 use super::scalars;
 use super::{
@@ -7,9 +8,32 @@ use super::{
     parse_ip_prefer, split_unquoted, strip_tag_arg,
 };
 use crate::ConfigDiagnostic;
-use crate::diagnostic::{DetailedDiagnostic, SafeValue, SettingPath};
+use crate::diagnostic::{DetailedDiagnostic, SafeValue, SettingPath, Severity};
 use crate::dns::DnsConfig;
 
+// Preserve unknown-wrapper traversal until C13 changes that policy.
+fn children<'d, 'a>(
+    section: &Segment<'d, 'a>,
+    recognized: &[&str],
+    lines: &mut Vec<Text<'d, 'a>>,
+    blocks: &mut Vec<Segment<'d, 'a>>,
+) {
+    if let Some(mut body) = section.body() {
+        while body.next() {
+            let child = body.next_segment().expect("DNS statement or block");
+            if let Some(header) = read::block_header(&child) {
+                if recognized.contains(&header.raw()) {
+                    blocks.push(child);
+                } else {
+                    lines.push(header);
+                    children(&child, recognized, lines, blocks);
+                }
+            } else {
+                lines.push(Text::segment(&child));
+            }
+        }
+    }
+}
 fn terminal_scalar_quote(
     line: Text<'_, '_>,
     diagnostics: &mut ParserDiagnostics<'_>,
@@ -38,12 +62,12 @@ fn terminal_scalar_quote(
 }
 
 fn raw_fields<'d>(
-    section: &'d Block,
+    lines: Vec<Text<'d, 'static>>,
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Result<(HashMap<&'d str, Text<'d, 'static>>, Vec<Text<'d, 'static>>), crate::ConfigError> {
     let mut raw = HashMap::new();
     let mut hosts = Vec::new();
-    for line in read::statements(section) {
+    for line in lines {
         terminal_scalar_quote(line, diagnostics)?;
         let Some((key, value)) = line.kv() else {
             continue;
@@ -64,8 +88,17 @@ pub(super) fn parse_section(
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Result<DnsConfig, crate::ConfigError> {
     diagnostics.at_section(section, &["upstream", "routing", "fixed_domain_ttl"]);
-    let dns_subs = section.blocks_matching(&["upstream", "routing", "fixed_domain_ttl"]);
-    let (settings, hosts) = raw_fields(section, diagnostics)?;
+    let mut lines = Vec::new();
+    let mut dns_subs = Vec::new();
+    for owned in &section.segments {
+        children(
+            &owned.get(),
+            &["upstream", "routing", "fixed_domain_ttl"],
+            &mut lines,
+            &mut dns_subs,
+        );
+    }
+    let (settings, hosts) = raw_fields(lines, diagnostics)?;
     let mut cfg = DnsConfig::default();
     let mut saw_upstream = false;
     if let Some(bind) = settings.get("bind") {
@@ -145,23 +178,32 @@ pub(super) fn parse_section(
     }
 
     for sub in dns_subs {
-        match sub.name.as_str() {
+        match read::block_header(&sub).unwrap().raw() {
             "upstream" => {
                 if !saw_upstream {
                     cfg.upstream.clear();
                     saw_upstream = true;
                 }
-                cfg.upstream
-                    .extend(parse_dns_upstreams(sub.lines_except(&[])));
+                cfg.upstream.extend(parse_dns_upstreams(&sub, diagnostics));
             }
             "routing" => {
-                for req in sub.blocks_matching(&["request"]) {
-                    let req_lines = req.lines_except(&[]);
+                let mut blocks = Vec::new();
+                children(&sub, &["request", "response"], &mut Vec::new(), &mut blocks);
+                for req in blocks
+                    .iter()
+                    .filter(|block| read::block_header(block).unwrap().raw() == "request")
+                {
+                    let req_lines = read::child_statements(req);
                     let has_fallback = req_lines.iter().any(|line| {
-                        let line = line.trim();
-                        line.starts_with("fallback:") || line.starts_with("default:")
+                        line.raw().starts_with("fallback:") || line.raw().starts_with("default:")
                     });
-                    let request = parse_dns_request_routing(req_lines, diagnostics);
+                    let request = parse_dns_request_routing(
+                        req_lines
+                            .into_iter()
+                            .filter(|line| !line.has_error())
+                            .map(Text::raw),
+                        diagnostics,
+                    );
                     cfg.routing.request.rules.extend(request.rules);
                     if !has_fallback {
                         continue;
@@ -174,13 +216,21 @@ pub(super) fn parse_section(
                         cfg.routing.fallback = name.clone();
                     }
                 }
-                for resp in sub.blocks_matching(&["response"]) {
-                    let resp_lines = resp.lines_except(&[]);
+                for resp in blocks
+                    .iter()
+                    .filter(|block| read::block_header(block).unwrap().raw() == "response")
+                {
+                    let resp_lines = read::child_statements(resp);
                     let has_fallback = resp_lines.iter().any(|line| {
-                        let line = line.trim();
-                        line.starts_with("fallback:") || line.starts_with("default:")
+                        line.raw().starts_with("fallback:") || line.raw().starts_with("default:")
                     });
-                    let response = parse_dns_response_routing(resp_lines, diagnostics);
+                    let response = parse_dns_response_routing(
+                        resp_lines
+                            .into_iter()
+                            .filter(|line| !line.has_error())
+                            .map(Text::raw),
+                        diagnostics,
+                    );
                     cfg.routing.response.rules.extend(response.rules);
                     if has_fallback {
                         cfg.routing.response.fallback = response.fallback;
@@ -188,8 +238,13 @@ pub(super) fn parse_section(
                 }
             }
             "fixed_domain_ttl" => {
-                cfg.fixed_domain_ttl
-                    .extend(parse_fixed_domain_ttl(sub.lines_except(&[]), diagnostics));
+                cfg.fixed_domain_ttl.extend(parse_fixed_domain_ttl(
+                    read::child_statements(&sub)
+                        .into_iter()
+                        .filter(|line| !line.has_error())
+                        .map(Text::raw),
+                    diagnostics,
+                ));
             }
             _ => {}
         }
@@ -198,48 +253,75 @@ pub(super) fn parse_section(
     Ok(cfg)
 }
 
-fn parse_dns_upstreams<'a>(
-    lines: impl IntoIterator<Item = &'a str>,
+fn trailing_comment<'d, 'a>(line: Text<'d, 'a>) -> Option<Text<'d, 'a>> {
+    // The dispenser excludes trivia; only the gap immediately after its last token matters.
+    let rest = &line.source.text()[line.span.end..];
+    let gap = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+    rest[gap..].starts_with('#').then(|| Text {
+        span: line
+            .source
+            .span(line.span.end + gap, line.span.end + gap + 1),
+        ..line
+    })
+}
+
+fn parse_dns_upstreams(
+    section: &Segment<'_, '_>,
+    diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Vec<crate::dns::DnsUpstream> {
     let mut upstreams = Vec::new();
-    for line in lines {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
+    for (index, line) in read::child_statements(section).into_iter().enumerate() {
+        if line.has_error() {
             continue;
         }
-        if let Some(pos) = trimmed.find(':') {
-            let name = trimmed[..pos].trim().to_string();
-            let rest = trimmed[pos + 1..].trim();
-            // Optional via-proxy suffix (same line):
-            //   preferred:  name: 'uri' -> proxy
-            //   legacy:     name: 'uri' outbound: proxy
-            let (uri, outbound) = if let Some((left, right)) = rest.split_once("->") {
-                let uri_part = left.trim().trim_matches('\'').trim_matches('"');
-                let outbound_part = right.trim().trim_matches('\'').trim_matches('"');
-                let outbound = if outbound_part.is_empty() {
-                    None
-                } else {
-                    Some(outbound_part.to_string())
-                };
-                (uri_part, outbound)
-            } else if let Some(opos) = rest.find("outbound:") {
-                let uri_part = rest[..opos].trim().trim_matches('\'').trim_matches('"');
-                let outbound_part = rest[opos + 9..].trim().trim_matches('\'').trim_matches('"');
-                (uri_part, Some(outbound_part.to_string()))
-            } else {
-                (rest.trim_matches('\'').trim_matches('"'), None)
-            };
-            let (protocol, address) = parse_upstream_uri(uri);
-            let (address, explicit_sni) = extract_tls_server_name(address);
-            let tls_server_name = explicit_sni.or_else(|| sni_from_upstream_address(&address));
-            upstreams.push(crate::dns::DnsUpstream {
-                name,
-                address,
-                protocol,
-                tls_server_name,
-                outbound,
-            });
+        let Some((name, rest)) = line.kv() else {
+            continue;
+        };
+        diagnostics.entry_text(line, index + 1);
+        if let Some(comment) = trailing_comment(line) {
+            comment.notice(
+                diagnostics,
+                Severity::Warning,
+                "legacy-upstream-comment",
+                "upstream comments start at an unquoted token-head `#`",
+            );
         }
+        let separator = rest
+            .find("->")
+            .map(|offset| (offset, 2))
+            .or_else(|| rest.find("outbound:").map(|offset| (offset, 9)));
+        let legacy_separator = rest
+            .raw()
+            .find("->")
+            .map(|offset| (offset, 2))
+            .or_else(|| rest.raw().find("outbound:").map(|offset| (offset, 9)));
+        if let Some((offset, length)) = legacy_separator.filter(|old| Some(*old) != separator) {
+            rest.sub(offset, offset + length).notice(
+                diagnostics,
+                Severity::Warning,
+                "legacy-upstream-separator",
+                "quoted URI separators are data; put the detour outside URL quotes",
+            );
+        }
+        let (uri, outbound) = if let Some((offset, length)) = separator {
+            let target = rest.sub(offset + length, rest.raw().len()).unquote().raw();
+            (
+                rest.sub(0, offset).unquote().raw(),
+                (length == 9 || !target.is_empty()).then(|| target.to_owned()),
+            )
+        } else {
+            (rest.unquote().raw(), None)
+        };
+        let (protocol, address) = parse_upstream_uri(uri);
+        let (address, explicit_sni) = extract_tls_server_name(address);
+        let tls_server_name = explicit_sni.or_else(|| sni_from_upstream_address(&address));
+        upstreams.push(crate::dns::DnsUpstream {
+            name: name.raw().to_owned(),
+            address,
+            protocol,
+            tls_server_name,
+            outbound,
+        });
     }
     upstreams
 }
