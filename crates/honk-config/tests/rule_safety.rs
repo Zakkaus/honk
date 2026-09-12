@@ -34,7 +34,7 @@ fn invalid_dns_conjunct_omits_whole_rule() {
         ("unknown(PRIVATE)", "invalid-dns-rule"),
         ("!sub(PRIVATE)", "unsupported-dns-condition"),
         ("qname (PRIVATE)", "invalid-dns-rule"),
-        ("qname(PRIVATE)junk", "invalid-dns-rule"),
+        ("qname(PRIVATE)junk", "trailing-matcher-text"),
         ("qtype(A,TYPO)", "invalid-qtype"),
         ("!qtype(TYPO)", "invalid-qtype"),
     ] {

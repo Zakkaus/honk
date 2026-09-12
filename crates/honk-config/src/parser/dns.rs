@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use super::cursor::Segment;
+use super::lexer::TokenKind;
 use super::read::{self, Text};
 use super::scalars;
 use super::{
-    Block, ParserDiagnostics, extract_fn_args, find_unquoted, lenient, normalize_geosite_code,
-    parse_ip_prefer, split_unquoted, strip_tag_arg,
+    Block, ParserDiagnostics, lenient, normalize_geosite_code, parse_ip_prefer, strip_tag_arg,
 };
 use crate::ConfigDiagnostic;
 use crate::diagnostic::{DetailedDiagnostic, SafeValue, SettingPath, Severity};
@@ -25,7 +25,15 @@ fn children<'d, 'a>(
                 if recognized.contains(&header.raw()) {
                     blocks.push(child);
                 } else {
-                    lines.push(header);
+                    let mut statement = Text::segment(&child);
+                    if let Some(opener) = child
+                        .tokens()
+                        .iter()
+                        .find(|token| token.kind == TokenKind::OpenBrace)
+                    {
+                        statement.span.end = opener.span.end;
+                    }
+                    lines.push(statement);
                     children(&child, recognized, lines, blocks);
                 }
             } else {
@@ -189,52 +197,8 @@ pub(super) fn parse_section(
             "routing" => {
                 let mut blocks = Vec::new();
                 children(&sub, &["request", "response"], &mut Vec::new(), &mut blocks);
-                for req in blocks
-                    .iter()
-                    .filter(|block| read::block_header(block).unwrap().raw() == "request")
-                {
-                    let req_lines = read::child_statements(req);
-                    let has_fallback = req_lines.iter().any(|line| {
-                        line.raw().starts_with("fallback:") || line.raw().starts_with("default:")
-                    });
-                    let request = parse_dns_request_routing(
-                        req_lines
-                            .into_iter()
-                            .filter(|line| !line.has_error())
-                            .map(Text::raw),
-                        diagnostics,
-                    );
-                    cfg.routing.request.rules.extend(request.rules);
-                    if !has_fallback {
-                        continue;
-                    }
-                    cfg.routing.request.fallback = request.fallback;
-                    // Sync legacy fallback for callers that only look there.
-                    if let crate::dns::DnsRequestAction::Upstream(ref name) =
-                        cfg.routing.request.fallback
-                    {
-                        cfg.routing.fallback = name.clone();
-                    }
-                }
-                for resp in blocks
-                    .iter()
-                    .filter(|block| read::block_header(block).unwrap().raw() == "response")
-                {
-                    let resp_lines = read::child_statements(resp);
-                    let has_fallback = resp_lines.iter().any(|line| {
-                        line.raw().starts_with("fallback:") || line.raw().starts_with("default:")
-                    });
-                    let response = parse_dns_response_routing(
-                        resp_lines
-                            .into_iter()
-                            .filter(|line| !line.has_error())
-                            .map(Text::raw),
-                        diagnostics,
-                    );
-                    cfg.routing.response.rules.extend(response.rules);
-                    if has_fallback {
-                        cfg.routing.response.fallback = response.fallback;
-                    }
+                for block in blocks {
+                    parse_dns_routing(&block, &mut cfg.routing, diagnostics);
                 }
             }
             "fixed_domain_ttl" => {
@@ -246,18 +210,6 @@ pub(super) fn parse_section(
     }
 
     Ok(cfg)
-}
-
-fn trailing_comment<'d, 'a>(line: Text<'d, 'a>) -> Option<Text<'d, 'a>> {
-    // The dispenser excludes trivia; only the gap immediately after its last token matters.
-    let rest = &line.source.text()[line.span.end..];
-    let gap = rest.len() - rest.trim_start_matches([' ', '\t']).len();
-    rest[gap..].starts_with('#').then(|| Text {
-        span: line
-            .source
-            .span(line.span.end + gap, line.span.end + gap + 1),
-        ..line
-    })
 }
 
 fn parse_dns_upstreams(
@@ -273,7 +225,7 @@ fn parse_dns_upstreams(
             continue;
         };
         diagnostics.entry_text(line, index + 1);
-        if let Some(comment) = trailing_comment(line) {
+        if let Some(comment) = line.trailing_comment() {
             comment.notice(
                 diagnostics,
                 Severity::Warning,
@@ -458,172 +410,214 @@ fn parse_fixed_domain_ttl(
     map
 }
 
-fn strip_dns_routing_comment(line: &str) -> &str {
-    let line = line.trim();
-    // DNS gives // precedence and tests only the first unquoted # for a preceding space.
-    if let Some(pos) = find_unquoted(line, "//") {
-        &line[..pos]
-    } else if let Some(pos) = find_unquoted(line, "#")
-        && pos > 0
-        && line.as_bytes()[pos - 1] == b' '
-    {
-        &line[..pos]
-    } else {
-        line
-    }
-}
-
-/// Parse `routing.request { ... }` block.
-fn parse_dns_request_routing<'a>(
-    lines: impl IntoIterator<Item = &'a str>,
+fn parse_dns_routing(
+    section: &Segment<'_, '_>,
+    routing: &mut crate::dns::DnsRouting,
     diagnostics: &mut ParserDiagnostics<'_>,
-) -> crate::dns::DnsRequestRouting {
-    let mut routing = crate::dns::DnsRequestRouting::default();
-
-    for (index, line) in lines.into_iter().enumerate() {
+) {
+    let is_response = read::block_header(section).unwrap().raw() == "response";
+    let kind = if is_response { "response" } else { "request" };
+    for (index, line) in read::child_statements(section).into_iter().enumerate() {
+        if line.has_error() {
+            continue;
+        }
         let ordinal = index + 1;
-        diagnostics.entry(line, ordinal);
-        let trimmed = strip_dns_routing_comment(line).trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        if trimmed.starts_with("fallback:") || trimmed.starts_with("default:") {
-            let fb = trimmed.split_once(':').unwrap().1.trim();
-            routing.fallback = crate::dns::DnsRequestAction::parse(fb);
-            continue;
-        }
-
-        if let Some(arrow_pos) = find_unquoted(trimmed, "->") {
-            let left = trimmed[..arrow_pos].trim();
-            let right = trimmed[arrow_pos + 2..].trim();
-            let action = crate::dns::DnsRequestAction::parse(right);
-            let conditions = parse_dns_conditions(left, false, diagnostics, "request", ordinal);
-            if !conditions.is_empty() {
-                routing
-                    .rules
-                    .push(crate::dns::DnsRequestRule { conditions, action });
+        diagnostics.entry_text(line, ordinal);
+        if let Some(comment) = line.trailing_comment() {
+            let suffix = &line.source.text()[comment.span.start..];
+            if line.find("#").is_some()
+                || line.source.text().as_bytes()[comment.span.start - 1] != b' '
+                || suffix
+                    .lines()
+                    .next()
+                    .and_then(|text| text.split_once("//"))
+                    .is_some_and(|(prefix, _)| !prefix.contains(['\'', '"']))
+            {
+                comment.notice(
+                    diagnostics,
+                    Severity::Warning,
+                    "legacy-dns-hash",
+                    "separate comments with whitespace outside quotes; glued hashes remain data",
+                );
             }
         }
-    }
-
-    routing
-}
-
-/// Parse `routing.response { ... }` block.
-fn parse_dns_response_routing<'a>(
-    lines: impl IntoIterator<Item = &'a str>,
-    diagnostics: &mut ParserDiagnostics<'_>,
-) -> crate::dns::DnsResponseRouting {
-    let mut routing = crate::dns::DnsResponseRouting::default();
-
-    for (index, line) in lines.into_iter().enumerate() {
-        let ordinal = index + 1;
-        diagnostics.entry(line, ordinal);
-        let trimmed = strip_dns_routing_comment(line).trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        if trimmed.starts_with("fallback:") || trimmed.starts_with("default:") {
-            let fb = trimmed.split_once(':').unwrap().1.trim();
-            routing.fallback = crate::dns::DnsResponseAction::parse(fb);
-            continue;
-        }
-
-        if let Some(arrow_pos) = find_unquoted(trimmed, "->") {
-            let left = trimmed[..arrow_pos].trim();
-            let right = trimmed[arrow_pos + 2..].trim();
-            let action = crate::dns::DnsResponseAction::parse(right);
-            let conditions = parse_dns_conditions(left, true, diagnostics, "response", ordinal);
-            if !conditions.is_empty() {
-                routing
-                    .rules
-                    .push(crate::dns::DnsResponseRule { conditions, action });
+        let arrow = line.find("->");
+        let fallback = ["fallback:", "default:"]
+            .into_iter()
+            .find(|prefix| line.raw().starts_with(prefix));
+        if let Some(offset) = line.find("//") {
+            line.sub(offset, offset + 2).notice(
+                diagnostics,
+                Severity::Warning,
+                "legacy-slash-comment",
+                "DNS slash comments are unsupported; use a token-head `#` comment",
+            );
+            let action = arrow.map(|offset| offset + 2).or(fallback.map(str::len));
+            if line.raw().starts_with("//")
+                || action.is_some_and(|start| {
+                    line.tokens.iter().any(|token| {
+                        token.span.start >= line.span.start + start
+                            && line.source.raw(token.span).starts_with("//")
+                    })
+                })
+            {
+                continue;
             }
         }
+        if let Some(prefix) = fallback {
+            let target = line.sub(prefix.len(), line.raw().len()).trim();
+            if target.raw().is_empty() {
+                invalid_dns_rule(diagnostics, kind, ordinal, "incomplete-dns-rule");
+            } else if is_response {
+                routing.response.fallback = crate::dns::DnsResponseAction::parse(target.raw());
+            } else {
+                routing.request.fallback = crate::dns::DnsRequestAction::parse(target.raw());
+                if let crate::dns::DnsRequestAction::Upstream(name) = &routing.request.fallback {
+                    routing.fallback = name.clone();
+                }
+            }
+            continue;
+        }
+        let Some(arrow) = arrow else {
+            invalid_dns_rule(diagnostics, kind, ordinal, "incomplete-dns-rule");
+            continue;
+        };
+        let left = line.sub(0, arrow).trim();
+        let right = line.sub(arrow + 2, line.raw().len()).trim();
+        if left.raw().is_empty() || right.raw().is_empty() {
+            invalid_dns_rule(diagnostics, kind, ordinal, "incomplete-dns-rule");
+            continue;
+        }
+        if let Some(offset) = right.find("->") {
+            right.sub(offset, offset + 2).notice(
+                diagnostics,
+                Severity::Warning,
+                "legacy-arrow-target",
+                "additional arrows remain literal upstream target data",
+            );
+        }
+        let conditions = parse_dns_conditions(left, is_response, diagnostics, kind, ordinal);
+        if conditions.is_empty() {
+            continue;
+        }
+        if is_response {
+            routing.response.rules.push(crate::dns::DnsResponseRule {
+                conditions,
+                action: crate::dns::DnsResponseAction::parse(right.raw()),
+            });
+        } else {
+            routing.request.rules.push(crate::dns::DnsRequestRule {
+                conditions,
+                action: crate::dns::DnsRequestAction::parse(right.raw()),
+            });
+        }
     }
-
-    routing
 }
 
-/// Parse a chain of `&&`-separated conditions.
 fn parse_dns_conditions(
-    expr: &str,
+    expr: Text<'_, '_>,
     is_response: bool,
     diagnostics: &mut ParserDiagnostics<'_>,
     route_kind: &'static str,
     ordinal: usize,
 ) -> Vec<crate::dns::DnsCond> {
     let mut conds = Vec::new();
-
-    for part in split_unquoted(expr, "&&") {
+    for part in expr.split("&&") {
         let part = part.trim();
-        if part.is_empty() {
-            invalid_dns_rule(diagnostics, route_kind, ordinal, "invalid-dns-rule");
+        diagnostics.at_text(part);
+        let not = part.raw().starts_with('!');
+        let inner = if not {
+            part.sub(1, part.raw().len()).trim()
+        } else {
+            part
+        };
+        let Some(open) = inner.find("(") else {
+            let code = if inner.find(")").is_some() {
+                "incomplete-dns-rule"
+            } else {
+                "invalid-dns-rule"
+            };
+            invalid_dns_rule(diagnostics, route_kind, ordinal, code);
+            return Vec::new();
+        };
+        let name = inner.sub(0, open).raw();
+        if !matches!(name, "qname" | "qtype" | "sip")
+            && !(is_response && matches!(name, "upstream" | "ip"))
+        {
+            let code = if matches!(name, "sub" | "node" | "subnode") {
+                "unsupported-dns-condition"
+            } else {
+                "invalid-dns-rule"
+            };
+            invalid_dns_rule(diagnostics, route_kind, ordinal, code);
             return Vec::new();
         }
-        let (not, inner) = if let Some(rest) = part.strip_prefix('!') {
-            (true, rest.trim())
-        } else {
-            (false, part)
+        let body = inner.sub(open + 1, inner.raw().len());
+        // First unquoted closer preserves bare regex parentheses as the existing grammar does.
+        let Some(close) = body.find(")") else {
+            invalid_dns_rule(diagnostics, route_kind, ordinal, "incomplete-dns-rule");
+            return Vec::new();
         };
-
-        if let Some(args) = extract_fn_args(inner, "qname") {
-            let matchers = parse_dns_qname_args(&args);
-            conds.push(crate::dns::DnsCond::Qname { not, matchers });
-            continue;
+        let tail = body.sub(close + 1, body.raw().len()).trim();
+        if !tail.raw().is_empty() {
+            diagnostics.at_text(tail);
+            invalid_dns_rule(diagnostics, route_kind, ordinal, "trailing-matcher-text");
+            return Vec::new();
         }
-
-        if let Some(args) = extract_fn_args(inner, "qtype") {
-            let types: Option<Vec<u16>> = args
-                .iter()
-                .flat_map(|argument| argument.split(','))
-                .map(crate::dns::parse_qtype_token)
-                .collect();
-            let Some(types) = types else {
-                invalid_dns_rule(diagnostics, route_kind, ordinal, "invalid-qtype");
-                return Vec::new();
-            };
-            conds.push(crate::dns::DnsCond::Qtype { not, types });
-            continue;
+        let arguments = body.sub(0, close).trim();
+        if name == "qtype"
+            && arguments.unquote().span != arguments.span
+            && arguments.unquote().raw().contains(',')
+        {
+            arguments.notice(
+                diagnostics,
+                Severity::Warning,
+                "legacy-quoted-list",
+                "quoted qtype aggregates remain lists; prefer bare or individually quoted items",
+            );
         }
-
-        if let Some(cidrs) = extract_fn_args(inner, "sip") {
-            if !validate_dns_networks(&cidrs, diagnostics, route_kind, ordinal) {
-                return Vec::new();
+        let args: Vec<String> = arguments
+            .split(",")
+            .into_iter()
+            .map(|arg| arg.unquote().raw())
+            .filter(|arg| !arg.is_empty())
+            .map(str::to_owned)
+            .collect();
+        let condition = match name {
+            "qname" => crate::dns::DnsCond::Qname {
+                not,
+                matchers: parse_dns_qname_args(&args),
+            },
+            "qtype" => {
+                let types: Option<Vec<u16>> = args
+                    .iter()
+                    .flat_map(|argument| argument.split(','))
+                    .map(crate::dns::parse_qtype_token)
+                    .collect();
+                let Some(types) = types else {
+                    invalid_dns_rule(diagnostics, route_kind, ordinal, "invalid-qtype");
+                    return Vec::new();
+                };
+                crate::dns::DnsCond::Qtype { not, types }
             }
-            conds.push(crate::dns::DnsCond::Sip { not, cidrs });
-            continue;
-        }
-
-        if is_response {
-            if let Some(args) = extract_fn_args(inner, "upstream") {
-                conds.push(crate::dns::DnsCond::Upstream { not, names: args });
-                continue;
+            "sip" => {
+                if !validate_dns_networks(&args, diagnostics, route_kind, ordinal) {
+                    return Vec::new();
+                }
+                crate::dns::DnsCond::Sip { not, cidrs: args }
             }
-            if let Some(args) = extract_fn_args(inner, "ip") {
+            "upstream" => crate::dns::DnsCond::Upstream { not, names: args },
+            "ip" => {
                 let (cidrs, geoip) = parse_dns_ip_args(&args);
                 if !validate_dns_networks(&cidrs, diagnostics, route_kind, ordinal) {
                     return Vec::new();
                 }
-                conds.push(crate::dns::DnsCond::Ip { not, cidrs, geoip });
-                continue;
+                crate::dns::DnsCond::Ip { not, cidrs, geoip }
             }
-        }
-
-        let code = if inner.starts_with("sub(")
-            || inner.starts_with("node(")
-            || inner.starts_with("subnode(")
-        {
-            "unsupported-dns-condition"
-        } else {
-            "invalid-dns-rule"
+            _ => unreachable!(),
         };
-        invalid_dns_rule(diagnostics, route_kind, ordinal, code);
-        return Vec::new();
+        conds.push(condition);
     }
-
     conds
 }
 

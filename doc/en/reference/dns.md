@@ -119,9 +119,11 @@ Only unquoted `->` and `outbound:` suffixes select detours. Inside a quoted URI 
 
 `routing` contains ordered `request` and `response` rules. The first matching rule wins. Arguments inside one condition are OR-ed; conditions joined with `&&` are AND-ed. Prefix a condition with `!` to negate it.
 
-In request and response rules, single or double quotes protect `,`, `)`, `&&`, `->`, `#`, and `//` inside matcher arguments. Outside quotes, `//` takes comment precedence; otherwise only the first `#` is considered, and it starts a comment only after an ASCII space. A quoted QTYPE list such as `qtype('a,aaaa')` still selects both types.
+In request and response rules, single or double quotes protect `,`, `)`, `&&`, `->`, `#`, and `//` inside matcher arguments. Only an unquoted token-head `#` starts a comment, after a space or tab; glued hashes remain data. `//` is not a comment: trailing slash-comment text omits the malformed rule with `legacy-slash-comment`. Replace it with `#`. A quoted QTYPE list such as `qtype('a,aaaa')` still selects both types with `legacy-quoted-list`; prefer bare or individually quoted items.
 
 Unknown or malformed conditions and unsupported predicates omit the whole rule with a located warning, never just one conjunct. Unknown QTYPE names produce `invalid-qtype`, including mixed and negated lists; correct the name or use its numeric code. Explicit `qtype()` remains match-nothing.
+
+Put each complete call and action on one physical line. Incomplete nonblank lines are omitted with located `incomplete-dns-rule`; DNS never joins them. Text after a complete matcher produces `trailing-matcher-text` and omits the whole rule. Leading and argument-position quotes must close on the same line. An unterminated quote produces one lexical diagnostic and omits the line only if every open block has a surviving closer; otherwise the document fails. Required closers hidden by the malformed quote cannot close blocks.
 
 ### Conditions
 

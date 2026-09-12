@@ -551,6 +551,7 @@ fn unquote_filter_argument(value: &str) -> &str {
     value
 }
 
+#[expect(dead_code, reason = "Retained for C13 last-caller retirement")]
 fn find_unquoted(input: &str, delimiter: &str) -> Option<usize> {
     let bytes = input.as_bytes();
     let mut index = 0;
@@ -566,6 +567,7 @@ fn find_unquoted(input: &str, delimiter: &str) -> Option<usize> {
     None
 }
 
+#[expect(dead_code, reason = "Retained for C13 last-caller retirement")]
 fn split_unquoted<'a>(input: &'a str, delimiter: &'a str) -> impl Iterator<Item = &'a str> {
     let mut remaining = Some(input);
     std::iter::from_fn(move || {
@@ -579,6 +581,7 @@ fn split_unquoted<'a>(input: &'a str, delimiter: &'a str) -> impl Iterator<Item 
     })
 }
 
+#[expect(dead_code, reason = "Retained for C13 last-caller retirement")]
 fn extract_fn_args(expr: &str, fn_name: &str) -> Option<Vec<String>> {
     let body = expr.strip_prefix(fn_name)?.strip_prefix('(')?;
     let end = find_unquoted(body, ")")?;

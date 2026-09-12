@@ -253,11 +253,6 @@ impl<'a> ParserDiagnostics<'a> {
         }
     }
 
-    pub fn entry(&mut self, line: &str, index: usize) {
-        self.at_line(line);
-        self.entry = Some(index);
-    }
-
     pub fn push(&mut self, legacy: ConfigDiagnostic) {
         let ttl = legacy.setting.starts_with("dns.fixed_domain_ttl.");
         let mut location = legacy

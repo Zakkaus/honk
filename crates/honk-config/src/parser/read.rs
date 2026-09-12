@@ -150,6 +150,20 @@ impl<'d, 'a> Text<'d, 'a> {
     /// K01: a `#` glued to data is data, not a comment. Warn once at the
     /// first such byte outside a quoted span so users who relied on the old
     /// truncation see where their value now continues.
+    /// The `#` that starts a comment after this text on the same line, if any.
+    /// Segments carry no trivia tokens, so the position is read from the source;
+    /// it is only ever used to locate a diagnostic, never to reinterpret the line.
+    pub fn trailing_comment(self) -> Option<Self> {
+        let rest = self.source.text()[self.span.end..].split('\n').next()?;
+        let gap = rest.len() - rest.trim_start().len();
+        rest[gap..].starts_with('#').then(|| Self {
+            span: self
+                .source
+                .span(self.span.end + gap, self.span.end + gap + 1),
+            ..self
+        })
+    }
+
     pub fn warn_glued_hash(self, diagnostics: &mut ParserDiagnostics<'_>) {
         let raw = self.raw();
         for (offset, byte) in raw.bytes().enumerate() {
