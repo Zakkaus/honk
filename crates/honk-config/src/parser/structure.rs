@@ -152,12 +152,12 @@ pub(super) fn scan_readers(
                 let name = source.raw(tokens[index].span);
                 let named = matches!(
                     name,
-                    "global" | "experimental" | "node" | "subscription" | "group"
+                    "global" | "experimental" | "node" | "subscription" | "group" | "routing"
                 );
                 let glued = name.strip_suffix('{').is_some_and(|name| {
                     matches!(
                         name,
-                        "global" | "experimental" | "node" | "subscription" | "group"
+                        "global" | "experimental" | "node" | "subscription" | "group" | "routing"
                     )
                 });
                 let opener = tokens[index + 1..]

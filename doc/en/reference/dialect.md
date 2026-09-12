@@ -7,10 +7,10 @@ honk reads dae's configuration syntax, but it is a dialect: where honk and dae r
 | Input | dae grammar | honk |
 |---|---|---|
 | `#` inside a bare value, `log_file: /tmp/a#b` | `#` is a safe character inside a bare literal: the value is `/tmp/a#b` | Scalar settings cut at the first `#` outside quotes, glued or not: `/tmp/a`. Quote the value to keep a `#`. |
-| `#` glued to an outbound name in a routing rule, `domain(x) -> proxy#c` | one bare literal, `proxy#c` | Routing statements cut at any unquoted `#`: the outbound is `proxy`. |
+| `#` glued to an outbound name in a routing rule, `domain(x) -> proxy#c` | one bare literal, `proxy#c` | Literal target `proxy#c`, with `legacy-glued-hash`; normal target validation still applies. Write `-> proxy # comment` for a comment. |
 | `/* … */` | block comment, skipped | Not recognised. The text is not skipped: `/* log_level: debug */` is a line whose key is `/* log_level`, which is unknown and ignored, but braces or a valid `key: value` inside such a span are read as configuration. |
 | `[key: value]` after a declaration, `filter: name(x) [add_latency: -500ms]` | accepted as an annotation | Not recognised; the filter is reported as unparseable and ignored. honk has no per-node latency bias. |
-| An unmatched quote in a scalar, `log_file: /tmp/don't` | lexer error | Ordinary text: `/tmp/don't`. A routing statement with an unterminated quote is an error (`routing line N: unterminated quote`). |
+| An apostrophe inside a bare scalar, `log_file: /tmp/don't`, or an opened traffic argument quote | lexer error for the bare apostrophe | `/tmp/don't` is literal. Quotes open only at token head or immediately after unquoted `(` or `,`. A traffic quote that does not close on its physical line fails with located `unterminated-quote`; close the quote rather than relying on brace recovery. |
 | Braces inside quotes, `secret: 'a}b'` | data | Data. Braces inside an unquoted trailing comment are still structure: keep such comments on their own line. |
 | Block opener without a space, `global{ … }` | whitespace is skipped, so this is a block | Error ``unexpected `{` ``: an inline opener needs whitespace before `{`; a line-final `{` does not. |
 | An extra `}`, or an empty file | an extra `}` is rejected; empty or comment-only input is accepted | An extra `}` is ignored with a diagnostic; a file with no `{` and `}` fails with `not a dae config file`. |
@@ -46,7 +46,7 @@ honk reads dae's configuration syntax, but it is a dialect: where honk and dae r
 | Input | dae grammar | honk |
 |---|---|---|
 | Bare prefix matchers, `!geosite:cn -> proxy`, `domain:example.com -> proxy` | not function calls; rejected | Accepted as matchers (`geosite`, `geoip`, `domain`, `suffix`, `keyword`, `regex`, `full` prefixes). |
-| Two arrows, `domain(x) -> proxy->backup` | rejected | The outbound is the literal text `proxy->backup`. |
+| Two arrows, `domain(x) -> proxy->backup` | rejected | The outbound is literal `proxy->backup`, with `legacy-arrow-target`. Retained for compatibility; normal target validation applies. |
 | `-> proxy( must )` | call with parameter `must` | Only the exact suffix `(must)` is the must marker; `proxy( must )` is an outbound named `proxy( must )`. |
 | Whitespace before the parentheses, `dport (443) -> proxy` | accepted | Located `unknown-traffic-predicate` error. Remove whitespace before matcher parentheses. |
 | An unknown matcher in a conjunction, `dport(443) && domian(x) -> direct` | accepted by the grammar; validation is outside it | Located `unknown-traffic-predicate` error, also for negated terms. Correct the matcher; no term is silently discarded. |
@@ -61,7 +61,7 @@ honk reads dae's configuration syntax, but it is a dialect: where honk and dae r
 | `->` in a request or response rule | one arrow | The rule splits at the first unquoted `->`; further arrows stay in the action (`-> up->stream` is an upstream named `up->stream`). The whole action text is lowercased: `Reject` is `reject`, and `-> MixedCase` names an upstream `mixedcase`, which does not match an upstream declared as `MixedCase`. |
 | A matcher call split across lines, `qname(` newline `a.example) -> reject` | whitespace, newlines included, is skipped | Request and response rules are read line by line; neither line is a complete rule, so the rule is dropped without a diagnostic. |
 | An upstream with an outbound, `u: 'udp://1.1.1.1:53' -> proxy` or `u: 'udp://1.1.1.1:53' outbound: proxy` | the arrow form is rejected (a declaration cannot carry `->`); the `outbound: proxy` form is two adjacent declarations | honk extension: both forms make upstream `u` dial through outbound `proxy`. |
-| Text after a matcher call, `dport(443)junk -> proxy`, `qname(a.example)junk -> reject` | rejected: the arrow must follow the call | Traffic rejects the configuration; DNS warns and omits the whole rule. Remove trailing matcher text. |
+| Text after a matcher call, `dport(443)junk -> proxy`, `qname(a.example)junk -> reject` | rejected: the arrow must follow the call | Traffic rejects the configuration with located `trailing-matcher-text`; DNS warns and omits the whole rule. Remove trailing matcher text. |
 | A trailing comment on an upstream line, `v: 'udp://8.8.8.8:53' # note` | comment | Not stripped: the address becomes `8.8.8.8:53' # note`. Keep upstream comments on their own line. |
 | `->` or `outbound:` inside a quoted upstream URL | data | The upstream reader searches the whole line, quotes included: `'https://dns.example/q?x=outbound:proxy#frag'` becomes address `dns.example/q?x=` with outbound `proxy#frag`. Do not put these separators in an upstream URL. |
 | `qtype(...)` | function arguments | Names `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `PTR`, `SOA`, `SRV`, `HTTPS`, `SVCB`, `ANY`, `*` (case-insensitive) or decimal `u16`; unknown names emit `invalid-qtype` and omit the whole rule, including mixed or negated lists. Correct unknown names or use their numeric code. Explicit `qtype()` remains match-nothing; `qtype('a,aaaa')` selects both types. |

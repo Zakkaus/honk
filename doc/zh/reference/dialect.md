@@ -7,10 +7,10 @@ honk 读取 dae 的配置语法，但它是一种方言：honk 与 dae 对同一
 | 输入 | dae 文法 | honk |
 |---|---|---|
 | 裸值内的 `#`，`log_file: /tmp/a#b` | `#` 是裸字面量内的安全字符，值为 `/tmp/a#b` | 标量设置在引号外第一个 `#` 处截断，不论是否紧贴：`/tmp/a`。要保留 `#` 就给值加引号。 |
-| 路由规则里紧贴出站名的 `#`，`domain(x) -> proxy#c` | 一个裸字面量 `proxy#c` | 路由语句在任何引号外的 `#` 处截断：出站是 `proxy`。 |
+| 路由规则里紧贴出站名的 `#`，`domain(x) -> proxy#c` | 一个裸字面量 `proxy#c` | 字面目标为 `proxy#c`，产生 `legacy-glued-hash` 警告，仍须通过通常的目标校验。注释请写成 `-> proxy # comment`。 |
 | `/* … */` | 块注释，跳过 | 不识别，也不跳过：`/* log_level: debug */` 这一行的键是 `/* log_level`，未知因而忽略；但这类文本里的花括号或合法的 `key: value` 会被当作配置读取。 |
 | 声明后的 `[key: value]`，`filter: name(x) [add_latency: -500ms]` | 作为注解接受 | 不识别；该过滤条件被报告为无法解析并忽略。honk 没有按节点的延迟偏置。 |
-| 标量里不成对的引号，`log_file: /tmp/don't` | 词法错误 | 普通文本：`/tmp/don't`。路由语句里的未闭合引号是错误（`routing line N: unterminated quote`）。 |
+| 裸标量内的撇号，如 `log_file: /tmp/don't`，或已开启的流量参数引号 | 裸值内的撇号是词法错误 | `/tmp/don't` 是字面值。引号只在词法单元开头，或紧接引号外的 `(`、`,` 时开启。流量规则中未在同一物理行闭合的引号产生带位置的 `unterminated-quote` 错误；请闭合引号，不要依赖花括号恢复结构。 |
 | 引号内的花括号，`secret: 'a}b'` | 数据 | 数据。未加引号的行尾注释里的花括号仍参与块结构，这类注释请独占一行。 |
 | 块起始符前没有空格，`global{ … }` | 空白被跳过，仍是块 | 错误 ``unexpected `{` ``：行内起始符前需要空白；行尾的 `{` 不需要。 |
 | 多余的 `}`，或空文件 | 多余的 `}` 被拒绝；空输入或只有注释的输入被接受 | 多余的 `}` 被忽略并报告诊断；没有 `{` 与 `}` 的文件报错 `not a dae config file`。 |
@@ -46,7 +46,7 @@ honk 读取 dae 的配置语法，但它是一种方言：honk 与 dae 对同一
 | 输入 | dae 文法 | honk |
 |---|---|---|
 | 裸前缀匹配器，`!geosite:cn -> proxy`、`domain:example.com -> proxy` | 不是函数调用，拒绝 | 接受为匹配器（`geosite`、`geoip`、`domain`、`suffix`、`keyword`、`regex`、`full` 前缀）。 |
-| 两个箭头，`domain(x) -> proxy->backup` | 拒绝 | 出站是字面文本 `proxy->backup`。 |
+| 两个箭头，`domain(x) -> proxy->backup` | 拒绝 | 出站为字面文本 `proxy->backup`，产生 `legacy-arrow-target` 警告。保留此兼容写法，仍须通过通常的目标校验。 |
 | `-> proxy( must )` | 带参数 `must` 的调用 | 只有精确后缀 `(must)` 是 must 标记；`proxy( must )` 是名为 `proxy( must )` 的出站。 |
 | 括号前有空格，`dport (443) -> proxy` | 接受 | 返回带位置的 `unknown-traffic-predicate` 错误。请删除匹配器名称与左括号之间的空格。 |
 | 合取里的未知匹配器，`dport(443) && domian(x) -> direct` | 文法接受，校验在文法之外 | 返回带位置的 `unknown-traffic-predicate` 错误，取反条件也不例外。请修正匹配器；不再静默丢弃单个条件。 |
@@ -61,7 +61,7 @@ honk 读取 dae 的配置语法，但它是一种方言：honk 与 dae 对同一
 | request 或 response 规则里的 `->` | 一个箭头 | 规则在第一个引号外的 `->` 处拆分，后续箭头留在动作里（`-> up->stream` 是名为 `up->stream` 的上游）。整个动作文本会转为小写：`Reject` 即 `reject`，`-> MixedCase` 指向名为 `mixedcase` 的上游，与声明为 `MixedCase` 的上游不匹配。 |
 | 跨行的匹配器调用，`qname(` 换行 `a.example) -> reject` | 空白（含换行）被跳过 | request 与 response 规则逐行读取，两行都不是完整规则，该规则被丢弃且没有诊断。 |
 | 带出站的上游，`u: 'udp://1.1.1.1:53' -> proxy` 或 `u: 'udp://1.1.1.1:53' outbound: proxy` | 箭头形式被拒绝（声明不能带 `->`）；`outbound: proxy` 形式是相邻的两个声明 | honk 扩展：两种形式都让上游 `u` 经出站 `proxy` 拨号。 |
-| 匹配器调用后的文本，`dport(443)junk -> proxy`、`qname(a.example)junk -> reject` | 拒绝：箭头必须紧接调用 | 流量路由拒绝配置；DNS 发出警告并省略整条规则。请删除匹配器后的多余文本。 |
+| 匹配器调用后的文本，`dport(443)junk -> proxy`、`qname(a.example)junk -> reject` | 拒绝：箭头必须紧接调用 | 流量路由以带位置的 `trailing-matcher-text` 错误拒绝配置；DNS 发出警告并省略整条规则。请删除匹配器后的多余文本。 |
 | 上游行的行尾注释，`v: 'udp://8.8.8.8:53' # note` | 注释 | 不剥除：地址变成 `8.8.8.8:53' # note`。上游的注释请独占一行。 |
 | 带引号的上游 URL 内的 `->` 或 `outbound:` | 数据 | 上游读取器搜索整行，包括引号内：`'https://dns.example/q?x=outbound:proxy#frag'` 变成地址 `dns.example/q?x=`、出站 `proxy#frag`。不要在上游 URL 里放这两个分隔符。 |
 | `qtype(...)` | 函数参数 | 名称 `A`、`AAAA`、`CNAME`、`MX`、`TXT`、`NS`、`PTR`、`SOA`、`SRV`、`HTTPS`、`SVCB`、`ANY`、`*`（不区分大小写）或十进制 `u16`；未知名称产生 `invalid-qtype` 警告并省略整条规则，混合列表和取反条件也不例外。请修正名称或使用数字类型码。显式 `qtype()` 仍不匹配任何类型；`qtype('a,aaaa')` 选择两种类型。 |
