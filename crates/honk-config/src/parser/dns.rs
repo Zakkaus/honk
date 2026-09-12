@@ -238,13 +238,8 @@ pub(super) fn parse_section(
                 }
             }
             "fixed_domain_ttl" => {
-                cfg.fixed_domain_ttl.extend(parse_fixed_domain_ttl(
-                    read::child_statements(&sub)
-                        .into_iter()
-                        .filter(|line| !line.has_error())
-                        .map(Text::raw),
-                    diagnostics,
-                ));
+                cfg.fixed_domain_ttl
+                    .extend(parse_fixed_domain_ttl(&sub, diagnostics));
             }
             _ => {}
         }
@@ -411,32 +406,54 @@ fn extract_tls_server_name(address: String) -> (String, Option<String>) {
     (address, sni)
 }
 
-/// Parse `fixed_domain_ttl { domain: N ... }` into a HashMap.
-fn parse_fixed_domain_ttl<'a>(
-    lines: impl IntoIterator<Item = &'a str>,
+fn parse_fixed_domain_ttl(
+    section: &Segment<'_, '_>,
     diagnostics: &mut ParserDiagnostics<'_>,
-) -> std::collections::HashMap<String, u32> {
-    let mut map = std::collections::HashMap::new();
-    for (index, line) in lines.into_iter().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
+) -> HashMap<String, u32> {
+    let mut map = HashMap::new();
+    for (index, line) in read::child_statements(section).into_iter().enumerate() {
+        if line.has_error() {
             continue;
         }
-        if let Some(pos) = trimmed.find(':') {
-            let key = trimmed[..pos].trim().trim_matches('"').trim_matches('\'');
-            let val = trimmed[pos + 1..].split_whitespace().next().unwrap_or("");
-            if let Ok(n) = val.parse::<u32>() {
-                map.insert(key.to_string(), n);
-            } else {
-                diagnostics.entry(line, index + 1);
-                diagnostics.push(ConfigDiagnostic {
-                    setting: format!("dns.fixed_domain_ttl.{key}"),
-                    value: val.to_string(),
-                    message: "honk could not parse this TTL as an unsigned 32-bit decimal integer; entry ignored"
-                        .to_string(),
-                });
+        let Some((key, value)) = line.kv() else {
+            continue;
+        };
+        diagnostics.entry_text(value, index + 1);
+        let extra = value
+            .tokens
+            .iter()
+            .filter(|token| token.span.start < value.span.end && value.span.start < token.span.end)
+            .nth(1);
+        let scalar = value.unquote();
+        let (code, message) = if extra.is_some() {
+            (
+                "trailing-value",
+                "TTL requires exactly one decimal scalar; entry omitted",
+            )
+        } else if let Ok(ttl) = scalar.raw().parse::<u32>() {
+            map.insert(key.unquote().raw().to_owned(), ttl);
+            if scalar.span == value.span {
+                continue;
             }
-        }
+            (
+                "legacy-ttl-quoting",
+                "quoted decimal TTL is accepted; use bare or quoted decimal values",
+            )
+        } else {
+            (
+                "invalid-ttl",
+                "TTL must be an unsigned 32-bit decimal integer; entry omitted",
+            )
+        };
+        diagnostics.emit(DetailedDiagnostic::warning(
+            code,
+            diagnostics.source(),
+            SettingPath::new("dns")
+                .field("fixed_domain_ttl")
+                .index(index + 1),
+            SafeValue::Ordinal(index + 1),
+            message,
+        ));
     }
     map
 }

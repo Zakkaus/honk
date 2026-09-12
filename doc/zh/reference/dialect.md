@@ -28,7 +28,7 @@ honk 读取 dae 的配置语法，但它是一种方言：honk 与 dae 对同一
 | 布尔值 `t`、`y`、`f`、`n` | 裸字面量 | 宽松设置不区分大小写：`true`、`yes`、`1`、`on` 为真；`false`、`f`、`no`、`n`、`0`、`off`、`t`、`y` 为假。四种单字母简写产生 `legacy-bool-shorthand` 警告；未知写法为假并报告诊断。建议使用 `true` 或 `false`。`global.nfqueue_enable` 与旧版 `experimental.udp_nfqueue.enabled` 仍严格解析，拒绝简写。 |
 | mark，`so_mark_from_dae: 0x10` 与 `so_mark_from_dae: 10` | 裸字面量 | 两者都按十六进制读取：16 与 16。无法解析的 mark 回退为 0 并报告诊断。 |
 | 毫秒设置里的小数秒，`check_tolerance: 1.5s` | 裸字面量 | 1500 毫秒。无法解析的毫秒时长（`check_tolerance`、`sniffing_timeout`）回退到该设置的默认值并报告诊断；无法解析的秒时长（`check_interval`、订阅 `interval`）回退为 `0` 并报告诊断。 |
-| `fixed_domain_ttl` 条目 `x: 60#note`、`y: '60'`、`z: 60 ignored` | `60#note` 与 `'60'` 是字面量，`60 ignored` 是两个词法单元 | `x`、`y` 被报告并忽略（值必须是裸十进制）；`z` 存为 60，尾部文本忽略。 |
+| `fixed_domain_ttl` 条目 `x: 60#note`、`y: '60'`、`z: 60 ignored` | `60#note` 与 `'60'` 是字面量，`60 ignored` 是两个词法单元 | 值必须恰好是一个十进制标量。`y` 存为 60 并产生 `legacy-ttl-quoting`；`x` 因 `invalid-ttl` 被省略，`z` 因 `trailing-value` 被省略。请使用 `60` 或带引号的 `60`，说明文字放在 ` # ` 后。 |
 | 未知的 `policy`，`policy: mystery(...)` | 任意函数表达式 | 回退为 `selector` 并报告诊断；参数文本不会被回显。 |
 
 ## node 与 subscription 条目
