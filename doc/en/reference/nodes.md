@@ -120,6 +120,10 @@ Every canonical adapter completion applies intrinsic validation: ordinary share 
 
 Direct `Node::validate()` calls return the same static, redacted errors as adapter completion. Validation errors never include the supplied node name or credential values.
 
+Detailed Config loaders and configuration/registry admission retain the intrinsic field and cause, adding the original one-based node ordinal instead of replacing the reason with a generic invalid-node error. Credential conflicts identify the canonical alias field without exposing either value. Standalone `NodeSeed` and Node serde still return redacted generic serde errors.
+
+For VMess JSON with `net: "ws"`, an omitted or empty `host` uses the endpoint host in the WebSocket handshake. A supplied nonempty `host` remains the explicit override.
+
 ## Protocols
 
 | Protocol | Alias | TCP | UDP | Notes |

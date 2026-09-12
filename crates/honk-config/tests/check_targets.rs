@@ -93,3 +93,16 @@ fn http_targets_preserve_caller_defaults_and_authority_boundaries() {
         assert!(decode_health_http_target(input).is_err());
     }
 }
+
+#[test]
+fn http_targets_reject_ambiguous_authorities_before_exposing_userinfo() {
+    use honk_config::check::decode_http_check_target;
+    for input in [
+        "http:///user:PRIVATE@example.invalid/health",
+        "https:////user:PRIVATE@example.invalid/health",
+        r"http://\user:PRIVATE@example.invalid/health",
+        "http://example.invalid/health\r\nX-Private: secret",
+    ] {
+        assert!(decode_http_check_target(input, false).is_err(), "{input:?}");
+    }
+}

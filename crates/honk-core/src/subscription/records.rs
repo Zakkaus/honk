@@ -5,8 +5,7 @@
 //! Clash key vocabulary so the common parser owns Node
 //! construction and validation.
 
-use honk_config::options::vocab::{optional_flow, optional_text, stream_transport};
-
+use honk_config::options::vocab::stream_transport;
 use serde_yaml::{Mapping, Value};
 
 use super::IndexedOutcome;
@@ -15,13 +14,20 @@ use super::Node;
 
 mod fields;
 use fields::{Field, split_fields};
+mod options;
+use options::{
+    RecordOptions, take_any_active, take_any_matching, take_bool, take_bool_alias,
+    take_credential_alias, take_duration_alias, take_option, take_optional_flow_alias,
+    take_optional_text_alias, take_packet_network, take_raw, take_stream_transport_alias,
+    take_vmess_cipher_alias,
+};
 
-/// Retain physical lines before normalizing Surge-family and Quantumult X records.
-pub(super) fn parse_record_outcomes(
+/// Parse physical records while emitting one normalized outcome at a time.
+pub(super) fn parse_record_subscription(
     content: &str,
     subscription_id: Option<uuid::Uuid>,
-) -> Vec<IndexedOutcome> {
-    let mut outcomes = Vec::new();
+    mut emit: impl FnMut(IndexedOutcome),
+) -> anyhow::Result<()> {
     let mut section = None::<String>;
     let has_sections = content
         .lines()
@@ -56,9 +62,9 @@ pub(super) fn parse_record_outcomes(
             }
         };
         outcome.line = Some(ordinal);
-        outcomes.push(outcome);
+        emit(outcome);
     }
-    outcomes
+    Ok(())
 }
 
 #[cfg(test)]
@@ -66,13 +72,12 @@ fn parse_records_subscription(
     content: &str,
     subscription_id: Option<uuid::Uuid>,
 ) -> anyhow::Result<Vec<Node>> {
-    let nodes: Vec<_> = parse_record_outcomes(content, subscription_id)
-        .into_iter()
-        .filter_map(|outcome| match outcome.kind {
-            super::IndexedOutcomeKind::Node(node) => Some(*node),
-            _ => None,
-        })
-        .collect();
+    let mut nodes = Vec::new();
+    parse_record_subscription(content, subscription_id, |outcome| {
+        if let super::IndexedOutcomeKind::Node(node) = outcome.kind {
+            nodes.push(node);
+        }
+    })?;
     anyhow::ensure!(!nodes.is_empty(), "no supported subscription records");
     Ok(nodes)
 }
@@ -88,52 +93,6 @@ fn is_record_section(name: &str) -> bool {
 }
 
 type RecordResult<T> = Result<T, &'static str>;
-#[derive(Default)]
-struct RecordOptions {
-    occurrences: Vec<(String, String)>,
-}
-
-impl RecordOptions {
-    fn insert(&mut self, key: String, value: String) {
-        self.occurrences.push((key, value));
-    }
-
-    fn get(&self, key: &str) -> Option<&String> {
-        self.occurrences
-            .iter()
-            .rev()
-            .find(|(name, _)| name == key)
-            .map(|(_, value)| value)
-    }
-
-    fn contains_key(&self, key: &str) -> bool {
-        self.get(key).is_some()
-    }
-
-    fn remove(&mut self, key: &str) -> Option<String> {
-        let index = self.occurrences.iter().rposition(|(name, _)| name == key)?;
-        let value = self.occurrences.remove(index).1;
-        self.occurrences.retain(|(name, _)| name != key);
-        Some(value)
-    }
-
-    fn values(&self) -> impl Iterator<Item = &String> {
-        let mut seen = std::collections::HashSet::new();
-        self.occurrences
-            .iter()
-            .rev()
-            .filter(move |(name, _)| seen.insert(name.as_str()))
-            .map(|(_, value)| value)
-    }
-
-    fn claims(&self, key: &str) -> impl Iterator<Item = &str> {
-        self.occurrences
-            .iter()
-            .filter(move |(name, _)| name.as_str() == key)
-            .map(|(_, value)| value.as_str())
-    }
-}
-
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Dialect {
     Named,
@@ -815,18 +774,7 @@ fn apply_hysteria(map: &mut Mapping, options: &mut RecordOptions) -> RecordResul
         "mport",
         take_option(options, &["mport", "port-hopping", "port_hopping"]),
     );
-    let mut interval = None;
-    for (_, value) in options.occurrences.extract_if(.., |(key, _)| {
-        matches!(key.as_str(), "mhop" | "hop-interval" | "hop_interval")
-    }) {
-        let seconds = super::clash::parse_feed_duration_secs(&Value::String(value))?;
-        match interval {
-            None => interval = Some(seconds),
-            Some(previous) if previous == seconds => {}
-            Some(_) => return Err("record duration aliases conflict"),
-        }
-    }
-    if let Some(seconds) = interval {
+    if let Some(seconds) = take_duration_alias(options)? {
         put_u64(map, "mhop", seconds);
     }
     if let Some(obfs) = take_option(options, &["obfs"]) {
@@ -853,174 +801,6 @@ fn apply_quic_common(map: &mut Mapping, options: &mut RecordOptions) {
     );
     set_optional(map, "alpn", take_option(options, &["alpn"]));
     set_optional(map, "mtu", take_option(options, &["mtu"]));
-}
-
-fn take_raw(options: &mut RecordOptions, keys: &[&str]) -> Option<String> {
-    let selected = keys.iter().find(|key| options.contains_key(key)).copied();
-    let value = selected.and_then(|key| options.remove(key));
-    for key in keys {
-        options.remove(key);
-    }
-    value
-}
-
-fn take_optional_text_alias(
-    options: &mut RecordOptions,
-    keys: &[&str],
-) -> RecordResult<Option<String>> {
-    optional_text(keys.iter().flat_map(|key| options.claims(key).map(Some)))?;
-    let index = options
-        .occurrences
-        .iter()
-        .position(|(key, value)| keys.contains(&key.as_str()) && !value.trim().is_empty());
-    let selected = index.map(|index| options.occurrences.remove(index).1);
-    for key in keys {
-        options.remove(key);
-    }
-    Ok(selected)
-}
-
-fn take_optional_flow_alias(
-    options: &mut RecordOptions,
-    dialect: Dialect,
-) -> RecordResult<Option<String>> {
-    let keys = match dialect {
-        Dialect::Named => &["flow", "vless-flow"][..],
-        Dialect::QuantumultX => &["vless-flow", "flow"][..],
-    };
-    let Some(value) = take_optional_text_alias(options, keys)? else {
-        return Ok(None);
-    };
-    optional_flow(Some(value.as_str()))?;
-    Ok(Some(value))
-}
-
-fn take_credential_alias(
-    options: &mut RecordOptions,
-    keys: &[&str],
-) -> RecordResult<Option<String>> {
-    let mut selected = None::<&str>;
-    for key in keys {
-        for value in options.claims(key) {
-            match selected {
-                None => selected = Some(value),
-                Some(previous) if previous == value => {}
-                Some(_) => return Err("record credential aliases conflict"),
-            }
-        }
-    }
-    Ok(take_raw(options, keys))
-}
-
-fn take_vmess_cipher_alias(
-    options: &mut RecordOptions,
-    keys: &[&str],
-) -> RecordResult<Option<String>> {
-    let cipher =
-        honk_config::options::vocab::vmess_cipher(keys.iter().flat_map(|key| options.claims(key)))?;
-    for key in keys {
-        options.remove(key);
-    }
-    Ok(cipher.map(str::to_owned))
-}
-fn take_stream_transport_alias(
-    options: &mut RecordOptions,
-    keys: &[&str],
-) -> RecordResult<Option<&'static str>> {
-    for (key, value) in &mut options.occurrences {
-        if keys.contains(&key.as_str()) {
-            value.make_ascii_lowercase();
-        }
-    }
-    let mut selected = None;
-    let mut saw_nonempty_tcp = false;
-    for key in keys {
-        for value in options.claims(key) {
-            let normalized = stream_transport(value)?;
-            saw_nonempty_tcp |= normalized == "tcp" && !value.is_empty();
-            match selected {
-                None => selected = Some(normalized),
-                Some(previous) if previous == normalized => {}
-                Some(_) => return Err("record transport aliases conflict"),
-            }
-        }
-    }
-    let selected = selected.map(|normalized| {
-        if normalized == "tcp" && !saw_nonempty_tcp {
-            ""
-        } else {
-            normalized
-        }
-    });
-    for key in keys {
-        options.remove(key);
-    }
-    Ok(selected)
-}
-fn take_packet_network(options: &mut RecordOptions) -> RecordResult<Option<String>> {
-    let mut selected = None;
-    for (index, (key, value)) in options.occurrences.iter().enumerate() {
-        if key != "network" {
-            continue;
-        }
-        let Some(udp) = honk_config::options::vocab::packet_network(value)? else {
-            continue;
-        };
-        match selected {
-            None => selected = Some((index, udp)),
-            Some((_, previous)) if previous == udp => {}
-            Some(_) => return Err("record packet network aliases conflict"),
-        }
-    }
-    let value = selected.map(|(index, _)| options.occurrences.remove(index).1);
-    options.remove("network");
-    Ok(value)
-}
-
-fn take_option(options: &mut RecordOptions, keys: &[&str]) -> Option<String> {
-    take_raw(options, keys).filter(|value| !value.is_empty())
-}
-
-fn take_bool(options: &mut RecordOptions, keys: &[&str]) -> RecordResult<Option<bool>> {
-    take_raw(options, keys)
-        .map(|value| parse_bool(&value).ok_or("record boolean option is invalid"))
-        .transpose()
-}
-
-fn take_bool_alias(options: &mut RecordOptions, keys: &[&str]) -> RecordResult<Option<bool>> {
-    let mut found = None;
-    for key in keys {
-        for value in options.claims(key) {
-            let value = parse_bool(value).ok_or("record boolean option is invalid")?;
-            match found {
-                None => found = Some(value),
-                Some(previous) if previous == value => {}
-                Some(_) => return Err("record boolean aliases conflict"),
-            }
-        }
-    }
-    for key in keys {
-        options.remove(key);
-    }
-    Ok(found)
-}
-
-fn take_any_matching(
-    options: &mut RecordOptions,
-    keys: &[&str],
-    predicate: impl Fn(&str) -> bool,
-) -> bool {
-    let mut matched = false;
-    for key in keys {
-        if let Some(value) = options.remove(key) {
-            matched |= predicate(&value);
-        }
-    }
-    matched
-}
-
-fn take_any_active(options: &mut RecordOptions, keys: &[&str]) -> bool {
-    take_any_matching(options, keys, |value| !value.trim().is_empty())
 }
 
 fn canonical_type(value: &str) -> Option<&'static str> {

@@ -24,6 +24,22 @@ use crate::subscription::Subscription;
 use crate::{Config, ConfigDiagnostic};
 use regex::Regex;
 use structure::{Block, Item, quoted_end, scan};
+enum ParseFailure {
+    Legacy(crate::ConfigError),
+    Detailed(crate::error::DetailedConfigError),
+}
+
+impl From<crate::ConfigError> for ParseFailure {
+    fn from(error: crate::ConfigError) -> Self {
+        Self::Legacy(error)
+    }
+}
+
+impl From<crate::error::DetailedConfigError> for ParseFailure {
+    fn from(error: crate::error::DetailedConfigError) -> Self {
+        Self::Detailed(error)
+    }
+}
 
 /// Load a dae configuration file, resolving its top-level `include` blocks.
 ///
@@ -63,20 +79,25 @@ pub(crate) fn parse_dae_config_file_attempt(
 ) -> Result<Config, DetailedConfigError> {
     let source = DiagnosticSources::new(Some(path.as_ref().to_path_buf())).root();
     let mut sink = ParserDiagnostics::new(diagnostics, source);
-    parse_dae_file_inner(path, &mut sink, semantic).map_err(|error| sink.error(error))
+    match parse_dae_file_inner(path, &mut sink, semantic) {
+        Ok(config) => Ok(config),
+        Err(ParseFailure::Detailed(error)) => Err(error),
+        Err(ParseFailure::Legacy(error)) => Err(sink.error(error)),
+    }
 }
 
 fn parse_dae_file_inner(
     path: impl AsRef<Path>,
     diagnostics: &mut ParserDiagnostics<'_>,
     semantic: &mut bool,
-) -> Result<Config, crate::ConfigError> {
-    let entry = std::fs::canonicalize(path.as_ref())?;
+) -> Result<Config, ParseFailure> {
+    let entry =
+        std::fs::canonicalize(path.as_ref()).map_err(|error| ParseFailure::Legacy(error.into()))?;
     let entry_dir = entry.parent().map(Path::to_path_buf).ok_or_else(|| {
-        crate::ConfigError::Include(format!(
+        ParseFailure::Legacy(crate::ConfigError::Include(format!(
             "entry configuration '{}' has no parent directory",
             entry.display()
-        ))
+        )))
     })?;
     let mut loader = IncludeLoader {
         entry_dir,
@@ -87,23 +108,33 @@ fn parse_dae_file_inner(
     };
     let blocks = match loader.expand_file(&entry, diagnostics) {
         Ok(blocks) => blocks,
-        Err(err @ crate::ConfigError::Include(_)) => return Err(err),
+        Err(err @ crate::ConfigError::Include(_)) => return Err(ParseFailure::Legacy(err)),
         Err(err) if loader.saw_include => {
-            return Err(crate::ConfigError::Include(format!(
+            return Err(ParseFailure::Legacy(crate::ConfigError::Include(format!(
                 "failed to parse configuration after resolving includes: {err}"
-            )));
+            ))));
         }
-        Err(err) => return Err(err),
+        Err(err) => return Err(ParseFailure::Legacy(err)),
     };
     match parse_blocks(blocks, diagnostics) {
         Ok(config) => Ok(config),
         Err(err) => {
             *semantic = loader.saw_include || !is_structured_document(&loader.entry_input);
             match err {
-                err @ crate::ConfigError::UnsupportedPolicy(_) => Err(err),
-                err if loader.saw_include => Err(crate::ConfigError::Include(format!(
-                    "failed to parse configuration after resolving includes: {err}"
-                ))),
+                ParseFailure::Detailed(mut error) if loader.saw_include => {
+                    if error.category != crate::error::ErrorCategory::UnsupportedPolicy {
+                        error.category = crate::error::ErrorCategory::Include;
+                    }
+                    Err(ParseFailure::Detailed(error))
+                }
+                err @ ParseFailure::Detailed(_) => Err(err),
+                ParseFailure::Legacy(error) if loader.saw_include => {
+                    let mut error = diagnostics.error(error);
+                    if error.category != crate::error::ErrorCategory::UnsupportedPolicy {
+                        error.category = crate::error::ErrorCategory::Include;
+                    }
+                    Err(ParseFailure::Detailed(error))
+                }
                 err => Err(err),
             }
         }
@@ -391,7 +422,7 @@ pub fn parse_dae_config_with_detailed_diagnostics(
 ) -> Result<Config, DetailedConfigError> {
     let source = DiagnosticSources::new(None).root();
     let mut sink = ParserDiagnostics::new(diagnostics, source.clone());
-    let result: Result<Config, crate::ConfigError> = (|| {
+    let result: Result<Config, ParseFailure> = (|| {
         check_dae_input(input)?;
         let mut structural = Vec::new();
         let blocks = scan(input, None, &mut structural, &mut false);
@@ -400,7 +431,10 @@ pub fn parse_dae_config_with_detailed_diagnostics(
         sink.register_blocks(&blocks, &source);
         parse_blocks(blocks, &mut sink)
     })();
-    let result = result.map_err(|error| sink.error(error));
+    let result = result.map_err(|error| match error {
+        ParseFailure::Detailed(error) => error,
+        ParseFailure::Legacy(error) => sink.error(error),
+    });
     finish_attempt(result, sink.output)
 }
 
@@ -422,7 +456,7 @@ fn check_dae_input(input: &str) -> Result<(), crate::ConfigError> {
 fn parse_blocks(
     blocks: Vec<Block>,
     diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<Config, crate::ConfigError> {
+) -> Result<Config, ParseFailure> {
     let mut sections = Vec::<Block>::new();
     let mut indices = HashMap::<String, usize>::new();
     for block in blocks {
@@ -780,7 +814,7 @@ fn strip_unquoted_comment(line: &str) -> &str {
 fn parse_global_section(
     section: &Block,
     diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<GlobalConfig, crate::ConfigError> {
+) -> Result<GlobalConfig, ParseFailure> {
     let mut cfg = GlobalConfig::default();
     let kv = parse_kv_pairs(section.lines_except(&[]));
 
@@ -883,7 +917,18 @@ fn parse_global_section(
         cfg.dial_mode = v.clone();
     }
     if let Some(v) = kv.get("nfqueue_enable") {
-        cfg.nfqueue_enable = parse_checked_bool(v, "global.nfqueue_enable")?;
+        cfg.nfqueue_enable = parse_checked_bool(v, "global.nfqueue_enable").map_err(|_| {
+            let (source, line) = diagnostics.field_location("nfqueue_enable");
+            let mut error = DetailedConfigError::new(
+                crate::error::ErrorCategory::Parse,
+                "invalid-config-value",
+                source,
+                SettingPath::new("global").field("nfqueue_enable"),
+                "expected true/false, yes/no, 1/0 or on/off",
+            );
+            error.diagnostic.line = line;
+            ParseFailure::Detailed(error)
+        })?;
     }
     if let Some(v) = kv.get("allow_insecure") {
         cfg.allow_insecure = lenient_bool(v, "global.allow_insecure", diagnostics);
@@ -947,7 +992,14 @@ fn parse_global_section(
             .map_err(|_| crate::ConfigError::Parse(format!("invalid max_concurrent_dials: {v}")))?;
     }
 
-    crate::check::validate_dns_check_targets(&cfg.udp_check_dns)?;
+    crate::check::validate_dns_check_targets(&cfg.udp_check_dns).map_err(|mut error| {
+        let (source, line) = diagnostics.field_location("udp_check_dns");
+        error.diagnostic.source = source;
+        if error.diagnostic.line.is_none() {
+            error.diagnostic.line = line;
+        }
+        ParseFailure::Detailed(error)
+    })?;
     Ok(cfg)
 }
 
@@ -1022,7 +1074,7 @@ fn normalize_geosite_code(code: &str) -> String {
 fn parse_node_section(
     section: &Block,
     diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<Vec<Node>, crate::ConfigError> {
+) -> Result<Vec<Node>, ParseFailure> {
     let mut nodes = Vec::new();
     let lines = section.lines_except(&[]);
     for (index, line) in lines.into_iter().enumerate() {
@@ -1034,9 +1086,16 @@ fn parse_node_section(
         if let Some(rest) = trimmed.strip_prefix("mux")
             && rest.trim_start().starts_with(['=', ':'])
         {
-            return Err(crate::ConfigError::Parse(
-                "node section: standalone 'mux' is unsupported; set vless_mode on each VLESS share link".into(),
-            ));
+            let (source, line) = diagnostics.field_location("mux");
+            let mut error = DetailedConfigError::new(
+                crate::error::ErrorCategory::Parse,
+                "unsupported-node-mux",
+                source,
+                SettingPath::new("nodes").field("mux"),
+                "standalone mux is unsupported; set vless_mode on each VLESS share link",
+            );
+            error.diagnostic.line = line;
+            return Err(error.into());
         }
         let unquote = |s: &str| s.trim().trim_matches(|c| c == '\'' || c == '"').to_string();
         let (tag, value) = split_entry_tag(trimmed);
@@ -1062,10 +1121,9 @@ fn parse_node_section(
                 }
                 nodes.push(node);
             }
-            // A recognized-but-removed protocol in the config file is a hard
-            // error (subscriptions skip such entries with a warning instead).
+            // Config documents reject removed protocols; subscriptions skip them.
             Err(error) if error.category == crate::error::ErrorCategory::UnknownProtocol => {
-                return Err(error.into_legacy());
+                return Err(ParseFailure::Detailed(error));
             }
             Err(_) => diagnostics.emit(DetailedDiagnostic::warning(
                 "invalid-node-entry",

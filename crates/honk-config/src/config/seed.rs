@@ -195,6 +195,7 @@ impl<'de> Visitor<'de> for RawNodesSeed<'_> {
             diagnostics: self.diagnostics,
             source: self.source.clone(),
             setting: SettingPath::new("nodes").index(nodes.len() + 1),
+            record_semantic: true,
         })? {
             nodes.push(node);
         }

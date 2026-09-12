@@ -94,6 +94,8 @@ Changing `global.store_subscribe` through SIGHUP is rejected as restart-required
 
 All accepted nodes receive the subscription ID. Duplicate derived node IDs retain the first usable occurrence; rejected entries do not reserve an identity. Later duplicates report both original indices. Array indices are one-based before normalization; URI and record indices are physical lines, including blanks and comments. Decoded Base64 has a child source referring to its original body, not fabricated encoded-byte offsets. Importing a full client profile extracts its nodes, not its DNS, routing, groups, or remote-provider configuration.
 
+Normalized entries are admitted incrementally, without retaining a body-sized list of outcomes. Each body retains at most 128 nonterminal diagnostics, followed by one `subscription-diagnostics-truncated` summary with the omitted count; a terminal body failure is retained separately. The caller's existing diagnostic prefix is untouched and does not consume this budget. The limit applies to structured, URI, and record imports, including decoded Base64 and restored bodies, and never stops valid-node admission or changes first-usable duplicate selection.
+
 Clash, SIP008, and sing-box credential scalars preserve string bytes and convert native finite numbers to the source format's canonical decimal text. Missing or null values are absent; booleans, lists, maps, and nonfinite numbers reject the entry. A valid alias cannot hide an invalid supplied credential. Numeric UUIDs still fail UUID validation; empty passwords remain subject to each protocol's requirements.
 
 ### Share-link lists

@@ -23,36 +23,43 @@ pub(super) fn parse_json_subscription(
     value: Value,
     subscription_id: Option<uuid::Uuid>,
 ) -> anyhow::Result<Vec<Node>> {
-    let outcomes = parse_json_subscription_outcomes(value, subscription_id)?;
-    let nodes = outcomes
-        .into_iter()
-        .filter_map(|outcome| match outcome.kind {
-            IndexedOutcomeKind::Node(node) => Some(*node),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+    let mut nodes = Vec::new();
+    emit_json_subscription(value, subscription_id, |outcome| {
+        if let IndexedOutcomeKind::Node(node) = outcome.kind {
+            nodes.push(node);
+        }
+    })?;
     if nodes.is_empty() {
         anyhow::bail!("no supported nodes found in JSON subscription");
     }
     Ok(nodes)
 }
 
-pub(super) fn parse_json_subscription_outcomes(
+pub(super) fn emit_json_subscription(
     value: Value,
     subscription_id: Option<uuid::Uuid>,
-) -> anyhow::Result<Vec<IndexedOutcome>> {
+    mut emit: impl FnMut(IndexedOutcome),
+) -> anyhow::Result<()> {
     match value {
-        Value::Sequence(servers) => {
-            parse_entries(servers, subscription_id, normalize_sip008, "servers")
-        }
+        Value::Sequence(servers) => parse_entries(
+            servers,
+            subscription_id,
+            normalize_sip008,
+            "servers",
+            &mut emit,
+        ),
         Value::Mapping(mut root) => {
             let outbounds = root.remove("outbounds");
             let servers = root.remove("servers");
             match (outbounds, servers) {
                 (Some(_), Some(_)) => anyhow::bail!("ambiguous JSON subscription wrapper"),
-                (Some(Value::Sequence(outbounds)), None) => {
-                    parse_entries(outbounds, subscription_id, sing_box::normalize, "outbounds")
-                }
+                (Some(Value::Sequence(outbounds)), None) => parse_entries(
+                    outbounds,
+                    subscription_id,
+                    sing_box::normalize,
+                    "outbounds",
+                    &mut emit,
+                ),
                 (Some(_), None) => anyhow::bail!("sing-box 'outbounds' must be an array"),
                 (None, Some(Value::Sequence(servers))) => {
                     if let Some(version) = root.remove("version")
@@ -60,7 +67,13 @@ pub(super) fn parse_json_subscription_outcomes(
                     {
                         anyhow::bail!("unsupported SIP008 version");
                     }
-                    parse_entries(servers, subscription_id, normalize_sip008, "servers")
+                    parse_entries(
+                        servers,
+                        subscription_id,
+                        normalize_sip008,
+                        "servers",
+                        &mut emit,
+                    )
                 }
                 (None, Some(_)) => anyhow::bail!("SIP008 'servers' must be an array"),
                 (None, None) => anyhow::bail!("unsupported JSON subscription wrapper"),
@@ -75,8 +88,8 @@ fn parse_entries(
     subscription_id: Option<uuid::Uuid>,
     normalize: fn(Value) -> NodeResult,
     path: &'static str,
-) -> anyhow::Result<Vec<IndexedOutcome>> {
-    let mut outcomes = Vec::with_capacity(entries.len());
+    emit: &mut impl FnMut(IndexedOutcome),
+) -> anyhow::Result<()> {
     for (index, entry) in entries.into_iter().enumerate() {
         let ordinal = index + 1;
         let outcome = match normalize(entry) {
@@ -95,9 +108,9 @@ fn parse_entries(
             }
             Err(reason) => IndexedOutcome::malformed(ordinal, path, reason),
         };
-        outcomes.push(outcome);
+        emit(outcome);
     }
-    Ok(outcomes)
+    Ok(())
 }
 
 fn normalize_sip008(value: Value) -> NodeResult {

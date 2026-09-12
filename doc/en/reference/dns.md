@@ -174,7 +174,7 @@ Effective request selection follows this precedence:
 The `"upstream"` sentinel is ignored only in the third branch; with legacy rules it is an ordinary named target requiring a declaration. Legacy targets are matched exactly, without dae action normalization.
 
 Validation diagnostics preserve original field paths: new-style rules and fallbacks use `dns.routing.request.rules[i].action` and `dns.routing.request.fallback`; converted legacy rules use `dns.routing.rules[i].upstream`; converted or promoted fallbacks use `dns.routing.fallback`.
-With active legacy rules, diagnostics distinguish an undeclared default `upstream` fallback from an empty fallback and list declared names in sorted order. Omitting the legacy fallback is equivalent to explicitly setting `upstream`; either remains valid when that upstream is declared. Empty and `upstream` sentinels remain ignored when no legacy rules are active.
+With active legacy rules, an undeclared default `upstream` fallback reports `missing-dns-fallback`, an undeclared empty fallback reports `empty-dns-fallback`, and other undeclared targets report `unknown-dns-upstream`. These diagnostics retain field paths but do not echo target names or list declared names. Omitting the legacy fallback is equivalent to explicitly setting `upstream`; either remains valid when that upstream is declared. Empty and `upstream` sentinels remain ignored when no legacy rules are active.
 
 ## Address-family strategy
 

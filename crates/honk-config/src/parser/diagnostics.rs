@@ -58,14 +58,33 @@ impl<'a> ParserDiagnostics<'a> {
         link: &str,
     ) -> Result<crate::node::Node, crate::error::DetailedConfigError> {
         let source = self.source();
-        crate::node::Node::parse_share_link(link, &source, &mut |mut diagnostic| {
-            if let Some(index) = self.entry {
+        let line = self.current.line;
+        let entry = self.entry;
+        // Node tags are not schema fields: every link diagnostic belongs to this entry.
+        let locate_entry = |diagnostic: &mut DetailedDiagnostic| {
+            diagnostic.source = source.clone();
+            diagnostic.line = line;
+            diagnostic.entry_index = entry;
+            if let Some(crate::diagnostic::SettingSegment::Field(root)) =
+                diagnostic.setting.0.first_mut()
+                && *root == "config"
+            {
+                *root = "nodes";
+            }
+            if let Some(index) = entry {
                 diagnostic
                     .setting
                     .0
                     .insert(1, crate::diagnostic::SettingSegment::Index(index));
             }
-            self.emit(diagnostic);
+        };
+        crate::node::Node::parse_share_link(link, &source, &mut |mut diagnostic| {
+            locate_entry(&mut diagnostic);
+            self.output.push(diagnostic);
+        })
+        .map_err(|mut error| {
+            locate_entry(error.diagnostic.as_mut());
+            error
         })
     }
 

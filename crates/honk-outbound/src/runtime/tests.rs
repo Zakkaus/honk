@@ -86,7 +86,7 @@ fn registry_admission_rejects_invalid_collections() {
     assert_admission(
         OutboundRuntimeRegistry::build_reusing_with_dial_ceiling(&[intrinsic], 1, 1, None)
             .unwrap_err(),
-        "invalid-node",
+        "invalid-config-value",
         0,
     );
 
@@ -114,7 +114,7 @@ fn registry_admission_rejects_invalid_collections() {
     incorrect.port = 1;
     assert_admission(
         OutboundRuntimeRegistry::build(&[incorrect]).unwrap_err(),
-        "invalid-node",
+        "invalid-config-value",
         0,
     );
 }
@@ -936,7 +936,7 @@ mod fallible_factory_tests {
         node.port = 0;
         assert_admission(
             NodeRuntime::try_ephemeral(&node).unwrap_err(),
-            "invalid-node",
+            "invalid-config-value",
             0,
         );
     }

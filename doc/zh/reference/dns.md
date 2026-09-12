@@ -174,7 +174,7 @@ NXDOMAIN 和 SERVFAIL 应答会直接返回，不经过应答路由，也不应�
 `"upstream"` 仅在第三个分支中作为哨兵值被忽略；存在旧版规则时，它是普通的上游名称，必须有对应声明。旧版目标按原样精确匹配，不采用 dae 动作的大小写转换规则。
 
 校验诊断保留原始字段路径：新式规则和回退使用 `dns.routing.request.rules[i].action` 与 `dns.routing.request.fallback`；转换后的旧版规则使用 `dns.routing.rules[i].upstream`；转换或提升的回退使用 `dns.routing.fallback`。
-旧版规则生效时，诊断会区分默认回退 `upstream` 未声明和回退为空，并按名称排序列出已声明的上游。省略旧版回退等同于显式设置 `upstream`；只要声明了该上游，两者都有效。没有旧版规则时，空值和 `upstream` 哨兵仍会被忽略。
+旧版规则生效时，默认回退 `upstream` 未声明会报告 `missing-dns-fallback`，空回退没有匹配声明会报告 `empty-dns-fallback`，其他未声明目标报告 `unknown-dns-upstream`。诊断保留字段路径，但不回显目标名称或列出已声明名称。省略旧版回退等同于显式设置 `upstream`；只要声明了该上游，两者都有效。没有旧版规则时，空值和 `upstream` 哨兵仍会被忽略。
 
 ## 地址族策略
 

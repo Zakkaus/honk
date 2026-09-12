@@ -1,4 +1,4 @@
-use honk_config::options::vocab::optional_text;
+use honk_config::options::vocab::{coalesce_equal, optional_text};
 use serde_yaml::{Mapping, Value};
 
 use super::super::yaml_value;
@@ -7,21 +7,12 @@ pub(super) fn raw_alias<'a>(
     mapping: &'a Mapping,
     keys: &[&str],
 ) -> Result<Option<&'a Value>, &'static str> {
-    let mut found = None;
-    for key in keys {
-        let Some(value) = yaml_value(mapping, key) else {
-            continue;
-        };
-        if matches!(value, Value::Null) {
-            continue;
-        }
-        match found {
-            None => found = Some(value),
-            Some(previous) if previous == value => {}
-            Some(_) => return Err("conflicting aliases"),
-        }
-    }
-    Ok(found)
+    coalesce_equal(
+        keys.iter()
+            .filter_map(|key| yaml_value(mapping, key))
+            .map(|value| Ok((!matches!(value, Value::Null)).then_some(value))),
+        "conflicting aliases",
+    )
 }
 
 fn parsed_alias<T: PartialEq>(
@@ -29,21 +20,12 @@ fn parsed_alias<T: PartialEq>(
     keys: &[&str],
     parse: impl Fn(&Value) -> Result<Option<T>, &'static str>,
 ) -> Result<Option<T>, &'static str> {
-    let mut found = None;
-    for key in keys {
-        let Some(value) = yaml_value(mapping, key) else {
-            continue;
-        };
-        let Some(value) = parse(value)? else {
-            continue;
-        };
-        match &found {
-            None => found = Some(value),
-            Some(previous) if previous == &value => {}
-            Some(_) => return Err("conflicting aliases"),
-        }
-    }
-    Ok(found)
+    coalesce_equal(
+        keys.iter()
+            .filter_map(|key| yaml_value(mapping, key))
+            .map(parse),
+        "conflicting aliases",
+    )
 }
 
 pub(super) fn text(value: &Value) -> Result<Option<String>, &'static str> {

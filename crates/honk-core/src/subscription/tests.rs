@@ -902,3 +902,84 @@ async fn c19_invalid_http_encoding_preserves_saved_body() {
     let error = error.downcast_ref::<DetailedConfigError>().unwrap();
     assert_eq!(error.diagnostic.as_ref(), &diagnostics[0]);
 }
+
+#[test]
+fn profile_diagnostic_budget_preserves_nodes_and_caller_prefix() {
+    let sub = Subscription::default();
+    let mut diagnostics = Vec::new();
+    parse_subscription_content_with_diagnostics(&sub, "STATUS=prefix", &mut diagnostics)
+        .unwrap_err();
+    let prefix = diagnostics.clone();
+    let body = format!(
+        "[General]\n{}[Proxy]\nfirst = socks5, 127.0.0.1, 1080\nsecond = socks5, 127.0.0.1, 1080\n",
+        "x\n".repeat(4096),
+    );
+    let nodes = parse_subscription_content_with_diagnostics(&sub, &body, &mut diagnostics).unwrap();
+    assert_eq!(
+        nodes.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(),
+        ["first"]
+    );
+    assert_eq!(&diagnostics[..prefix.len()], &prefix);
+    let retained = &diagnostics[prefix.len()..];
+    assert!(
+        retained.len() <= 129,
+        "retained {} diagnostics",
+        retained.len()
+    );
+    assert_eq!(retained[0].line, Some(2));
+    assert_eq!(
+        retained.last().unwrap().code,
+        "subscription-diagnostics-truncated"
+    );
+    assert!(!retained.iter().any(|d| d.terminal));
+}
+
+#[test]
+fn uri_diagnostic_budget_preserves_late_valid_node() {
+    let body = format!(
+        "{}socks5://127.0.0.1:1080#survivor\n",
+        "unknown://host:1234\n".repeat(256)
+    );
+    let mut diagnostics = Vec::new();
+    let nodes = parse_subscription_content_with_diagnostics(
+        &Subscription::default(),
+        &body,
+        &mut diagnostics,
+    )
+    .unwrap();
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>(),
+        ["survivor"]
+    );
+    assert!(diagnostics.len() <= 129);
+    assert_eq!(
+        diagnostics.last().unwrap().code,
+        "subscription-diagnostics-truncated"
+    );
+}
+
+#[test]
+fn truncated_all_invalid_body_keeps_terminal_failure() {
+    let body = "unknown://host:1234\n".repeat(256);
+    let mut diagnostics = Vec::new();
+    assert!(
+        parse_subscription_content_with_diagnostics(
+            &Subscription::default(),
+            &body,
+            &mut diagnostics,
+        )
+        .is_err()
+    );
+    assert!(diagnostics.len() <= 130);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| !diagnostic.terminal)
+            .count(),
+        129
+    );
+    assert!(diagnostics.last().unwrap().terminal);
+}

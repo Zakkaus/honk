@@ -50,6 +50,8 @@ Compatibility-only keys are accepted by the dae parser and stored in `GlobalConf
 
 HTTP health checks and URLTest send a credential-free authority in `Host`: IPv6 stays bracketed, and non-default ports are retained. Connection and TLS server-name handling use the unbracketed host.
 
+The configured request path and query retain their original dot segments and percent-encoding. URLs with surplus authority slashes, backslashes, or embedded ASCII whitespace/control characters are rejected before building a request; rejected URLs are not echoed in the health-check warning.
+
 ## Reloading health checks and TLS mode
 
 These inputs are captured at startup. A reload that changes their effective values is rejected, preserving the active configuration and installed probes:

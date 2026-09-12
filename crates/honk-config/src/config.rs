@@ -372,6 +372,21 @@ impl Default for GlobalConfig {
     }
 }
 
+fn config_validation_error(
+    source: &SourceRef,
+    setting: SettingPath,
+    code: &'static str,
+    message: &'static str,
+) -> DetailedConfigError {
+    DetailedConfigError::new(
+        ErrorCategory::Validation,
+        code,
+        source.clone(),
+        setting,
+        message,
+    )
+}
+
 impl Config {
     /// The built-in `direct` node name (usable as a group member without
     /// being declared in the config).
@@ -681,73 +696,93 @@ impl Config {
         }
     }
 
-    fn validate_globals(&self) -> Result<(), crate::ConfigError> {
-        crate::check::validate_dns_check_targets(&self.global.udp_check_dns)?;
+    fn validate_globals_detailed(&self, source: &SourceRef) -> Result<(), DetailedConfigError> {
+        if let Err(mut error) = crate::check::validate_dns_check_targets(&self.global.udp_check_dns)
+        {
+            error.diagnostic.source = source.clone();
+            return Err(error);
+        }
         if self.global.dial_mode.parse::<DialMode>().is_err() {
-            return Err(crate::ConfigError::Validation(format!(
-                "global.dial_mode must be one of: ip, domain, domain+, domain++ (got '{}')",
-                self.global.dial_mode
-            )));
-        }
-
-        let data_dir = std::path::Path::new(&self.global.data_dir);
-        if self.global.data_dir.is_empty() || !data_dir.is_absolute() {
-            return Err(crate::ConfigError::Validation(
-                "global.data_dir must be a non-empty absolute path".into(),
+            return Err(config_validation_error(
+                source,
+                SettingPath::new("global").field("dial_mode"),
+                "invalid-config-value",
+                "dial_mode must be ip, domain, domain+, or domain++",
             ));
         }
-
-        self.dns
-            .bind_endpoint()
-            .map_err(|error| crate::ConfigError::Validation(error.to_string()))?;
-        self.dns
-            .client_subnet_mode()
-            .map_err(|error| crate::ConfigError::Validation(error.to_string()))?;
-
-        self.dns.validate_upstream_references()?;
-
-        // A duration that fails to parse becomes zero, and a zero period makes
-        // tokio::time::interval panic, taking the health-check loop down at startup.
+        if self.global.data_dir.is_empty()
+            || !std::path::Path::new(&self.global.data_dir).is_absolute()
+        {
+            return Err(config_validation_error(
+                source,
+                SettingPath::new("global").field("data_dir"),
+                "invalid-config-value",
+                "data_dir must be a non-empty absolute path",
+            ));
+        }
+        if self.dns.bind_endpoint().is_err() {
+            return Err(config_validation_error(
+                source,
+                SettingPath::new("dns").field("bind"),
+                "invalid-config-value",
+                "dns.bind must be a supported endpoint",
+            ));
+        }
+        if self.dns.client_subnet_mode().is_err() {
+            return Err(config_validation_error(
+                source,
+                SettingPath::new("dns").field("client_subnet"),
+                "invalid-config-value",
+                "client_subnet must be empty, auto, auto(IPv4), IPv4, or IPv4/prefix",
+            ));
+        }
+        self.dns.validate_upstream_references_detailed(source)?;
         if self.global.check_interval_secs == 0 {
-            return Err(crate::ConfigError::Validation(
-                "global.check_interval must be a positive duration, such as 30s".into(),
+            return Err(config_validation_error(
+                source,
+                SettingPath::new("global").field("check_interval"),
+                "invalid-config-value",
+                "check_interval must be a positive duration",
             ));
         }
-
-        // The eBPF datapath has the mark compiled in; userspace cannot inject
-        // a different value, so a custom mark would silently break the proxy.
         if self.global.tproxy_mark != default_tproxy_mark() {
-            return Err(crate::ConfigError::Validation(format!(
-                "global.tproxy_mark must be {:#x} (compiled into the eBPF datapath)",
-                default_tproxy_mark()
-            )));
+            return Err(config_validation_error(
+                source,
+                SettingPath::new("global").field("tproxy_mark"),
+                "invalid-config-value",
+                "tproxy_mark does not match the compiled datapath mark",
+            ));
         }
         let reserved = crate::routing::DATAPATH_RESERVED_MARK_MASK;
         if self.global.so_mark_from_dae & reserved != 0 {
-            return Err(crate::ConfigError::Validation(format!(
-                "global.so_mark_from_dae ({:#x}) overlaps datapath-reserved skb mark bits {reserved:#x}",
-                self.global.so_mark_from_dae
-            )));
+            return Err(config_validation_error(
+                source,
+                SettingPath::new("global").field("so_mark_from_dae"),
+                "invalid-config-value",
+                "so_mark_from_dae overlaps datapath-reserved mark bits",
+            ));
         }
         for (index, rule) in self.routing.rules.iter().enumerate() {
-            if rule.mark & reserved == 0 {
-                continue;
+            if rule.mark & reserved != 0 {
+                return Err(config_validation_error(
+                    source,
+                    SettingPath::new("routing")
+                        .field("rules")
+                        .index(index + 1)
+                        .field("mark"),
+                    "invalid-config-value",
+                    "routing mark overlaps datapath-reserved mark bits",
+                ));
             }
-            let rule_name = if rule.name.is_empty() {
-                format!("routing.rules[{index}].mark")
-            } else {
-                format!("routing rule '{}'.mark", rule.name)
-            };
-            return Err(crate::ConfigError::Validation(format!(
-                "{rule_name} ({:#x}) overlaps datapath-reserved skb mark bits {reserved:#x}",
-                rule.mark
-            )));
         }
         Ok(())
     }
 
-    fn validate_reserved_names(&self) -> Result<(), crate::ConfigError> {
-        for node in &self.nodes {
+    fn validate_reserved_names_detailed(
+        &self,
+        source: &SourceRef,
+    ) -> Result<(), DetailedConfigError> {
+        for (index, node) in self.nodes.iter().enumerate() {
             if matches!(
                 node.protocol(),
                 crate::types::NodeProtocol::Direct | crate::types::NodeProtocol::Block
@@ -758,90 +793,112 @@ impl Config {
                 node.name.as_str(),
                 Self::BUILTIN_DIRECT_NODE | Self::BUILTIN_BLOCK_NODE
             ) {
-                return Err(crate::ConfigError::Validation(format!(
-                    "Node '{}' uses a name or protocol reserved for the built-in direct/block nodes",
-                    node.name
-                )));
+                return Err(config_validation_error(
+                    source,
+                    SettingPath::new("nodes").index(index + 1).field("name"),
+                    "invalid-config-value",
+                    "node name is reserved for a builtin direct/block node",
+                ));
             }
         }
         Ok(())
     }
 
-    fn validate_references(&self) -> Result<(), crate::ConfigError> {
-        // User groups occupy ordinals 2..=251; 252 and above are reserved
-        // protocol values (must/control-plane/logical operators).
+    fn validate_references_detailed(&self, source: &SourceRef) -> Result<(), DetailedConfigError> {
         const MAX_USER_GROUPS: usize = 0xFC - 2;
         if self.groups.len() > MAX_USER_GROUPS {
-            return Err(crate::ConfigError::Validation(format!(
-                "too many outbound groups: {} (maximum is {MAX_USER_GROUPS})",
-                self.groups.len()
-            )));
+            return Err(config_validation_error(
+                source,
+                SettingPath::new("groups"),
+                "invalid-config-value",
+                "too many outbound groups",
+            ));
         }
-        for group in &self.groups {
+        for (index, group) in self.groups.iter().enumerate() {
             if group.name.is_empty() {
-                return Err(crate::ConfigError::Validation(
-                    "Group name cannot be empty".into(),
+                return Err(config_validation_error(
+                    source,
+                    SettingPath::new("groups").index(index + 1).field("name"),
+                    "invalid-config-value",
+                    "group name must not be empty",
                 ));
             }
             if self.nodes.iter().any(|node| {
                 node.id != DIRECT_NODE_ID && node.id != BLOCK_NODE_ID && node.name == group.name
             }) {
-                return Err(crate::ConfigError::Validation(format!(
-                    "name '{}' is defined as both a node and a group; rename one of them",
-                    group.name
-                )));
+                return Err(config_validation_error(
+                    source,
+                    SettingPath::new("groups").index(index + 1).field("name"),
+                    "invalid-config-value",
+                    "group name must not duplicate a node name",
+                ));
             }
         }
-        // Routing outbounds resolve only against group names and the built-in
-        // direct/block. A bare node name has no eBPF outbound id, so accepting
-        // it would silently misroute; subscription nodes arrive at runtime and
-        // are deliberately out of scope here. group.final and DNS upstream
-        // detours legitimately accept node names and stay unchecked.
         let is_config_node = |name: &str| {
             self.nodes.iter().any(|node| {
                 node.id != DIRECT_NODE_ID && node.id != BLOCK_NODE_ID && node.name == name
             })
         };
-        let check_outbound = |outbound: &str, fallback: bool| -> Result<(), crate::ConfigError> {
-            let kind = if fallback { "fallback" } else { "outbound" };
-            if matches!(
-                outbound,
-                Self::BUILTIN_DIRECT_NODE | Self::BUILTIN_BLOCK_NODE
-            ) || self.groups.iter().any(|group| group.name == outbound)
+        let check_outbound = |target: &str, index: Option<usize>| {
+            if matches!(target, Self::BUILTIN_DIRECT_NODE | Self::BUILTIN_BLOCK_NODE)
+                || self.groups.iter().any(|group| group.name == target)
             {
                 return Ok(());
             }
-            if is_config_node(outbound) {
-                return Err(crate::ConfigError::Validation(format!(
-                    "{kind} '{outbound}' is a node, not a group; wrap it in a group (e.g. filter: name('{outbound}')) or reference a group"
-                )));
-            }
-            Err(crate::ConfigError::Validation(format!(
-                "unknown {kind} '{outbound}' (expected a group name, 'direct', or 'block')"
-            )))
+            let message = if is_config_node(target) {
+                "routing target names a node; use a group"
+            } else {
+                "routing target is not a declared group or builtin"
+            };
+            let setting = match index {
+                Some(index) => SettingPath::new("routing")
+                    .field("rules")
+                    .index(index + 1)
+                    .field("outbound"),
+                None => SettingPath::new("routing").field("fallback"),
+            };
+            Err(config_validation_error(
+                source,
+                setting,
+                "unknown-routing-target",
+                message,
+            ))
         };
-        for rule in &self.routing.rules {
-            check_outbound(rule.outbound.as_str(), false)?;
+        for (index, rule) in self.routing.rules.iter().enumerate() {
+            check_outbound(rule.outbound.as_str(), Some(index))?;
         }
-        check_outbound(&self.routing.default_outbound, true)?;
-        for subscription in &self.subscriptions {
+        check_outbound(&self.routing.default_outbound, None)?;
+        for (index, subscription) in self.subscriptions.iter().enumerate() {
             if subscription.name.is_empty() {
-                return Err(crate::ConfigError::Validation(
-                    "subscription name must not be empty".into(),
+                return Err(config_validation_error(
+                    source,
+                    SettingPath::new("subscriptions")
+                        .index(index + 1)
+                        .field("name"),
+                    "invalid-config-value",
+                    "subscription name must not be empty",
                 ));
             }
             if subscription.url.is_empty() {
-                return Err(crate::ConfigError::Validation(format!(
-                    "subscription '{}' has an empty url",
-                    subscription.name
-                )));
+                return Err(config_validation_error(
+                    source,
+                    SettingPath::new("subscriptions")
+                        .index(index + 1)
+                        .field("url"),
+                    "invalid-config-value",
+                    "subscription URL must not be empty",
+                ));
             }
             if !subscription.url.starts_with("http://") && !subscription.url.starts_with("https://")
             {
-                return Err(crate::ConfigError::Validation(format!(
-                    "subscription '{}' url must use http:// or https://",
-                    subscription.name
-                )));
+                return Err(config_validation_error(
+                    source,
+                    SettingPath::new("subscriptions")
+                        .index(index + 1)
+                        .field("url"),
+                    "invalid-config-value",
+                    "subscription URL must use http:// or https://",
+                ));
             }
         }
         Ok(())
@@ -849,23 +906,17 @@ impl Config {
 
     /// Validate operator configuration through the legacy error API.
     pub fn validate(&self) -> Result<(), crate::ConfigError> {
-        self.validate_globals()?;
-        crate::node::validate_node_collection(&self.nodes)
-            .map_err(crate::error::DetailedConfigError::into_legacy)?;
-        self.validate_reserved_names()?;
-        self.validate_references()
+        self.validate_detailed()
+            .map_err(DetailedConfigError::into_legacy)
     }
 
     /// Validate operator configuration while retaining typed diagnostics.
     pub fn validate_detailed(&self) -> Result<(), DetailedConfigError> {
         let source = DiagnosticSources::new(None).root();
-        self.validate_globals()
-            .map_err(|error| DetailedConfigError::from_legacy(error, source.clone()))?;
+        self.validate_globals_detailed(&source)?;
         crate::node::validate_node_collection(&self.nodes)?;
-        self.validate_reserved_names()
-            .map_err(|error| DetailedConfigError::from_legacy(error, source.clone()))?;
-        self.validate_references()
-            .map_err(|error| DetailedConfigError::from_legacy(error, source))
+        self.validate_reserved_names_detailed(&source)?;
+        self.validate_references_detailed(&source)
     }
     /// Validate a fully assembled runtime snapshot.
     ///
@@ -875,11 +926,10 @@ impl Config {
     /// refresh cannot publish dangling direct or nested-group members.
     pub fn validate_assembled(&self) -> Result<(), DetailedConfigError> {
         let source = DiagnosticSources::new(None).root();
-        self.validate_globals()
-            .map_err(|error| DetailedConfigError::from_legacy(error, source.clone()))?;
+        self.validate_globals_detailed(&source)?;
         crate::node::validate_node_collection(&self.nodes)?;
-        self.validate_references()
-            .map_err(|error| DetailedConfigError::from_legacy(error, source))?;
+        // Provider display names are not operator declarations of reserved builtins.
+        self.validate_references_detailed(&source)?;
 
         let node_ids: std::collections::HashSet<_> =
             self.nodes.iter().map(|node| node.id).collect();
@@ -897,7 +947,7 @@ impl Config {
             let mut error = DetailedConfigError::new(
                 ErrorCategory::Validation,
                 code,
-                DiagnosticSources::new(None).root(),
+                source.clone(),
                 setting,
                 message,
             );
@@ -985,6 +1035,7 @@ fn parse_structured(
     diagnostics: &mut Vec<DetailedDiagnostic>,
     source: SourceRef,
 ) -> Result<Config, DetailedConfigError> {
+    let diagnostic_start = diagnostics.len();
     let mut track = Track::new();
     let seed = RawConfigSeed {
         diagnostics,
@@ -1029,8 +1080,27 @@ fn parse_structured(
             .and_then(|decoder| seed.deserialize(PathDeserializer::new(decoder, &mut track)))
             .map_err(|error| toml_location(content, &error)),
     };
-    let mut config =
-        result.map_err(|location| structured_decode_error(source, track.path(), location))?;
+    let mut config = match result {
+        Ok(config) => config,
+        Err(location) => {
+            if let Some(index) = diagnostics[diagnostic_start..]
+                .iter()
+                .position(|diagnostic| {
+                    diagnostic.terminal && diagnostic.severity == crate::diagnostic::Severity::Error
+                })
+            {
+                let mut diagnostic = diagnostics.remove(diagnostic_start + index);
+                diagnostic.span = location.span;
+                diagnostic.line = location.line;
+                diagnostic.byte_column = location.byte_column;
+                return Err(DetailedConfigError {
+                    category: ErrorCategory::Validation,
+                    diagnostic: Box::new(diagnostic),
+                });
+            }
+            return Err(structured_decode_error(source, track.path(), location));
+        }
+    };
     let canonical_present = match format {
         ConfigFormat::Json => json_has_global_nfqueue_enable(content),
         ConfigFormat::Yaml => yaml_has_global_nfqueue_enable(content),
@@ -1398,14 +1468,22 @@ mod builtin_nodes_tests {
         for reserved_bit in [0x4000_0000, 0x8000_0000] {
             config.routing.rules[0].mark = reserved_bit;
             let error = config
-                .validate()
+                .validate_detailed()
                 .expect_err("reserved routing mark must fail");
-            assert!(error.to_string().contains("reserved skb mark"), "{error}");
+            assert_eq!(error.diagnostic.code, "invalid-config-value");
+            assert_eq!(
+                error.diagnostic.setting.to_string(),
+                "routing.rules[1].mark"
+            );
         }
 
         config.routing.rules[0].mark = 0x3fff_ffff;
         config.global.so_mark_from_dae = 0x8000_0000;
-        assert!(config.validate().is_err());
+        let error = config.validate_detailed().unwrap_err();
+        assert_eq!(
+            error.diagnostic.setting.to_string(),
+            "global.so_mark_from_dae"
+        );
         config.global.so_mark_from_dae = 0;
         assert!(config.validate().is_ok());
     }
@@ -1617,21 +1695,18 @@ mod builtin_nodes_tests {
         config.nodes.push(test_node("vn"));
 
         config.routing.rules.push(rule_to("vn"));
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("outbound 'vn' is a node, not a group; wrap it in a group (e.g. filter: name('vn')) or reference a group"),
-            "{err}"
+        let error = config.validate_detailed().unwrap_err();
+        assert_eq!(error.diagnostic.code, "unknown-routing-target");
+        assert_eq!(
+            error.diagnostic.setting.to_string(),
+            "routing.rules[1].outbound"
         );
 
         config.routing.rules.clear();
         config.routing.default_outbound = "vn".into();
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("fallback 'vn' is a node, not a group; wrap it in a group (e.g. filter: name('vn')) or reference a group"),
-            "{err}"
-        );
+        let error = config.validate_detailed().unwrap_err();
+        assert_eq!(error.diagnostic.code, "unknown-routing-target");
+        assert_eq!(error.diagnostic.setting.to_string(), "routing.fallback");
     }
 
     #[test]
@@ -1653,23 +1728,18 @@ mod builtin_nodes_tests {
     fn test_validate_rejects_unknown_outbounds() {
         let mut config = Config::default();
         config.routing.rules.push(rule_to("missing"));
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.to_string().contains(
-                "unknown outbound 'missing' (expected a group name, 'direct', or 'block')"
-            ),
-            "{err}"
+        let error = config.validate_detailed().unwrap_err();
+        assert_eq!(error.diagnostic.code, "unknown-routing-target");
+        assert_eq!(
+            error.diagnostic.setting.to_string(),
+            "routing.rules[1].outbound"
         );
 
         config.routing.rules.clear();
         config.routing.default_outbound = "missing".into();
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.to_string().contains(
-                "unknown fallback 'missing' (expected a group name, 'direct', or 'block')"
-            ),
-            "{err}"
-        );
+        let error = config.validate_detailed().unwrap_err();
+        assert_eq!(error.diagnostic.code, "unknown-routing-target");
+        assert_eq!(error.diagnostic.setting.to_string(), "routing.fallback");
     }
 
     #[test]
@@ -1680,11 +1750,8 @@ mod builtin_nodes_tests {
             name: "dup".into(),
             ..Default::default()
         });
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("name 'dup' is defined as both a node and a group; rename one of them"),
-            "{err}"
-        );
+        let error = config.validate_detailed().unwrap_err();
+        assert_eq!(error.diagnostic.code, "invalid-config-value");
+        assert_eq!(error.diagnostic.setting.to_string(), "groups[1].name");
     }
 }

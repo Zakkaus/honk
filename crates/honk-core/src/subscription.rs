@@ -36,7 +36,7 @@ const MAX_SUBSCRIPTION_BYTES: usize = 8 * 1024 * 1024;
 
 const MAX_SUBSCRIPTION_REDIRECTS: usize = 5;
 
-/// One source entry retained through normalization for the common body pass.
+/// One source entry retained only until the common admission pass consumes it.
 #[derive(Debug)]
 struct IndexedOutcome {
     ordinal: usize,
@@ -45,13 +45,15 @@ struct IndexedOutcome {
     kind: IndexedOutcomeKind,
 }
 
+// Consumed synchronously, never queued: boxing would allocate once per imported node.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 enum IndexedOutcomeKind {
-    Node(Box<Node>),
+    Node(Node),
     Malformed(&'static str),
     Unsupported(&'static str),
     Profile(&'static str),
-    Diagnostic(Box<DetailedDiagnostic>),
+    Diagnostic(DetailedDiagnostic),
 }
 
 impl IndexedOutcome {
@@ -60,7 +62,7 @@ impl IndexedOutcome {
             ordinal,
             line: None,
             path,
-            kind: IndexedOutcomeKind::Node(Box::new(node)),
+            kind: IndexedOutcomeKind::Node(node),
         }
     }
 
@@ -89,6 +91,170 @@ impl IndexedOutcome {
             path,
             kind: IndexedOutcomeKind::Profile(reason),
         }
+    }
+}
+
+const MAX_SUBSCRIPTION_DIAGNOSTICS: usize = 128;
+
+struct AdmissionOwner<'a> {
+    source: honk_config::diagnostic::SourceRef,
+    diagnostics: &'a mut Vec<DetailedDiagnostic>,
+    nodes: Vec<Node>,
+    seen: std::collections::HashMap<uuid::Uuid, usize>,
+    retained: usize,
+    omitted: usize,
+}
+
+impl<'a> AdmissionOwner<'a> {
+    fn new(
+        source: &honk_config::diagnostic::SourceRef,
+        diagnostics: &'a mut Vec<DetailedDiagnostic>,
+    ) -> Self {
+        Self {
+            source: source.clone(),
+            diagnostics,
+            nodes: Vec::new(),
+            seen: std::collections::HashMap::new(),
+            retained: 0,
+            omitted: 0,
+        }
+    }
+
+    fn emit(&mut self, outcome: IndexedOutcome) {
+        let IndexedOutcome {
+            ordinal,
+            line,
+            path,
+            kind,
+        } = outcome;
+        match kind {
+            IndexedOutcomeKind::Node(node) => {
+                if node.shadowsocks().is_some_and(|config| {
+                    config
+                        .plugin
+                        .as_deref()
+                        .is_some_and(|value| !value.trim().is_empty())
+                        || config
+                            .plugin_opts
+                            .as_deref()
+                            .is_some_and(|value| !value.trim().is_empty())
+                }) {
+                    self.emit_indexed(
+                        "unsupported-subscription-entry",
+                        Severity::Warning,
+                        ordinal,
+                        line,
+                        path,
+                        "subscription node uses an unsupported proxy plugin; ignored",
+                    );
+                } else if let Some(first) = self.seen.get(&node.id).copied() {
+                    if self.reserve() {
+                        let mut diagnostic = indexed_diagnostic(
+                            "duplicate-subscription-entry",
+                            Severity::Warning,
+                            &self.source,
+                            ordinal,
+                            line,
+                            path,
+                            "duplicate endpoint identity; retaining the first usable entry",
+                        );
+                        diagnostic.related_indices.push(first);
+                        self.diagnostics.push(diagnostic);
+                    }
+                } else {
+                    self.seen.insert(node.id, ordinal);
+                    self.nodes.push(node);
+                }
+            }
+            IndexedOutcomeKind::Malformed(reason) => self.emit_indexed(
+                "malformed-subscription-entry",
+                Severity::Warning,
+                ordinal,
+                line,
+                path,
+                reason,
+            ),
+            IndexedOutcomeKind::Unsupported(reason) => self.emit_indexed(
+                "unsupported-subscription-entry",
+                Severity::Warning,
+                ordinal,
+                line,
+                path,
+                reason,
+            ),
+            IndexedOutcomeKind::Profile(reason) => self.emit_indexed(
+                "subscription-profile-entry",
+                Severity::Info,
+                ordinal,
+                line,
+                path,
+                reason,
+            ),
+            IndexedOutcomeKind::Diagnostic(mut diagnostic) => {
+                diagnostic.terminal = false;
+                if self.reserve() {
+                    diagnostic.source = self.source.clone();
+                    diagnostic.setting = SettingPath::new(path).index(ordinal);
+                    diagnostic.entry_index = Some(ordinal);
+                    diagnostic.line = line;
+                    diagnostic.span = None;
+                    diagnostic.byte_column = None;
+                    self.diagnostics.push(diagnostic);
+                }
+            }
+        }
+    }
+
+    fn emit_indexed(
+        &mut self,
+        code: &'static str,
+        severity: Severity,
+        ordinal: usize,
+        line: Option<usize>,
+        path: &'static str,
+        message: &'static str,
+    ) {
+        if self.reserve() {
+            self.diagnostics.push(indexed_diagnostic(
+                code,
+                severity,
+                &self.source,
+                ordinal,
+                line,
+                path,
+                message,
+            ));
+        }
+    }
+
+    fn reserve(&mut self) -> bool {
+        if self.retained < MAX_SUBSCRIPTION_DIAGNOSTICS {
+            self.retained += 1;
+            true
+        } else {
+            self.omitted += 1;
+            false
+        }
+    }
+
+    fn finish_diagnostics(&mut self) {
+        if self.omitted != 0 {
+            self.diagnostics.push(DetailedDiagnostic::warning(
+                "subscription-diagnostics-truncated",
+                self.source.clone(),
+                SettingPath::new("subscription").field("entries"),
+                SafeValue::Ordinal(self.omitted),
+                "subscription diagnostics were truncated; valid entries were retained",
+            ));
+        }
+    }
+
+    fn finish(mut self) -> Result<Vec<Node>, DetailedConfigError> {
+        self.finish_diagnostics();
+        if self.nodes.is_empty() {
+            return Err(subscription_error(self.source, "empty-subscription-body"));
+        }
+        Ok(self.nodes)
     }
 }
 
@@ -508,15 +674,23 @@ fn parse_subscription_content_attempt(
         None => content,
     };
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
-    let outcomes = match sub.sub_type {
-        SubscriptionType::Sip008 => parse_sip008_subscription_outcomes(content, Some(sub.id)),
-        SubscriptionType::Clash => parse_clash_subscription_outcomes(content, Some(sub.id)),
-        SubscriptionType::Simple | SubscriptionType::Custom => {
-            parse_auto_subscription_outcomes(content, Some(sub.id))
+    let mut owner = AdmissionOwner::new(&source, diagnostics);
+    let result = match sub.sub_type {
+        SubscriptionType::Sip008 => {
+            parse_sip008_subscription(content, Some(sub.id), |outcome| owner.emit(outcome))
         }
+        SubscriptionType::Clash => {
+            parse_clash_subscription(content, Some(sub.id), |outcome| owner.emit(outcome))
+        }
+        SubscriptionType::Simple | SubscriptionType::Custom => {
+            parse_auto_subscription(content, Some(sub.id), |outcome| owner.emit(outcome))
+        }
+    };
+    if result.is_err() {
+        owner.finish_diagnostics();
+        return Err(subscription_error(source, "invalid-subscription-body"));
     }
-    .map_err(|_| subscription_error(source.clone(), "invalid-subscription-body"))?;
-    collect_indexed_outcomes(outcomes, &source, diagnostics)
+    owner.finish()
 }
 
 fn subscription_error(
@@ -530,104 +704,6 @@ fn subscription_error(
         SettingPath::new("subscription"),
         "subscription body could not be accepted",
     )
-}
-
-fn collect_indexed_outcomes(
-    outcomes: Vec<IndexedOutcome>,
-    source: &honk_config::diagnostic::SourceRef,
-    diagnostics: &mut Vec<DetailedDiagnostic>,
-) -> Result<Vec<Node>, DetailedConfigError> {
-    let mut nodes = Vec::new();
-    let mut seen = std::collections::HashMap::<uuid::Uuid, usize>::new();
-    for outcome in outcomes {
-        let ordinal = outcome.ordinal;
-        let line = outcome.line;
-        let path = outcome.path;
-        match outcome.kind {
-            IndexedOutcomeKind::Node(node) => {
-                if node.shadowsocks().is_some_and(|config| {
-                    config
-                        .plugin
-                        .as_deref()
-                        .is_some_and(|value| !value.trim().is_empty())
-                        || config
-                            .plugin_opts
-                            .as_deref()
-                            .is_some_and(|value| !value.trim().is_empty())
-                }) {
-                    diagnostics.push(indexed_diagnostic(
-                        "unsupported-subscription-entry",
-                        Severity::Warning,
-                        source,
-                        ordinal,
-                        line,
-                        path,
-                        "subscription node uses an unsupported proxy plugin; ignored",
-                    ));
-                    continue;
-                }
-                if let Some(first) = seen.get(&node.id) {
-                    let mut diagnostic = indexed_diagnostic(
-                        "duplicate-subscription-entry",
-                        Severity::Warning,
-                        source,
-                        ordinal,
-                        line,
-                        path,
-                        "duplicate endpoint identity; retaining the first usable entry",
-                    );
-                    diagnostic.related_indices.push(*first);
-                    diagnostics.push(diagnostic);
-                } else {
-                    seen.insert(node.id, ordinal);
-                    nodes.push(*node);
-                }
-            }
-            IndexedOutcomeKind::Malformed(reason) => diagnostics.push(indexed_diagnostic(
-                "malformed-subscription-entry",
-                Severity::Warning,
-                source,
-                ordinal,
-                line,
-                path,
-                reason,
-            )),
-            IndexedOutcomeKind::Unsupported(reason) => diagnostics.push(indexed_diagnostic(
-                "unsupported-subscription-entry",
-                Severity::Warning,
-                source,
-                ordinal,
-                line,
-                path,
-                reason,
-            )),
-            IndexedOutcomeKind::Profile(reason) => diagnostics.push(indexed_diagnostic(
-                "subscription-profile-entry",
-                Severity::Info,
-                source,
-                ordinal,
-                line,
-                path,
-                reason,
-            )),
-            IndexedOutcomeKind::Diagnostic(mut diagnostic) => {
-                diagnostic.source = source.clone();
-                diagnostic.setting = SettingPath::new(path).index(ordinal);
-                diagnostic.entry_index = Some(ordinal);
-                diagnostic.line = line;
-                diagnostic.span = None;
-                diagnostic.byte_column = None;
-                diagnostics.push(*diagnostic);
-            }
-        }
-    }
-    if nodes.is_empty() {
-        return Err(subscription_error(
-            source.clone(),
-            "empty-subscription-body",
-        ));
-    }
-    Ok(nodes)
 }
 
 fn indexed_diagnostic(
@@ -651,21 +727,22 @@ fn indexed_diagnostic(
     diagnostic.line = line;
     diagnostic
 }
-fn parse_sip008_subscription_outcomes(
+fn parse_sip008_subscription(
     content: &str,
     subscription_id: Option<uuid::Uuid>,
-) -> anyhow::Result<Vec<IndexedOutcome>> {
+    emit: impl FnMut(IndexedOutcome),
+) -> anyhow::Result<()> {
     let value = parse_structured_value(content)?;
     match &value {
         serde_yaml::Value::Sequence(_) => {
-            json::parse_json_subscription_outcomes(value, subscription_id)
+            json::emit_json_subscription(value, subscription_id, emit)
         }
         serde_yaml::Value::Mapping(root)
             if yaml_value(root, "servers").is_some()
                 && yaml_value(root, "outbounds").is_none()
                 && yaml_value(root, "proxies").is_none() =>
         {
-            json::parse_json_subscription_outcomes(value, subscription_id)
+            json::emit_json_subscription(value, subscription_id, emit)
         }
         _ => anyhow::bail!("invalid SIP008 subscription shape"),
     }
@@ -677,15 +754,16 @@ fn parse_structured_value(content: &str) -> Result<serde_yaml::Value, serde_yaml
     serde_json::from_str(content).or_else(|_| serde_yaml::from_str(content))
 }
 
-fn parse_auto_subscription_outcomes(
+fn parse_auto_subscription(
     text: &str,
     subscription_id: Option<uuid::Uuid>,
-) -> anyhow::Result<Vec<IndexedOutcome>> {
+    mut emit: impl FnMut(IndexedOutcome),
+) -> anyhow::Result<()> {
     if text.trim().is_empty() {
         anyhow::bail!("empty subscription body");
     }
-    if let Some(outcomes) = parse_structured_subscription_outcomes(text, subscription_id)? {
-        return Ok(outcomes);
+    if parse_structured_subscription(text, subscription_id, &mut emit)? {
+        return Ok(());
     }
     let has_uri = text.lines().map(str::trim).any(|line| {
         line.split_once("://").is_some_and(|(scheme, _)| {
@@ -695,17 +773,18 @@ fn parse_auto_subscription_outcomes(
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
         })
     });
-    Ok(if has_uri {
-        parse_uri_subscription(text, subscription_id)
+    if has_uri {
+        parse_uri_subscription(text, subscription_id, emit)
     } else {
-        records::parse_record_outcomes(text, subscription_id)
-    })
+        records::parse_record_subscription(text, subscription_id, emit)
+    }
 }
 
-fn parse_structured_subscription_outcomes(
+fn parse_structured_subscription(
     text: &str,
     subscription_id: Option<uuid::Uuid>,
-) -> anyhow::Result<Option<Vec<IndexedOutcome>>> {
+    emit: &mut impl FnMut(IndexedOutcome),
+) -> anyhow::Result<bool> {
     let Ok(value) = parse_structured_value(text) else {
         let first = text
             .lines()
@@ -731,23 +810,27 @@ fn parse_structured_subscription_outcomes(
         {
             anyhow::bail!("malformed structured subscription");
         }
-        return Ok(None);
+        return Ok(false);
     };
     if let serde_yaml::Value::Mapping(root) = &value
         && let Some(proxies) = yaml_value(root, "proxies").and_then(serde_yaml::Value::as_sequence)
     {
-        return Ok(Some(parse_clash_proxies_outcomes(proxies, subscription_id)));
+        emit_clash_proxies(proxies, subscription_id, &mut *emit);
+        return Ok(true);
     }
     match value {
         serde_yaml::Value::Mapping(_) | serde_yaml::Value::Sequence(_) => {
-            json::parse_json_subscription_outcomes(value, subscription_id).map(Some)
+            json::emit_json_subscription(value, subscription_id, &mut *emit)?;
+            Ok(true)
         }
-        _ => Ok(None),
+        _ => Ok(false),
     }
 }
-
-fn parse_uri_subscription(text: &str, subscription_id: Option<uuid::Uuid>) -> Vec<IndexedOutcome> {
-    let mut outcomes = Vec::new();
+fn parse_uri_subscription(
+    text: &str,
+    subscription_id: Option<uuid::Uuid>,
+    mut emit: impl FnMut(IndexedOutcome),
+) -> anyhow::Result<()> {
     for (index, uri) in text.lines().enumerate() {
         let uri = uri.trim();
         if uri.is_empty()
@@ -765,39 +848,43 @@ fn parse_uri_subscription(text: &str, subscription_id: Option<uuid::Uuid>) -> Ve
             let mut outcome =
                 IndexedOutcome::profile(ordinal, "entries", "subscription profile metadata");
             outcome.line = Some(ordinal);
-            outcomes.push(outcome);
+            emit(outcome);
             continue;
         }
-        let mut diagnostics = Vec::new();
-        let result = Node::from_share_link_with_detailed_diagnostics(uri, &mut diagnostics);
-        for mut diagnostic in diagnostics {
-            if diagnostic.terminal {
-                diagnostic.code = if result
-                    .as_ref()
-                    .is_err_and(|error| error.category == ErrorCategory::UnknownProtocol)
-                {
+        let result = Node::from_share_link_with_detailed_diagnostics_emit(uri, &mut |diagnostic| {
+            emit(IndexedOutcome {
+                ordinal,
+                line: Some(ordinal),
+                path: "entries",
+                kind: IndexedOutcomeKind::Diagnostic(diagnostic),
+            });
+        });
+        match result {
+            Ok(mut node) => {
+                node.subscription_id = subscription_id;
+                let mut outcome = IndexedOutcome::node(ordinal, "entries", node);
+                outcome.line = Some(ordinal);
+                emit(outcome);
+            }
+            Err(error) => {
+                let mut diagnostic = *error.diagnostic;
+                diagnostic.code = if error.category == ErrorCategory::UnknownProtocol {
                     "unsupported-subscription-entry"
                 } else {
                     "malformed-subscription-entry"
                 };
                 diagnostic.terminal = false;
                 diagnostic.severity = Severity::Warning;
+                emit(IndexedOutcome {
+                    ordinal,
+                    line: Some(ordinal),
+                    path: "entries",
+                    kind: IndexedOutcomeKind::Diagnostic(diagnostic),
+                });
             }
-            outcomes.push(IndexedOutcome {
-                ordinal,
-                line: Some(ordinal),
-                path: "entries",
-                kind: IndexedOutcomeKind::Diagnostic(Box::new(diagnostic)),
-            });
-        }
-        if let Ok(mut node) = result {
-            node.subscription_id = subscription_id;
-            let mut outcome = IndexedOutcome::node(ordinal, "entries", node);
-            outcome.line = Some(ordinal);
-            outcomes.push(outcome);
         }
     }
-    outcomes
+    Ok(())
 }
 
 fn decode_base64_flexible(input: &str) -> anyhow::Result<Vec<u8>> {
@@ -844,57 +931,53 @@ fn parse_clash_proxies(
     proxies: &[serde_yaml::Value],
     subscription_id: Option<uuid::Uuid>,
 ) -> anyhow::Result<Vec<Node>> {
-    let outcomes = parse_clash_proxies_outcomes(proxies, subscription_id);
-    let nodes = outcomes
-        .into_iter()
-        .filter_map(|outcome| match outcome.kind {
-            IndexedOutcomeKind::Node(node) => Some(*node),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+    let mut nodes = Vec::new();
+    emit_clash_proxies(proxies, subscription_id, |outcome| {
+        if let IndexedOutcomeKind::Node(node) = outcome.kind {
+            nodes.push(node);
+        }
+    });
     if nodes.is_empty() {
         anyhow::bail!("no supported proxies found in Clash subscription");
     }
     Ok(nodes)
 }
 
-fn parse_clash_proxies_outcomes(
+fn emit_clash_proxies(
     proxies: &[serde_yaml::Value],
     subscription_id: Option<uuid::Uuid>,
-) -> Vec<IndexedOutcome> {
-    proxies
-        .iter()
-        .enumerate()
-        .map(|(index, proxy)| {
-            let ordinal = index + 1;
-            let Some(mapping) = proxy.as_mapping() else {
-                return IndexedOutcome::malformed(
-                    ordinal,
-                    "proxies",
-                    "Clash proxy entry must be an object",
-                );
-            };
-            match clash::parse_clash_proxy(mapping, subscription_id) {
+    mut emit: impl FnMut(IndexedOutcome),
+) {
+    for (index, proxy) in proxies.iter().enumerate() {
+        let ordinal = index + 1;
+        let outcome = match proxy.as_mapping() {
+            None => {
+                IndexedOutcome::malformed(ordinal, "proxies", "Clash proxy entry must be an object")
+            }
+            Some(mapping) => match clash::parse_clash_proxy(mapping, subscription_id) {
                 Ok(node) => IndexedOutcome::node(ordinal, "proxies", node),
                 Err(reason) if reason.contains("unsupported") => {
                     IndexedOutcome::unsupported(ordinal, "proxies", reason)
                 }
                 Err(reason) => IndexedOutcome::malformed(ordinal, "proxies", reason),
-            }
-        })
-        .collect()
+            },
+        };
+        emit(outcome);
+    }
 }
 
-fn parse_clash_subscription_outcomes(
+fn parse_clash_subscription(
     content: &str,
     subscription_id: Option<uuid::Uuid>,
-) -> anyhow::Result<Vec<IndexedOutcome>> {
+    emit: impl FnMut(IndexedOutcome),
+) -> anyhow::Result<()> {
     let yaml = parse_structured_value(content)?;
     let proxies = yaml
         .get("proxies")
         .and_then(serde_yaml::Value::as_sequence)
         .ok_or_else(|| anyhow::anyhow!("no 'proxies' array found in Clash YAML"))?;
-    Ok(parse_clash_proxies_outcomes(proxies, subscription_id))
+    emit_clash_proxies(proxies, subscription_id, emit);
+    Ok(())
 }
 
 #[cfg(test)]

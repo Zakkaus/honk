@@ -72,13 +72,23 @@ pub fn select_dns_check_target(
     Ok(first_domain)
 }
 
-pub(crate) fn validate_dns_check_targets(values: &[String]) -> Result<(), crate::ConfigError> {
+pub(crate) fn validate_dns_check_targets(
+    values: &[String],
+) -> Result<(), crate::error::DetailedConfigError> {
     for (index, value) in values.iter().enumerate() {
         if !value.trim().is_empty() && decode_dns_check_target(value).is_err() {
-            return Err(crate::ConfigError::Validation(format!(
-                "global.udp_check_dns[{}]: invalid DNS check target",
-                index + 1
-            )));
+            let ordinal = index + 1;
+            let mut error = crate::error::DetailedConfigError::new(
+                crate::error::ErrorCategory::Validation,
+                "invalid-dns-check-target",
+                crate::diagnostic::DiagnosticSources::new(None).root(),
+                crate::diagnostic::SettingPath::new("global")
+                    .field("udp_check_dns")
+                    .index(ordinal),
+                "DNS check target requires a host and a valid nonzero port; omitted port is 53",
+            );
+            error.diagnostic.entry_index = Some(ordinal);
+            return Err(error);
         }
     }
     Ok(())
@@ -121,17 +131,7 @@ impl HttpCheckTarget {
 }
 
 // URL serialization shortens dot segments; health checks must send the configured bytes.
-fn configured_request_target(value: &str, has_scheme: bool) -> String {
-    let authority_start = if has_scheme {
-        value.find("://").map_or(0, |index| index + 3)
-    } else {
-        0
-    };
-    let authority_and_target = &value[authority_start..];
-    let Some(target_start) = authority_and_target.find(['/', '?', '#']) else {
-        return "/".to_owned();
-    };
-    let target = &authority_and_target[target_start..];
+fn configured_request_target(target: &str) -> String {
     let target = target.split_once('#').map_or(target, |(target, _)| target);
     if target.starts_with('?') {
         format!("/{target}")
@@ -147,10 +147,25 @@ pub fn decode_http_check_target(
     default_https: bool,
 ) -> Result<HttpCheckTarget, InvalidCheckTarget> {
     let value = value.trim();
-    let has_scheme = value
+    if value
+        .bytes()
+        .any(|byte| byte.is_ascii_control() || matches!(byte, b' ' | b'\\'))
+    {
+        return Err(InvalidCheckTarget);
+    }
+    let scheme = value
         .split_once("://")
-        .is_some_and(|(prefix, _)| !prefix.contains(['/', '?', '#']));
-    let url = if has_scheme {
+        .filter(|(prefix, _)| !prefix.contains(['/', '?', '#']));
+    let authority_and_target = scheme.map_or(value, |(_, rest)| rest);
+    let target_start = authority_and_target
+        .find(['/', '?', '#'])
+        .unwrap_or(authority_and_target.len());
+    // Url repairs surplus authority slashes; raw-path preservation cannot
+    // accept a different authority boundary without exposing userinfo.
+    if target_start == 0 {
+        return Err(InvalidCheckTarget);
+    }
+    let url = if scheme.is_some() {
         url::Url::parse(value)
     } else {
         url::Url::parse(&format!(
@@ -162,7 +177,7 @@ pub fn decode_http_check_target(
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return Err(InvalidCheckTarget);
     }
-    let request_target = configured_request_target(value, has_scheme);
+    let request_target = configured_request_target(&authority_and_target[target_start..]);
     Ok(HttpCheckTarget {
         url,
         request_target,

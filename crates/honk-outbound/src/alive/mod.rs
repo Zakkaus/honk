@@ -474,10 +474,7 @@ impl AliveDialerSet {
         *self.check_method.write() = check_method.clone();
 
         let Ok(target) = honk_config::check::decode_health_http_target(&check_url) else {
-            tracing::warn!(
-                "Invalid health check URL '{}'; falling back to TCP probe",
-                check_url
-            );
+            tracing::warn!("Invalid health check URL; falling back to TCP probe");
             *self.check_url.write() = String::new();
             self.check_url_ips.write().clear();
             return;

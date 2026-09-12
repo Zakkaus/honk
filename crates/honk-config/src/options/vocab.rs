@@ -1,5 +1,25 @@
 //! Shared semantic conversion helpers used by config adapters.
 
+/// Fold parsed alias claims, retaining one equal value and rejecting clashes.
+///
+/// Parsing stays with each adapter so dialect-specific normalization and source
+/// bytes remain local; this helper owns only the repeated equality rule.
+pub fn coalesce_equal<T: PartialEq>(
+    values: impl IntoIterator<Item = Result<Option<T>, &'static str>>,
+    conflict: &'static str,
+) -> Result<Option<T>, &'static str> {
+    let mut resolved = None;
+    for value in values.into_iter() {
+        let Some(value) = value? else { continue };
+        match &resolved {
+            None => resolved = Some(value),
+            Some(previous) if *previous == value => {}
+            Some(_) => return Err(conflict),
+        }
+    }
+    Ok(resolved)
+}
+
 /// Resolve optional text claims without trimming nonempty values.
 ///
 /// Claims containing only whitespace are absent. Remaining claims must carry
@@ -8,20 +28,12 @@ pub fn optional_text<'a, I>(values: I) -> Result<Option<&'a str>, &'static str>
 where
     I: IntoIterator<Item = Option<&'a str>>,
 {
-    let mut resolved = None;
-    for value in values.into_iter().flatten() {
-        if value.trim().is_empty() {
-            continue;
-        }
-        if let Some(previous) = resolved {
-            if previous != value {
-                return Err("conflicting optional text claims");
-            }
-        } else {
-            resolved = Some(value);
-        }
-    }
-    Ok(resolved)
+    coalesce_equal(
+        values
+            .into_iter()
+            .map(|value| Ok(value.filter(|value| !value.trim().is_empty()))),
+        "conflicting optional text claims",
+    )
 }
 
 /// Normalize the optional VLESS flow value.

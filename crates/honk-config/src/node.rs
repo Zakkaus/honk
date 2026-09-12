@@ -3,9 +3,11 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 mod protocol;
+mod validation;
 mod wire;
 
 pub use protocol::*;
+pub use validation::validate_node_collection;
 pub use wire::NodeSeed;
 pub(crate) use wire::RawNodeSeed;
 
@@ -287,145 +289,6 @@ impl Node {
         self.outbound.network()
     }
 
-    /// Validate intrinsic node settings through the legacy error API.
-    pub fn validate(&self) -> Result<(), crate::ConfigError> {
-        self.validate_detailed()
-            .map_err(crate::error::DetailedConfigError::into_legacy)
-    }
-
-    /// Validate intrinsic node settings while retaining the structured diagnostic.
-    pub(crate) fn validate_detailed(&self) -> Result<(), crate::error::DetailedConfigError> {
-        self.validate_inner().map_err(|error| {
-            crate::error::DetailedConfigError::from_legacy(
-                error,
-                crate::diagnostic::DiagnosticSources::new(None).root(),
-            )
-        })
-    }
-
-    fn validate_inner(&self) -> Result<(), crate::ConfigError> {
-        use crate::options::vocab::{
-            optional_flow, packet_network, parse_port_hopping, stream_transport, vmess_cipher,
-        };
-        let invalid = |reason: &str| crate::ConfigError::Validation(reason.into());
-        if matches!(
-            self.outbound,
-            OutboundConfig::Direct | OutboundConfig::Block
-        ) {
-            let (name, id) = match self.outbound {
-                OutboundConfig::Direct => ("direct", crate::config::DIRECT_NODE_ID),
-                _ => ("block", crate::config::BLOCK_NODE_ID),
-            };
-            return if self.name == name
-                && self.id == id
-                && self.host.is_empty()
-                && self.address.is_empty()
-                && self.port == 0
-            {
-                Ok(())
-            } else {
-                Err(invalid("invalid builtin node"))
-            };
-        }
-        if self.name.is_empty() {
-            return Err(invalid("node name cannot be empty"));
-        }
-        if self.host().trim().is_empty()
-            || self.port == 0
-            || (self.host.is_empty() && self.address.matches(':').count() > 1)
-        {
-            return Err(invalid("invalid node endpoint"));
-        }
-        if let Some(transport) = self.transport() {
-            stream_transport(&transport.transport).map_err(invalid)?;
-        }
-        if let Some(network) = self.network()
-            && packet_network(network).map_err(invalid)?.is_none()
-        {
-            return Err(invalid("invalid packet network"));
-        }
-        if self
-            .tls()
-            .is_some_and(|tls| tls.sni.as_deref().is_some_and(|sni| sni.trim().is_empty()))
-        {
-            return Err(invalid("invalid node TLS server name"));
-        }
-        let uuid = match &self.outbound {
-            OutboundConfig::Vmess(config) => {
-                if config.encryption.is_some()
-                    && vmess_cipher(config.encryption.as_deref())
-                        .map_err(invalid)?
-                        .is_none()
-                {
-                    return Err(invalid("unsupported VMess cipher"));
-                }
-                config.uuid.as_deref()
-            }
-            OutboundConfig::Vless(config) => {
-                if let Some(flow) = config.flow.as_deref() {
-                    if optional_flow(Some(flow)).map_err(invalid)?.is_none() {
-                        return Err(invalid("unsupported VLESS flow"));
-                    }
-                    if !config.tls.enabled && config.tls.reality_public_key.is_none() {
-                        return Err(invalid("VLESS flow requires TLS or REALITY"));
-                    }
-                }
-                if config.encryption.as_deref().is_some_and(|value| {
-                    let value = value.trim();
-                    !value.is_empty()
-                        && value != "none"
-                        && !value.starts_with("mlkem768x25519plus.")
-                }) {
-                    return Err(invalid("unsupported VLESS encryption"));
-                }
-                config.uuid.as_deref()
-            }
-            OutboundConfig::Tuic(config) => config.uuid.as_deref(),
-            OutboundConfig::Juicity(config) => config.uuid.as_deref(),
-            OutboundConfig::Hysteria2(config) => {
-                if config
-                    .port_hopping
-                    .as_deref()
-                    .is_some_and(|spec| parse_port_hopping(spec).is_none())
-                {
-                    return Err(invalid("invalid hysteria2 hop port list"));
-                }
-                return self.validate_protocol();
-            }
-            _ => return self.validate_protocol(),
-        };
-        uuid::Uuid::parse_str(uuid.ok_or_else(|| invalid("missing node UUID"))?)
-            .map_err(|_| invalid("invalid node UUID"))?;
-        self.validate_protocol()
-    }
-
-    pub fn validate_protocol(&self) -> Result<(), crate::ConfigError> {
-        if let Some(config) = self.vless() {
-            config.validate(&self.name)?;
-        }
-        let Some(tls) = self.tls() else {
-            return Ok(());
-        };
-        tls.validate_alpn()?;
-        if tls.alpn.is_empty() {
-            return Ok(());
-        }
-        let reality = tls.reality_public_key.is_some()
-            || tls.reality_short_id.is_some()
-            || tls.reality_spider_x.is_some();
-        let raw_tcp = self.anytls().is_some()
-            || self
-                .transport()
-                .is_some_and(|transport| matches!(transport.transport.as_str(), "" | "tcp"));
-        if !tls.enabled || reality || !raw_tcp {
-            return Err(crate::ConfigError::Validation(format!(
-                "Node '{}' sets TLS ALPN outside enabled non-REALITY raw TCP TLS",
-                self.name
-            )));
-        }
-        Ok(())
-    }
-
     pub(crate) fn identity_material(&self) -> String {
         format!(
             "{}|{}|{}|{}|{}",
@@ -451,80 +314,6 @@ impl Node {
             legacy_id
         }
     }
-}
-
-/// Validate an assembled node collection without changing any supplied value.
-///
-/// Collection admission is deliberately separate from operator-only Config
-/// validation so runtime providers can share the intrinsic and identity checks.
-pub fn validate_node_collection(nodes: &[Node]) -> Result<(), crate::error::DetailedConfigError> {
-    fn error(
-        index: usize,
-        code: &'static str,
-        message: &'static str,
-    ) -> crate::error::DetailedConfigError {
-        let ordinal = index + 1;
-        let source = crate::diagnostic::DiagnosticSources::new(None).root();
-        let mut error = crate::error::DetailedConfigError::new(
-            crate::error::ErrorCategory::Validation,
-            code,
-            source,
-            crate::diagnostic::SettingPath::new("nodes").index(ordinal),
-            message,
-        );
-        error.diagnostic.value = crate::diagnostic::SafeValue::Ordinal(ordinal);
-        error.diagnostic.entry_index = Some(ordinal);
-        error
-    }
-
-    for (index, node) in nodes.iter().enumerate() {
-        if node.id.is_nil() {
-            return Err(error(index, "nil-node-id", "node ID must not be nil"));
-        }
-    }
-
-    for (index, node) in nodes.iter().enumerate() {
-        if node.validate_detailed().is_err() {
-            return Err(error(
-                index,
-                "invalid-node",
-                "node failed intrinsic validation",
-            ));
-        }
-    }
-
-    for (index, node) in nodes.iter().enumerate() {
-        if matches!(
-            node.outbound,
-            OutboundConfig::Direct | OutboundConfig::Block
-        ) {
-            continue;
-        }
-        if node.id != node.derive_id() {
-            return Err(error(
-                index,
-                "noncanonical-node-id",
-                "node ID does not match canonical identity",
-            ));
-        }
-    }
-
-    if nodes.len() > 1 {
-        let mut ids = std::collections::HashMap::with_capacity(nodes.len());
-        for (index, node) in nodes.iter().enumerate() {
-            if let Some(first) = ids.insert(node.id, index) {
-                let mut error = error(
-                    index,
-                    "duplicate-node-id",
-                    "node ID duplicates another node",
-                );
-                error.diagnostic.related_indices.push(first + 1);
-                return Err(error);
-            }
-        }
-    }
-
-    Ok(())
 }
 
 /// Escape raw identity fields without changing ordinary nodes' legacy material.

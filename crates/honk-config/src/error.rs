@@ -123,36 +123,6 @@ impl DetailedConfigError {
                     SettingPath::new("routing").field("rules"),
                     "unknown or malformed traffic predicate; correct the matcher syntax",
                 )),
-                "invalid node endpoint" => Some((
-                    "invalid-config-value",
-                    SettingPath::new("nodes"),
-                    "node requires an effective host and nonzero explicit port; address-only IPv6 is unsupported",
-                )),
-                "missing node UUID" | "invalid node UUID" => Some((
-                    "invalid-config-value",
-                    SettingPath::new("nodes"),
-                    "protocol requires a valid UUID",
-                )),
-                "invalid node TLS server name" => Some((
-                    "invalid-config-value",
-                    SettingPath::new("nodes").field("sni"),
-                    "canonical TLS server name must not be empty",
-                )),
-                "VLESS flow requires TLS or REALITY" => Some((
-                    "invalid-config-value",
-                    SettingPath::new("nodes").field("flow"),
-                    "VLESS flow requires TLS or REALITY",
-                )),
-                "unsupported VLESS encryption" => Some((
-                    "invalid-config-value",
-                    SettingPath::new("nodes").field("encryption"),
-                    "unsupported VLESS encryption",
-                )),
-                "invalid builtin node" | "node name cannot be empty" => Some((
-                    "invalid-config-value",
-                    SettingPath::new("nodes"),
-                    "node name and builtin identity must satisfy the protocol contract",
-                )),
                 "invalid hysteria2 hop port list" => Some((
                     "invalid-config-value",
                     SettingPath::new("nodes").field("hy2_port_hopping"),
@@ -173,11 +143,6 @@ impl DetailedConfigError {
                     "invalid-config-value",
                     SettingPath::new("nodes").field("encryption"),
                     "VMess cipher must be auto or aes-128-gcm; aliases must agree",
-                )),
-                "invalid packet network" => Some((
-                    "invalid-config-value",
-                    SettingPath::new("nodes").field("network"),
-                    "packet network must contain only tcp or udp tokens",
                 )),
                 "unsupported stream transport"
                 | "conflicting stream transport aliases"
@@ -203,13 +168,6 @@ impl DetailedConfigError {
                     SettingPath::new("nodes").field("flow"),
                     "VLESS flow must be absent or exactly xtls-rprx-vision; aliases must agree",
                 )),
-                "node section: standalone 'mux' is unsupported; set vless_mode on each VLESS share link" => {
-                    Some((
-                        "unsupported-node-mux",
-                        SettingPath::new("nodes").field("mux"),
-                        "standalone mux is unsupported; set vless_mode on each VLESS share link",
-                    ))
-                }
                 "dns.hosts_file was removed; use one or more use_host paths" => Some((
                     "removed-dns-hosts-file",
                     SettingPath::new("dns").field("hosts_file"),

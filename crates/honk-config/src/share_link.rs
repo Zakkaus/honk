@@ -37,16 +37,26 @@ impl Node {
         result.map_err(crate::error::DetailedConfigError::into_legacy)
     }
 
+    /// Parse while emitting nonterminal diagnostics through a caller-owned sink.
+    /// The terminal failure stays in the returned error so callers can bound
+    /// retained per-entry diagnostics without losing its typed cause.
+    pub fn from_share_link_with_detailed_diagnostics_emit(
+        link: &str,
+        emit: &mut impl FnMut(crate::diagnostic::DetailedDiagnostic),
+    ) -> Result<Node, crate::error::DetailedConfigError> {
+        let source = crate::diagnostic::DiagnosticSources::new(None).root();
+        Self::parse_share_link(link, &source, emit)
+    }
+
     /// Parse without logging, retaining a safe terminal diagnostic on failure.
     pub fn from_share_link_with_detailed_diagnostics(
         link: &str,
         diagnostics: &mut Vec<crate::diagnostic::DetailedDiagnostic>,
     ) -> Result<Node, crate::error::DetailedConfigError> {
-        let source = crate::diagnostic::DiagnosticSources::new(None).root();
-        let result = {
-            let mut emit = |diagnostic| diagnostics.push(diagnostic);
-            Self::parse_share_link(link, &source, &mut emit)
-        };
+        let result =
+            Self::from_share_link_with_detailed_diagnostics_emit(link, &mut |diagnostic| {
+                diagnostics.push(diagnostic);
+            });
         crate::diagnostic::finish_attempt(result, diagnostics)
     }
 
@@ -285,7 +295,7 @@ impl VmessLinkJson {
             enabled: self.tls.as_deref() == Some("tls"),
             ..Default::default()
         };
-        let host_claim = self.host;
+        let host_claim = self.host.filter(|host| !host.is_empty());
         let host_sni_claim = optional_text([host_claim.as_deref()])
             .map_err(|_| ConfigError::Parse("invalid VMess TLS server name".into()))?;
         let sni_claim = optional_text([self.sni.as_deref()])
