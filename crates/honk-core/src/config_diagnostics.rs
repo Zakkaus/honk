@@ -10,6 +10,19 @@ pub struct DiagnosticBuckets {
     pub providers: Vec<(Uuid, Vec<DetailedDiagnostic>)>,
 }
 
+pub(crate) enum DiagnosticUpdate {
+    Preserve,
+    Replace(DiagnosticBuckets),
+    Rebase {
+        static_diagnostics: Vec<DetailedDiagnostic>,
+        retained_provider_ids: std::collections::HashSet<Uuid>,
+    },
+    ReplaceProvider {
+        id: Uuid,
+        diagnostics: Vec<DetailedDiagnostic>,
+    },
+}
+
 impl DiagnosticBuckets {
     /// Replace one provider's retained body, preserving its bucket position.
     pub fn replace_provider(&mut self, id: Uuid, diagnostics: Vec<DetailedDiagnostic>) {
@@ -24,12 +37,38 @@ impl DiagnosticBuckets {
         }
     }
 
+    pub(crate) fn apply(&mut self, update: DiagnosticUpdate) {
+        match update {
+            DiagnosticUpdate::Preserve => {}
+            DiagnosticUpdate::Replace(buckets) => *self = buckets,
+            DiagnosticUpdate::Rebase {
+                static_diagnostics,
+                retained_provider_ids,
+            } => {
+                self.static_diagnostics = static_diagnostics;
+                self.providers
+                    .retain(|(id, _)| retained_provider_ids.contains(id));
+            }
+            DiagnosticUpdate::ReplaceProvider { id, diagnostics } => {
+                self.replace_provider(id, diagnostics);
+            }
+        }
+    }
+
     pub fn snapshot(&self, generation: u64, subscriptions: &[Subscription]) -> DiagnosticSnapshot {
         let mut projection = Projection::default();
         projection.push_bucket(&self.static_diagnostics);
         for subscription in subscriptions {
             if let Some((_, diagnostics)) =
                 self.providers.iter().find(|(id, _)| *id == subscription.id)
+            {
+                projection.push_bucket(diagnostics);
+            }
+        }
+        for (id, diagnostics) in &self.providers {
+            if !subscriptions
+                .iter()
+                .any(|subscription| subscription.id == *id)
             {
                 projection.push_bucket(diagnostics);
             }

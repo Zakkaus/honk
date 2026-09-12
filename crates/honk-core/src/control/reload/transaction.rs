@@ -1,4 +1,5 @@
 use super::*;
+use crate::config_diagnostics::DiagnosticUpdate;
 
 #[cfg(test)]
 pub(in crate::control) struct PreDnsPublicationHookGuard<'a> {
@@ -86,11 +87,17 @@ impl ControlPlane {
     /// subscription merges, and public callers share this serialized path.
     pub(in crate::control) async fn apply_runtime_config(
         &self,
-        new_config: Config,
+        mut new_config: Config,
+        diagnostics: crate::config_diagnostics::DiagnosticBuckets,
         drain: &DrainTracker,
     ) -> bool {
         let _reload = self.reload_lock.lock().await;
-        match self.apply_runtime_config_locked(new_config, drain).await {
+        crate::dns::ecs::resolve_client_subnet(&mut new_config.dns).await;
+        let update = DiagnosticUpdate::Replace(diagnostics);
+        match self
+            .apply_resolved_runtime_config_locked(new_config, drain, update, None)
+            .await
+        {
             Ok(applied) => applied,
             Err(error) => {
                 crate::report_runtime_admission_error(&error);
@@ -109,41 +116,19 @@ impl ControlPlane {
         let current_guard = self.config.read().await;
         let current = Arc::clone(&current_guard);
         let retained_providers = rebase_subscription_nodes(&current, &mut new_config);
-        let mut candidate_buckets = crate::config_diagnostics::DiagnosticBuckets {
-            static_diagnostics: diagnostics,
-            providers: Vec::new(),
-        };
-        {
-            let active = self.diagnostics.read();
-            candidate_buckets.providers.extend(
-                active
-                    .buckets
-                    .providers
-                    .iter()
-                    .filter(|(id, _)| retained_providers.contains(id))
-                    .cloned(),
-            );
-        }
         drop(current_guard);
         new_config.ensure_local_direct_rules();
         crate::dns::ecs::resolve_client_subnet(&mut new_config.dns).await;
-        self.apply_resolved_runtime_config_locked_with_authorizations(
+        self.apply_resolved_runtime_config_locked(
             new_config,
             drain,
+            DiagnosticUpdate::Rebase {
+                static_diagnostics: diagnostics,
+                retained_provider_ids: retained_providers,
+            },
             Some(authorizations),
-            Some(candidate_buckets),
         )
         .await
-    }
-
-    pub(in crate::control) async fn apply_runtime_config_locked(
-        &self,
-        mut new_config: Config,
-        drain: &DrainTracker,
-    ) -> Result<bool, honk_config::error::DetailedConfigError> {
-        crate::dns::ecs::resolve_client_subnet(&mut new_config.dns).await;
-        self.apply_resolved_runtime_config_locked(new_config, drain)
-            .await
     }
 
     /// Validate and publish an explicit runtime configuration through the serialized
@@ -152,7 +137,14 @@ impl ControlPlane {
     /// Operator-document restrictions apply here, not to provider nodes admitted by
     /// subscription merges. Direct callers cannot reconcile process-owned workers;
     /// use SIGHUP to add, remove, or change subscription worker specifications.
-    pub async fn reload_runtime_config(&self, new_config: Config) -> bool {
+    ///
+    /// The supplied diagnostics are the candidate's full provenance and replace
+    /// the active provenance only when the candidate is committed.
+    pub async fn reload_runtime_config(
+        &self,
+        new_config: Config,
+        diagnostics: crate::config_diagnostics::DiagnosticBuckets,
+    ) -> bool {
         // A candidate equal to the admitted active configuration has already
         // passed exactly these checks; re-deriving 512 node identities on an
         // identical SIGHUP is the cost the reload benchmark guards against.
@@ -162,40 +154,31 @@ impl ControlPlane {
             return false;
         }
         let drain = Arc::clone(&self.drain_tracker);
-        self.apply_runtime_config(new_config, &drain).await
+        self.apply_runtime_config(new_config, diagnostics, &drain)
+            .await
     }
 
     pub(in crate::control) async fn apply_resolved_runtime_config_locked(
         &self,
-        new_config: Config,
-        drain: &DrainTracker,
-    ) -> Result<bool, honk_config::error::DetailedConfigError> {
-        self.apply_resolved_runtime_config_locked_with_authorizations(new_config, drain, None, None)
-            .await
-    }
-
-    pub(in crate::control) async fn apply_resolved_runtime_config_locked_with_diagnostics(
-        &self,
-        new_config: Config,
-        drain: &DrainTracker,
-        diagnostic_update: Option<crate::config_diagnostics::DiagnosticBuckets>,
-    ) -> Result<bool, honk_config::error::DetailedConfigError> {
-        self.apply_resolved_runtime_config_locked_with_authorizations(
-            new_config,
-            drain,
-            None,
-            diagnostic_update,
-        )
-        .await
-    }
-
-    async fn apply_resolved_runtime_config_locked_with_authorizations(
-        &self,
         mut new_config: Config,
         drain: &DrainTracker,
+        diagnostic_update: DiagnosticUpdate,
         authorizations: Option<&mut crate::subscription::SubscriptionAuthorizations>,
-        mut diagnostic_update: Option<crate::config_diagnostics::DiagnosticBuckets>,
     ) -> Result<bool, honk_config::error::DetailedConfigError> {
+        if let DiagnosticUpdate::Replace(buckets) = &diagnostic_update
+            && buckets.providers.len() > 1
+        {
+            let mut provider_ids =
+                std::collections::HashSet::with_capacity(buckets.providers.len());
+            if buckets
+                .providers
+                .iter()
+                .any(|(id, _)| !provider_ids.insert(*id))
+            {
+                error!("reload rejected: duplicate provider diagnostic buckets");
+                return Ok(false);
+            }
+        }
         if let Err(error) =
             crate::subscription::validate_subscription_ids(&new_config.subscriptions)
         {
@@ -243,9 +226,9 @@ impl ControlPlane {
                     policy.matches_artifacts(&hosts_fingerprint, &dns_geo_fingerprint)
                 })
             {
-                if let Some(buckets) = diagnostic_update.take() {
+                if !matches!(&diagnostic_update, DiagnosticUpdate::Preserve) {
                     let _config = self.config.write().await;
-                    self.diagnostics.write().buckets = buckets;
+                    self.diagnostics.write().buckets.apply(diagnostic_update);
                 }
                 info!("Configuration unchanged — retaining active runtime generation");
                 return Ok(true);
@@ -591,9 +574,7 @@ impl ControlPlane {
                 {
                     let mut active_diagnostics = self.diagnostics.write();
                     active_diagnostics.generation = generation.get();
-                    if let Some(buckets) = diagnostic_update {
-                        active_diagnostics.buckets = buckets;
-                    }
+                    active_diagnostics.buckets.apply(diagnostic_update);
                 }
                 if let Some(authorizations) = authorizations {
                     authorizations

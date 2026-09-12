@@ -60,7 +60,8 @@ async fn assert_public_merge_rejected(
 ) {
     let before = config.clone();
     let cp = control_plane(config).await;
-    cp.merge_subscription_nodes(subscription_id, nodes).await;
+    cp.merge_subscription_nodes(subscription_id, nodes, Vec::new())
+        .await;
     assert_eq!(
         cp.config_handle().read().await.as_ref(),
         &before,
@@ -100,7 +101,7 @@ async fn c20_public_merge_rejects_stale_id_before_noop_and_preserves_membership(
     let before = config.clone();
     let cp = control_plane(config).await;
 
-    cp.merge_subscription_nodes(subscription_id, vec![canonical.clone()])
+    cp.merge_subscription_nodes(subscription_id, vec![canonical.clone()], Vec::new())
         .await;
     assert_eq!(
         cp.config_handle().read().await.as_ref(),
@@ -110,7 +111,7 @@ async fn c20_public_merge_rejects_stale_id_before_noop_and_preserves_membership(
 
     let mut stale = canonical;
     stale.address = "192.0.2.11".into();
-    cp.merge_subscription_nodes(subscription_id, vec![stale])
+    cp.merge_subscription_nodes(subscription_id, vec![stale], Vec::new())
         .await;
 
     assert_eq!(
@@ -130,7 +131,7 @@ async fn c20_public_merge_rejects_two_ids_for_one_endpoint() {
     let mut conflicting = canonical.clone();
     conflicting.name = "second-id".into();
     conflicting.id = uuid::Uuid::new_v4();
-    cp.merge_subscription_nodes(subscription_id, vec![canonical, conflicting])
+    cp.merge_subscription_nodes(subscription_id, vec![canonical, conflicting], Vec::new())
         .await;
 
     assert_eq!(
@@ -195,7 +196,7 @@ async fn c20_public_merge_rebuilds_filters_and_prunes_removed_direct_ids() {
     let cp = control_plane(config).await;
 
     let replacement = canonical_socks5("provider-new", "192.0.2.11", 1080, Some(subscription_id));
-    cp.merge_subscription_nodes(subscription_id, vec![replacement.clone()])
+    cp.merge_subscription_nodes(subscription_id, vec![replacement.clone()], Vec::new())
         .await;
 
     let config_handle = cp.config_handle();
@@ -215,7 +216,7 @@ async fn c20_public_merge_sets_missing_provider_provenance() {
     let before = config.clone();
     let cp = control_plane(config).await;
 
-    cp.merge_subscription_nodes(subscription_id, vec![candidate])
+    cp.merge_subscription_nodes(subscription_id, vec![candidate], Vec::new())
         .await;
 
     assert_eq!(
@@ -313,7 +314,7 @@ async fn c20_public_reload_rejects_stale_config_before_side_effects() {
 
     let mut stale = config.clone();
     stale.nodes[0].address = "192.0.2.21".into();
-    assert!(!cp.reload_runtime_config(stale).await);
+    assert!(!cp.reload_runtime_config(stale, Default::default()).await);
     assert_eq!(
         cp.config_handle().read().await.as_ref(),
         &config,

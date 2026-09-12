@@ -350,3 +350,74 @@ fn include_split_opener_keeps_bounded_file_capture() {
         1
     );
 }
+
+#[test]
+fn adjacent_include_quotes_protect_filename_punctuation_without_leaking() {
+    for name in [
+        "quoted # name.dae",
+        "quoted { name.dae",
+        "quoted } name.dae",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("config.dae");
+        write(
+            &dir.path().join("first.dae"),
+            "global { tproxy_port: 32123 }",
+        );
+        write(&dir.path().join(name), "global { check_tolerance: 75ms }");
+        write(
+            &entry,
+            &format!(
+                "include {{\n 'first.dae''{name}' # {{ }}\n}}\nglobal {{\n log_file: 'one''two # comment\n}}\n"
+            ),
+        );
+        let mut diagnostics = Vec::new();
+        let config =
+            Config::from_file_with_detailed_diagnostics(entry.to_str().unwrap(), &mut diagnostics)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(config.global.tproxy_port, 32123);
+        assert_eq!(config.global.check_tolerance_ms, 75);
+        assert_eq!(config.global.log_file, "'one''two");
+        assert!(diagnostics.is_empty(), "{name}: {diagnostics:?}");
+    }
+}
+
+#[test]
+fn adjacent_include_quote_errors_are_structural_in_string_mode() {
+    let input = "include {\n 'first.dae''unterminated\n}\n";
+    let mut diagnostics = Vec::new();
+    let error =
+        honk_config::parser::parse_dae_config_with_detailed_diagnostics(input, &mut diagnostics)
+            .unwrap_err();
+    assert_eq!(error.diagnostic.code, "unterminated-quote");
+    assert_eq!(error.diagnostic.line, Some(2));
+    assert_eq!(
+        error.diagnostic.span.as_ref().unwrap().start,
+        input.find("''").unwrap() + 1
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.terminal)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn include_adjacent_quotes_stop_at_bare_path_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = dir.path().join("config.dae");
+    write(
+        &dir.path().join("first.dae"),
+        "global { tproxy_port: 32123 }",
+    );
+    write(
+        &dir.path().join("a('x''y.dae"),
+        "global { log_level: debug }",
+    );
+    write(&entry, "include { 'first.dae'a('x''y.dae }");
+    let config = Config::from_file(entry.to_str().unwrap()).unwrap();
+    assert_eq!(config.global.tproxy_port, 32123);
+    assert_eq!(config.global.log_level, "debug");
+}

@@ -1,3 +1,4 @@
+use honk_config::error::ErrorCategory;
 use honk_config::parser::parse_dae_config_with_detailed_diagnostics;
 
 fn input(name: &str) -> String {
@@ -33,10 +34,17 @@ fn dns_hosts_keep_glued_hash_data_and_source_order() {
 fn dns_scalar_unterminated_quote_is_a_terminal_lexical_error() {
     let source = input("k05-scalar-quote");
     let mut diagnostics = Vec::new();
+    parse_dae_config_with_detailed_diagnostics("dns {\n unknown: value\n}", &mut diagnostics)
+        .unwrap();
+    let prefix = diagnostics.clone();
     let error = parse_dae_config_with_detailed_diagnostics(&source, &mut diagnostics).unwrap_err();
+    let quote = source.find('\'').unwrap();
+    let line_end = quote + source[quote..].find('\n').unwrap();
+    assert_eq!(error.category, ErrorCategory::Parse);
     assert_eq!(error.diagnostic.code, "unterminated-quote");
     assert_eq!(error.diagnostic.line, Some(2));
-    assert!(error.diagnostic.span.is_some());
+    assert_eq!(error.diagnostic.span, Some(quote..line_end));
+    assert_eq!(&diagnostics[..prefix.len()], prefix.as_slice());
     assert_eq!(
         diagnostics
             .iter()
@@ -44,6 +52,19 @@ fn dns_scalar_unterminated_quote_is_a_terminal_lexical_error() {
             .count(),
         1
     );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.terminal)
+            .count(),
+        1
+    );
+    let terminal = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.terminal)
+        .unwrap();
+    assert!(terminal.source.same_source(&error.diagnostic.source));
+    assert!(!prefix[0].source.same_source(&error.diagnostic.source));
 }
 
 #[test]

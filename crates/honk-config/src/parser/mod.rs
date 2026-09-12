@@ -91,11 +91,13 @@ pub(crate) fn parse_dae_config_file_attempt(
 ) -> Result<Config, DetailedConfigError> {
     let source = DiagnosticSources::new(Some(path.as_ref().to_path_buf())).root();
     let mut sink = ParserDiagnostics::new(diagnostics, source);
-    match parse_dae_file_inner(path, &mut sink, semantic) {
+    let result = match parse_dae_file_inner(path, &mut sink, semantic) {
         Ok(config) => Ok(config),
         Err(ParseFailure::Detailed(error)) => Err(error),
         Err(ParseFailure::Legacy(error)) => Err(sink.error(error)),
-    }
+    };
+    sink.finish();
+    result
 }
 
 fn parse_dae_file_inner(
@@ -237,10 +239,11 @@ impl IncludeLoader {
                 self.entry_input = input.clone();
             }
             let source_text = lexer::Source::shared(input, source.clone());
-            let document = Document::parse(source_text, diagnostics.output).map_err(|error| {
-                self.saw_include |= error.saw_include;
-                diagnostics.structure_error(error.error)
-            })?;
+            let document =
+                Document::parse_attempt(source_text, diagnostics.output).map_err(|error| {
+                    self.saw_include |= error.saw_include;
+                    ParseFailure::Detailed(error.error)
+                })?;
             let mut patterns = Vec::new();
             for segment in document
                 .sections()
@@ -348,9 +351,8 @@ fn normalize_dae_glob_pattern(pattern: &Path) -> PathBuf {
 }
 
 fn warn_include_hash(segment: &Segment<'_, '_>, diagnostics: &mut ParserDiagnostics<'_>) {
-    if let Some(mut body) = segment.body() {
-        while body.next() {
-            let token = body.token().unwrap();
+    if let Some(body) = segment.body() {
+        for token in body.flat_map(|entry| entry.tokens()) {
             let text = read::Text {
                 source: segment.source(),
                 tokens: std::slice::from_ref(token),
@@ -374,11 +376,10 @@ fn parse_include_body(
     source: &Path,
 ) -> Result<Vec<String>, crate::ConfigError> {
     let mut patterns = Vec::new();
-    let Some(mut body) = segment.body() else {
+    let Some(body) = segment.body() else {
         return Ok(patterns);
     };
-    while body.next() {
-        let entry = body.next_segment().expect("include pattern or block");
+    for entry in body {
         if entry.body().is_some() {
             return Err(crate::ConfigError::Include(format!(
                 "include section in '{}' accepts only file patterns",
@@ -401,7 +402,7 @@ fn parse_include_body(
                     source.display()
                 )));
             }
-            // Adjacent quoted paths remain file-reader syntax, not lexical boundaries.
+            // Adjacent quoted paths share a lexer token.
             let value = if matches!(bytes[index], b'\'' | b'"') {
                 let start = index + 1;
                 let end = quoted_end(bytes, index).ok_or_else(|| {
@@ -459,8 +460,8 @@ pub fn parse_dae_config_with_detailed_diagnostics(
     let source = DiagnosticSources::new(None).root();
     let mut sink = ParserDiagnostics::new(diagnostics, source.clone());
     let result: Result<Config, ParseFailure> = (|| {
-        let document = Document::parse(lexer::Source::new(input, source), sink.output)
-            .map_err(|error| sink.structure_error(error.error))?;
+        let document = Document::parse_attempt(lexer::Source::new(input, source), sink.output)
+            .map_err(|error| ParseFailure::Detailed(error.error))?;
         for segment in document
             .sections()
             .filter(|segment| segment.header() == "include")
@@ -473,6 +474,7 @@ pub fn parse_dae_config_with_detailed_diagnostics(
         ParseFailure::Detailed(error) => error,
         ParseFailure::Legacy(error) => sink.error(error),
     });
+    sink.finish();
     finish_attempt(result, sink.output)
 }
 

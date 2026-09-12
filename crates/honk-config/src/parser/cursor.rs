@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use super::lexer::{Source, Span, Token, TokenKind};
+use super::lexer::{Lexer, Source, Span, Token, TokenKind};
 use crate::diagnostic::{DetailedDiagnostic, SettingPath, Severity};
 use crate::error::{DetailedConfigError, ErrorCategory};
 
@@ -83,6 +83,12 @@ struct Frame {
     quote: Option<usize>,
 }
 
+#[derive(Clone, Copy)]
+struct PendingHeader {
+    start: usize,
+    has_unquoted_colon: bool,
+}
+
 impl<'a> Document<'a> {
     /// Standalone structural attempt: appends diagnostics, including one terminal cause.
     /// Recoverable error tokens remain visible to the owning section reader.
@@ -90,58 +96,69 @@ impl<'a> Document<'a> {
         source: Source<'a>,
         diagnostics: &mut Vec<DetailedDiagnostic>,
     ) -> Result<Self, StructureError> {
-        let mut lexical = Vec::new();
-        let tokens = source.tokenize(&mut lexical);
-        Self::from_tokens(source, tokens, lexical, diagnostics)
+        let result = Self::parse_attempt(source, diagnostics);
+        if let Err(error) = &result {
+            diagnostics.push((*error.error.diagnostic).clone());
+        }
+        result
     }
 
-    pub(super) fn from_tokens(
+    pub(super) fn parse_attempt(
         source: Source<'a>,
-        mut tokens: Vec<Token>,
-        lexical: Vec<DetailedDiagnostic>,
         diagnostics: &mut Vec<DetailedDiagnostic>,
     ) -> Result<Self, StructureError> {
-        let comments = tokens
-            .iter()
-            .filter(|token| token.kind == TokenKind::Comment)
-            .cloned()
-            .collect();
-        tokens.retain(|token| !token.kind.is_trivia());
         let mut doc = Self {
-            closes: vec![usize::MAX; tokens.len()],
+            closes: Vec::new(),
             source,
-            tokens,
-            comments,
+            tokens: Vec::new(),
+            comments: Vec::new(),
             sections: Vec::new(),
         };
-        let mut lexical = lexical.into_iter();
+        let mut lexer = Lexer::default();
         let mut frames: Vec<Frame> = Vec::new();
         let mut root_ranges = Vec::new();
-        let mut pending: Option<usize> = None;
+        let mut pending: Option<PendingHeader> = None;
         let mut saw_open = false;
         let mut saw_include = false;
-        let mut provisional = Vec::new();
-        for (index, token) in doc.tokens.iter().enumerate() {
-            let split_include = pending.is_some_and(|start| {
+        let attempt_start = diagnostics.len();
+        loop {
+            let include_paths = frames
+                .first()
+                .is_some_and(|frame| doc.source.raw(frame.header) == "include");
+            let Some(token) = lexer.next_token(&doc.source, include_paths) else {
+                break;
+            };
+            match token.kind {
+                TokenKind::Comment => {
+                    doc.comments.push(token);
+                    continue;
+                }
+                kind if kind.is_trivia() => continue,
+                _ => {}
+            }
+            let index = doc.tokens.len();
+            doc.tokens.push(token);
+            doc.closes.push(usize::MAX);
+            let token = &doc.tokens[index];
+            let split_include = pending.is_some_and(|header| {
+                let start = header.start;
                 frames.is_empty()
                     && index == start + 1
                     && token.kind == TokenKind::OpenBrace
                     && doc.source.raw(doc.tokens[start].span) == "include"
             });
-            let compact_empty = pending.is_some_and(|start| {
+            let compact_empty = pending.is_some_and(|header| {
+                let start = header.start;
                 frames.is_empty()
                     && token.kind == TokenKind::Word
                     && doc.source.raw(token.span) == "{}"
-                    && !doc.tokens[start..index]
-                        .iter()
-                        .any(|header| doc.unquoted_contains(header, b':'))
+                    && !header.has_unquoted_colon
                     && (token.line == doc.tokens[start].line
                         || (index == start + 1
                             && doc.source.raw(doc.tokens[start].span) == "include"))
             });
             if compact_empty {
-                diagnostics.append(&mut provisional);
-                let start = pending.take().unwrap();
+                let start = pending.take().unwrap().start;
                 let header = doc.range_span(start..index);
                 let name = doc.source.raw(header);
                 if token.line != doc.tokens[start].line {
@@ -169,27 +186,19 @@ impl<'a> Document<'a> {
                 saw_open = true;
                 continue;
             }
-            if let Some(start) = pending
+            if let Some(header) = pending
                 && index > 0
                 && token.line != doc.tokens[index - 1].line
                 && !split_include
             {
                 if frames.is_empty() {
-                    doc.warn_statement(
-                        start..index,
-                        if saw_open {
-                            diagnostics
-                        } else {
-                            &mut provisional
-                        },
-                    );
+                    doc.warn_statement(header.start..index, diagnostics);
                 }
                 pending = None;
             }
             match token.kind {
                 TokenKind::OpenBrace => {
-                    diagnostics.append(&mut provisional);
-                    let Some(start) = pending.take() else {
+                    let Some(pending_header) = pending.take() else {
                         doc.warn_comment_braces(
                             &root_ranges,
                             frames.first(),
@@ -209,6 +218,7 @@ impl<'a> Document<'a> {
                             diagnostics,
                         ));
                     };
+                    let start = pending_header.start;
                     let header = doc.range_span(start..index);
                     let root = frames.is_empty();
                     let name = doc.source.raw(header);
@@ -241,15 +251,10 @@ impl<'a> Document<'a> {
                 }
                 TokenKind::CloseBrace => {
                     if frames.is_empty() {
-                        let output = if saw_open {
-                            &mut *diagnostics
-                        } else {
-                            &mut provisional
-                        };
-                        if let Some(start) = pending {
-                            doc.warn_statement(start..index, output);
+                        if let Some(header) = pending {
+                            doc.warn_statement(header.start..index, diagnostics);
                         }
-                        output.push(doc.source.diagnostic(
+                        diagnostics.push(doc.source.diagnostic(
                             token.span,
                             Severity::Warning,
                             "unmatched-close",
@@ -268,11 +273,8 @@ impl<'a> Document<'a> {
                     }
                     pending = None;
                 }
-                TokenKind::Error { .. } => {
-                    diagnostics.append(&mut provisional);
-                    let diagnostic = lexical
-                        .next()
-                        .expect("one diagnostic per lexical error token");
+                TokenKind::Error { opener } => {
+                    let diagnostic = doc.source.quote_error(opener, token.span.end);
                     let position = diagnostics.len();
                     let recoverable = frames.first().is_some_and(|frame| {
                         Root::parse(doc.source.raw(frame.header))
@@ -294,17 +296,25 @@ impl<'a> Document<'a> {
                         }
                         frame.quote = Some(position);
                     }
-                    pending.get_or_insert(index);
+                    pending.get_or_insert(PendingHeader {
+                        start: index,
+                        has_unquoted_colon: false,
+                    });
                 }
                 TokenKind::Word => {
-                    pending.get_or_insert(index);
+                    let header = pending.get_or_insert(PendingHeader {
+                        start: index,
+                        has_unquoted_colon: false,
+                    });
+                    if frames.is_empty() && !header.has_unquoted_colon {
+                        header.has_unquoted_colon = doc.unquoted_contains(token, b':');
+                    }
                     let raw = doc.source.raw(token.span);
                     let glued_empty_root =
                         frames.is_empty() && raw.len() > 2 && raw.ends_with("{}");
                     if (raw.ends_with('{') || glued_empty_root)
                         && !token.quoted.iter().any(|span| span.end == token.span.end)
                     {
-                        diagnostics.append(&mut provisional);
                         doc.warn_comment_braces(
                             &root_ranges,
                             frames.first(),
@@ -368,6 +378,7 @@ impl<'a> Document<'a> {
             ));
         }
         if !saw_open {
+            diagnostics.truncate(attempt_start);
             let eof = doc
                 .source
                 .span(doc.source.text().len(), doc.source.text().len());
@@ -384,8 +395,8 @@ impl<'a> Document<'a> {
                 diagnostics,
             ));
         }
-        if let Some(start) = pending {
-            doc.warn_statement(start..doc.tokens.len(), diagnostics);
+        if let Some(header) = pending {
+            doc.warn_statement(header.start..doc.tokens.len(), diagnostics);
         }
         Ok(doc)
     }
@@ -400,7 +411,9 @@ impl<'a> Document<'a> {
     pub fn sections(&self) -> impl DoubleEndedIterator<Item = Segment<'_, 'a>> {
         self.sections.iter().map(|range| {
             let mut segment = self.segment(range.clone());
-            segment.compact_root = segment.open.is_none();
+            if segment.open.is_none() {
+                segment.header = self.range_span(range.start..range.end - 1);
+            }
             segment
         })
     }
@@ -411,26 +424,25 @@ impl<'a> Document<'a> {
             .find(|&i| self.tokens[i].kind == TokenKind::OpenBrace);
         Segment {
             doc: self,
-            range,
+            range: range.clone(),
             open,
-            compact_root: false,
+            header: self.range_span(range.start..open.unwrap_or(range.end)),
         }
     }
 
     /// Whether `byte` occurs in the token outside its quoted spans; punctuation
     /// inside quotes is data and never a structural signal.
     fn unquoted_contains(&self, token: &Token, byte: u8) -> bool {
-        self.source
-            .raw(token.span)
-            .bytes()
-            .enumerate()
-            .any(|(offset, b)| {
-                b == byte
-                    && !token.quoted.iter().any(|quote| {
-                        quote.start <= token.span.start + offset
-                            && token.span.start + offset < quote.end
-                    })
-            })
+        let bytes = self.source.raw(token.span).as_bytes();
+        let mut start = 0;
+        for quote in &token.quoted {
+            let end = quote.start - token.span.start;
+            if bytes[start..end].contains(&byte) {
+                return true;
+            }
+            start = quote.end - token.span.start;
+        }
+        bytes[start..].contains(&byte)
     }
 
     fn range_span(&self, range: Range<usize>) -> Span {
@@ -512,9 +524,7 @@ fn reject(
 ) -> StructureError {
     diagnostic.terminal = true;
     if let Some(index) = existing {
-        diagnostics[index] = diagnostic.clone();
-    } else {
-        diagnostics.push(diagnostic.clone());
+        diagnostics.remove(index);
     }
     StructureError {
         error: DetailedConfigError {
@@ -531,7 +541,7 @@ pub struct Segment<'d, 'a> {
     doc: &'d Document<'a>,
     range: Range<usize>,
     open: Option<usize>,
-    compact_root: bool,
+    header: Span,
 }
 
 impl<'d, 'a> Segment<'d, 'a> {
@@ -539,17 +549,11 @@ impl<'d, 'a> Segment<'d, 'a> {
         self.doc.range_span(self.range.clone())
     }
     pub fn header_span(&self) -> Span {
-        let end = self
-            .open
-            .unwrap_or(self.range.end - usize::from(self.compact_root));
-        self.doc.range_span(self.range.start..end)
+        self.header
     }
 
     pub fn header(&self) -> &'d str {
         self.doc.source.raw(self.header_span())
-    }
-    pub fn cursor(&self) -> Dispenser<'d, 'a> {
-        Dispenser::new(self.doc, self.range.clone())
     }
     pub fn body(&self) -> Option<Dispenser<'d, 'a>> {
         self.open
@@ -586,53 +590,22 @@ impl<'d, 'a> Segment<'d, 'a> {
 pub struct Dispenser<'d, 'a> {
     doc: &'d Document<'a>,
     range: Range<usize>,
-    position: Option<usize>,
 }
 
 impl<'d, 'a> Dispenser<'d, 'a> {
     fn new(doc: &'d Document<'a>, range: Range<usize>) -> Self {
-        Self {
-            doc,
-            range,
-            position: None,
-        }
+        Self { doc, range }
     }
+}
 
-    fn next_index(&self) -> Option<usize> {
-        let index = self.position.map_or(self.range.start, |i| i + 1);
-        (index < self.range.end).then_some(index)
-    }
+impl<'d, 'a> Iterator for Dispenser<'d, 'a> {
+    type Item = Segment<'d, 'a>;
 
-    pub fn token(&self) -> Option<&'d Token> {
-        self.position.map(|i| &self.doc.tokens[i])
-    }
-    pub fn span(&self) -> Option<Span> {
-        self.token().map(|token| token.span)
-    }
-    pub fn raw(&self) -> Option<&'d str> {
-        self.span().map(|span| self.doc.source.raw(span))
-    }
-
-    /// Advance without clearing the current token on exhaustion, as in Caddy's dispenser.
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> bool {
-        if let Some(index) = self.next_index() {
-            self.position = Some(index);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Capture the current statement and its optional block, ending on its last token.
-    pub fn next_segment(&mut self) -> Option<Segment<'d, 'a>> {
-        let start = self.position?;
-        if matches!(
-            self.doc.tokens[start].kind,
-            TokenKind::OpenBrace | TokenKind::CloseBrace
-        ) {
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.range.is_empty() {
             return None;
         }
+        let start = self.range.start;
         let mut end = start + 1;
         while end < self.range.end
             && (same_physical_line(&self.doc.tokens[start], &self.doc.tokens[end])
@@ -647,7 +620,7 @@ impl<'d, 'a> Dispenser<'d, 'a> {
                 _ => end += 1,
             }
         }
-        self.position = Some(end - 1);
+        self.range.start = end;
         Some(self.doc.segment(start..end))
     }
 }

@@ -13,11 +13,10 @@ pub(super) fn parse_node_section(
     let mut nodes = Vec::new();
     let mut entry_index = 0;
     for root in section {
-        let Some(mut body) = root.body() else {
+        let Some(body) = root.body() else {
             continue;
         };
-        while body.next() {
-            let child = body.next_segment().expect("statement or block header");
+        for child in body {
             visit_node_segment(&child, diagnostics, &mut nodes, &mut entry_index)?;
         }
     }
@@ -37,9 +36,8 @@ fn visit_node_segment<'d, 'a>(
             "legacy-wrapper",
             "nested node wrapper is retained for compatibility",
         );
-        if let Some(mut body) = segment.body() {
-            while body.next() {
-                let child = body.next_segment().expect("statement or block header");
+        if let Some(body) = segment.body() {
+            for child in body {
                 visit_node_segment(&child, diagnostics, nodes, entry_index)?;
             }
         }
@@ -169,11 +167,10 @@ pub(super) fn parse_subscription_section(
     let mut subscriptions = Vec::new();
     let mut entry_index = 0;
     for root in section {
-        let Some(mut body) = root.body() else {
+        let Some(body) = root.body() else {
             continue;
         };
-        while body.next() {
-            let child = body.next_segment().expect("statement or block header");
+        for child in body {
             visit_subscription_segment(&child, diagnostics, &mut subscriptions, &mut entry_index);
         }
     }
@@ -187,8 +184,8 @@ fn visit_subscription_segment<'d, 'a>(
     entry_index: &mut usize,
 ) {
     if let Some(tag) = block_tag(segment) {
-        let index = subscriptions.len() + 1;
-        diagnostics.subscription_text(Text::segment(segment).trim(), index);
+        *entry_index += 1;
+        diagnostics.subscription_text(Text::segment(segment).trim(), *entry_index);
         subscriptions.push(parse_subscription_block(segment, tag, diagnostics));
         return;
     }
@@ -219,9 +216,8 @@ fn visit_subscription_segment<'d, 'a>(
         if let Some(subscription) = parse_subscription_entry(entry, diagnostics) {
             subscriptions.push(subscription);
         }
-        if let Some(mut body) = segment.body() {
-            while body.next() {
-                let child = body.next_segment().expect("statement or block header");
+        if let Some(body) = segment.body() {
+            for child in body {
                 visit_subscription_segment(&child, diagnostics, subscriptions, entry_index);
             }
         }
@@ -257,11 +253,10 @@ fn collect_subscription_fields<'d, 'a>(
     diagnostics: &mut ParserDiagnostics<'_>,
     fields: &mut SubscriptionFields<'d, 'a>,
 ) {
-    let Some(mut body) = segment.body() else {
+    let Some(body) = segment.body() else {
         return;
     };
-    while body.next() {
-        let child = body.next_segment().expect("statement or block header");
+    for child in body {
         let mut text = Text::segment(&child).trim();
         if child.body().is_some()
             && let Some(opener) = child
@@ -341,13 +336,13 @@ fn parse_subscription_entry(
         return None;
     }
     let (tag, value) = split_entry(text, diagnostics);
+    let (value, user_agent) = parse_subscription_value(value, diagnostics)?;
     let (tag, value) = if tag.is_none() {
         embedded_tag(value, diagnostics).unwrap_or((None, value))
     } else {
         (tag, value)
     };
-    let (url_text, user_agent) = parse_subscription_value(value, diagnostics)?;
-    let url = url_text.raw().to_owned();
+    let url = value.unquote().raw().to_owned();
     let name = if let Some(tag) = tag {
         canonical_tag(tag)
     } else {
@@ -398,14 +393,14 @@ fn parse_subscription_value<'d, 'a>(
 ) -> Option<(Text<'d, 'a>, Option<String>)> {
     let value = value.trim();
     let Some(quote) = value.quoted_prefix() else {
-        return Some((value.unquote(), None));
+        return Some((value, None));
     };
     if quote.span == value.span {
-        return Some((quote.unquote(), None));
+        return Some((quote, None));
     }
     let remainder = value.sub(quote.raw().len(), value.raw().len()).trim();
     if warn_glued_comment(remainder, diagnostics) {
-        return Some((quote.unquote(), None));
+        return Some((quote, None));
     }
     if !remainder.raw().starts_with('(') {
         remainder.trim().notice(
@@ -439,7 +434,7 @@ fn parse_subscription_value<'d, 'a>(
         );
         return None;
     }
-    Some((quote.unquote(), Some(canonical_ua(ua_text))))
+    Some((quote, Some(canonical_ua(ua_text))))
 }
 
 fn canonical_ua(value: Text<'_, '_>) -> String {
@@ -463,12 +458,20 @@ fn split_entry<'d, 'a>(
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> (Option<Text<'d, 'a>>, Text<'d, 'a>) {
     let text = text.trim();
-    let Some(colon) = text.find(":") else {
+    let colon = if let Some(quote) = text.quoted_prefix() {
+        let remainder = text.sub(quote.raw().len(), text.raw().len()).trim();
+        if !remainder.raw().starts_with(':') {
+            return (None, text);
+        }
+        remainder.span.start - text.span.start
+    } else if let Some(colon) = text.find(":") {
+        if text.raw()[colon..].starts_with("://") {
+            return (None, text);
+        }
+        colon
+    } else {
         return (None, text);
     };
-    if text.raw()[colon..].starts_with("://") {
-        return (None, text);
-    }
     let raw_tag = text.sub(0, colon);
     let tag = raw_tag.trim();
     let value = text.sub(colon + 1, text.raw().len()).trim();

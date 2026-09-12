@@ -216,6 +216,26 @@ fn quoted_slashes_in_hash_comments_do_not_report_a_changed_rule() {
 }
 
 #[test]
+fn completed_quote_before_unquoted_slash_in_hash_comment_reports_changed_rule() {
+    let source = "dns { routing { request {\n qname(a) -> asis # 'note' // tail\n } } }";
+    let (config, diagnostics) = parse(source);
+    assert_eq!(
+        config.dns.routing.request.rules[0].action,
+        DnsRequestAction::AsIs
+    );
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "legacy-dns-hash")
+        .expect("legacy DNS hash warning");
+    assert_eq!(&source[warning.span.clone().unwrap()], "#");
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "legacy-slash-comment")
+    );
+}
+
+#[test]
 fn unicode_comment_gaps_keep_located_migration_notices() {
     let (config, diagnostics) = parse(
         "dns {\n upstream { v: 'udp://8.8.8.8:53'\u{a0}# comment\n }\n routing { request {\n qname(a#b) -> reject\u{a0}# comment\n } }\n}",

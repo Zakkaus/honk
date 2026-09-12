@@ -148,102 +148,24 @@ impl<'a> Source<'a> {
     /// Includes trivia, so concatenating raw token spans recovers the entire input.
     /// Quote errors append once and remain nonterminal until the reader decides recovery.
     pub fn tokenize(&self, diagnostics: &mut Vec<DetailedDiagnostic>) -> Vec<Token> {
-        let span = self.span(0, self.text().len());
-        let bytes = self.text().as_bytes();
+        let mut lexer = Lexer::default();
         let mut tokens = Vec::new();
-        let first_line = self
-            .line_starts
-            .partition_point(|&start| start <= span.start)
-            - 1;
-        for (line_index, &line_start) in self
-            .line_starts
-            .iter()
-            .enumerate()
-            .skip(first_line)
-            .take_while(|&(_, &start)| start < span.end)
-        {
-            let next = self
-                .line_starts
-                .get(line_index + 1)
-                .copied()
-                .unwrap_or(bytes.len())
-                .min(span.end);
-            let start = line_start.max(span.start);
-            if start >= next {
-                continue;
+        while let Some(token) = lexer.next_token(self, false) {
+            if let TokenKind::Error { opener } = token.kind {
+                diagnostics.push(self.quote_error(opener, token.span.end));
             }
-            let mut end = next;
-            if end > start && bytes[end - 1] == b'\n' {
-                end -= 1;
-                if end > start && bytes[end - 1] == b'\r' {
-                    end -= 1;
-                }
-            }
-            let mut index = start;
-            while index < end {
-                let token_start = index;
-                let mut quoted = Vec::new();
-                let kind;
-                if self.whitespace_width(index) != 0 {
-                    while index < end && self.whitespace_width(index) != 0 {
-                        index += self.whitespace_width(index);
-                    }
-                    kind = TokenKind::Whitespace;
-                } else if bytes[index] == b'#' {
-                    index = end;
-                    kind = TokenKind::Comment;
-                } else {
-                    let mut error = None;
-                    while index < end && self.whitespace_width(index) == 0 {
-                        let boundary =
-                            index == token_start || matches!(bytes[index - 1], b'(' | b',');
-                        if boundary && matches!(bytes[index], b'\'' | b'"') {
-                            if let Some(close) = quoted_end(&bytes[..end], index) {
-                                quoted.push(self.span(index, close));
-                                index = close;
-                                continue;
-                            }
-                            error = Some(index);
-                            diagnostics.push(self.diagnostic(
-                                self.span(index, end),
-                                Severity::Error,
-                                "unterminated-quote",
-                                "quote must close on the same physical line",
-                            ));
-                            index = end;
-                            break;
-                        }
-                        index += self.text()[index..].chars().next().unwrap().len_utf8();
-                    }
-                    kind = if let Some(opener) = error {
-                        TokenKind::Error { opener }
-                    } else if quoted.is_empty() && index == token_start + 1 {
-                        match bytes[token_start] {
-                            b'{' => TokenKind::OpenBrace,
-                            b'}' => TokenKind::CloseBrace,
-                            _ => TokenKind::Word,
-                        }
-                    } else {
-                        TokenKind::Word
-                    };
-                }
-                tokens.push(Token {
-                    span: self.span(token_start, index),
-                    quoted,
-                    kind,
-                    line: line_index + 1,
-                });
-            }
-            if end < next {
-                tokens.push(Token {
-                    span: self.span(end, next),
-                    quoted: Vec::new(),
-                    kind: TokenKind::Newline,
-                    line: line_index + 1,
-                });
-            }
+            tokens.push(token);
         }
         tokens
+    }
+
+    pub(super) fn quote_error(&self, opener: usize, end: usize) -> DetailedDiagnostic {
+        self.diagnostic(
+            self.span(opener, end),
+            Severity::Error,
+            "unterminated-quote",
+            "quote must close on the same physical line",
+        )
     }
 
     fn whitespace_width(&self, index: usize) -> usize {
@@ -254,6 +176,102 @@ impl<'a> Source<'a> {
             let ch = self.text()[index..].chars().next().unwrap();
             if ch.is_whitespace() { ch.len_utf8() } else { 0 }
         }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct Lexer {
+    offset: usize,
+    line: usize,
+}
+
+impl Lexer {
+    pub(super) fn next_token(
+        &mut self,
+        source: &Source<'_>,
+        adjacent_quotes: bool,
+    ) -> Option<Token> {
+        let bytes = source.text().as_bytes();
+        let start = self.offset;
+        if start >= bytes.len() {
+            return None;
+        }
+        let next_line = source
+            .line_starts
+            .get(self.line + 1)
+            .copied()
+            .unwrap_or(bytes.len());
+        let mut end = next_line;
+        if end > start && bytes[end - 1] == b'\n' {
+            end -= 1;
+            if end > start && bytes[end - 1] == b'\r' {
+                end -= 1;
+            }
+        }
+        let line = self.line + 1;
+        if start >= end {
+            self.offset = next_line;
+            self.line += 1;
+            return Some(Token {
+                span: source.span(start, next_line),
+                quoted: Vec::new(),
+                kind: TokenKind::Newline,
+                line,
+            });
+        }
+        let mut index = start;
+        let mut quoted: Vec<Span> = Vec::new();
+        let kind;
+        if source.whitespace_width(index) != 0 {
+            while index < end {
+                let width = source.whitespace_width(index);
+                if width == 0 {
+                    break;
+                }
+                index += width;
+            }
+            kind = TokenKind::Whitespace;
+        } else if bytes[index] == b'#' {
+            index = end;
+            kind = TokenKind::Comment;
+        } else {
+            let mut error = None;
+            let mut path_quotes = adjacent_quotes;
+            while index < end && source.whitespace_width(index) == 0 {
+                let boundary =
+                    index == start || matches!(bytes[index - 1], b'(' | b',') || path_quotes;
+                if boundary && matches!(bytes[index], b'\'' | b'"') {
+                    if let Some(close) = quoted_end(&bytes[..end], index) {
+                        quoted.push(source.span(index, close));
+                        index = close;
+                        continue;
+                    }
+                    error = Some(index);
+                    index = end;
+                    break;
+                }
+                path_quotes = false;
+                index += source.text()[index..].chars().next().unwrap().len_utf8();
+            }
+            kind = if let Some(opener) = error {
+                TokenKind::Error { opener }
+            } else if quoted.is_empty() && index == start + 1 {
+                match bytes[start] {
+                    b'{' => TokenKind::OpenBrace,
+                    b'}' => TokenKind::CloseBrace,
+                    _ => TokenKind::Word,
+                }
+            } else {
+                TokenKind::Word
+            };
+        }
+        self.offset = index;
+        Some(Token {
+            span: source.span(start, index),
+            quoted,
+            kind,
+            line,
+        })
     }
 }
 

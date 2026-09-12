@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::read::Text;
 use crate::diagnostic::{
@@ -29,7 +29,7 @@ pub(super) struct ParserDiagnostics<'a> {
     group: Option<usize>,
     subscription: Option<usize>,
     entry: Option<usize>,
-    pub failure: Option<DetailedDiagnostic>,
+    notices: Vec<(usize, DetailedDiagnostic)>,
     root: &'static str,
     attempt_start: usize,
 }
@@ -51,24 +51,12 @@ impl<'a> ParserDiagnostics<'a> {
             group: None,
             subscription: None,
             entry: None,
-            failure: None,
+            notices: Vec::new(),
         }
     }
 
     pub fn source(&self) -> SourceRef {
         self.current.source.clone()
-    }
-
-    pub fn structure_error(&mut self, error: DetailedConfigError) -> super::ParseFailure {
-        // Document owns standalone attempts; the parser's outer boundary owns this terminal.
-        if let Some(index) = self.output.iter().rposition(|diagnostic| {
-            diagnostic.terminal
-                && diagnostic.source.same_source(&error.diagnostic.source)
-                && diagnostic.span == error.diagnostic.span
-        }) {
-            self.output.remove(index);
-        }
-        super::ParseFailure::Detailed(error)
     }
 
     pub fn field_location(&self, field: &str) -> (SourceRef, Option<usize>) {
@@ -264,22 +252,7 @@ impl<'a> ParserDiagnostics<'a> {
         } else if let Some(subscription) = self.subscription {
             diagnostic.setting = diagnostic.setting.index(subscription);
         }
-        let position = diagnostic
-            .span
-            .as_ref()
-            .and_then(|span| {
-                self.output[self.attempt_start..]
-                    .iter()
-                    .position(|existing| {
-                        existing.source == diagnostic.source
-                            && existing
-                                .span
-                                .as_ref()
-                                .is_some_and(|existing| existing.start > span.start)
-                    })
-            })
-            .map_or(self.output.len(), |index| self.attempt_start + index);
-        self.output.insert(position, diagnostic);
+        self.notices.push((self.output.len(), diagnostic));
     }
 
     pub fn emit(&mut self, mut diagnostic: DetailedDiagnostic) {
@@ -304,12 +277,57 @@ impl<'a> ParserDiagnostics<'a> {
         self.output.push(diagnostic);
     }
 
+    pub fn remove(&mut self, index: usize) -> DetailedDiagnostic {
+        self.flush(Some(index)).expect("existing diagnostic")
+    }
+
+    pub fn finish(&mut self) {
+        self.flush(None);
+    }
+
+    fn flush(&mut self, remove: Option<usize>) -> Option<DetailedDiagnostic> {
+        if self.notices.is_empty() {
+            return remove.map(|index| self.output.remove(index));
+        }
+        let emitted = self.output.split_off(self.attempt_start);
+        let capacity = emitted.len() + self.notices.len();
+        let mut notices = std::mem::take(&mut self.notices).into_iter().peekable();
+        let mut ordered = DiagnosticOrder {
+            rows: Vec::with_capacity(capacity),
+            ..DiagnosticOrder::default()
+        };
+        let mut target = None;
+        for (index, diagnostic) in emitted.into_iter().enumerate() {
+            while notices
+                .peek()
+                .is_some_and(|(before, _)| *before <= self.attempt_start + index)
+            {
+                ordered.insert(notices.next().unwrap().1, true);
+            }
+            if remove == Some(self.attempt_start + index) {
+                target = Some(ordered.rows.len());
+            }
+            ordered.insert(diagnostic, false);
+        }
+        for (_, diagnostic) in notices {
+            ordered.insert(diagnostic, true);
+        }
+        let mut next = ordered.head;
+        let mut removed = None;
+        while let Some(index) = next {
+            let row = &mut ordered.rows[index];
+            if Some(index) == target {
+                removed = row.diagnostic.take();
+            } else {
+                self.output.push(row.diagnostic.take().unwrap());
+            }
+            next = row.next;
+        }
+        removed
+    }
+
     pub fn error(&self, error: crate::ConfigError) -> DetailedConfigError {
         let mut error = DetailedConfigError::from_legacy(error, self.source());
-        if let Some(terminal) = &self.failure {
-            error.diagnostic = Box::new(terminal.clone());
-            return error;
-        }
         let field = error
             .diagnostic
             .setting
@@ -334,5 +352,64 @@ impl<'a> ParserDiagnostics<'a> {
             error.diagnostic.entry_index = Some(index);
         }
         error
+    }
+}
+
+#[derive(Default)]
+struct DiagnosticOrder {
+    rows: Vec<OrderedDiagnostic>,
+    head: Option<usize>,
+    tail: Option<usize>,
+    maxima: HashMap<SourceRef, BTreeMap<usize, usize>>,
+}
+
+struct OrderedDiagnostic {
+    diagnostic: Option<DetailedDiagnostic>,
+    previous: Option<usize>,
+    next: Option<usize>,
+}
+
+impl DiagnosticOrder {
+    fn insert(&mut self, diagnostic: DetailedDiagnostic, notice: bool) {
+        let index = self.rows.len();
+        let before = diagnostic.span.as_ref().and_then(|span| {
+            let maxima = self.maxima.entry(diagnostic.source.clone()).or_default();
+            // Only prefix maxima can be the first preceding row above this offset.
+            let before = if notice {
+                maxima
+                    .range((
+                        std::ops::Bound::Excluded(span.start),
+                        std::ops::Bound::Unbounded,
+                    ))
+                    .next()
+                    .map(|(_, &row)| row)
+            } else {
+                None
+            };
+            if before.is_some()
+                || maxima
+                    .last_key_value()
+                    .is_none_or(|(&last, _)| last < span.start)
+            {
+                maxima.entry(span.start).or_insert(index);
+            }
+            before
+        });
+        let previous = before.map_or(self.tail, |row| self.rows[row].previous);
+        self.rows.push(OrderedDiagnostic {
+            diagnostic: Some(diagnostic),
+            previous,
+            next: before,
+        });
+        if let Some(previous) = previous {
+            self.rows[previous].next = Some(index);
+        } else {
+            self.head = Some(index);
+        }
+        if let Some(before) = before {
+            self.rows[before].previous = Some(index);
+        } else {
+            self.tail = Some(index);
+        }
     }
 }

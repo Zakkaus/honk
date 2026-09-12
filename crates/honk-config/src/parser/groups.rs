@@ -19,13 +19,10 @@ pub(super) fn parse_group_section(
     let mut groups = Vec::new();
 
     for root in section {
-        let Some(mut body) = root.body() else {
+        let Some(body) = root.body() else {
             continue;
         };
-        while body.next() {
-            let segment = body
-                .next_segment()
-                .expect("group section body contains a segment");
+        for segment in body {
             let Some(group_text) = read::block_header(&segment) else {
                 Text::segment(&segment).notice(
                     diagnostics,
@@ -155,7 +152,7 @@ fn standalone_group_reference<'d, 'a>(text: Text<'d, 'a>) -> Option<Vec<Text<'d,
     if args.find("(").is_some() {
         return None;
     }
-    Some(args.split(","))
+    Some(args.split(",").collect())
 }
 
 fn parse_group_policy(

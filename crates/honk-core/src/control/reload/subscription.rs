@@ -1,4 +1,5 @@
 use super::*;
+use crate::config_diagnostics::DiagnosticUpdate;
 
 /// Build the config produced by merging one subscription's freshly fetched
 /// nodes. A non-empty result replaces the previous node set for
@@ -53,7 +54,7 @@ impl ControlPlane {
         &self,
         subscription_id: uuid::Uuid,
         mut nodes: Vec<Node>,
-        diagnostics: Option<Vec<honk_config::diagnostic::DetailedDiagnostic>>,
+        diagnostics: Vec<honk_config::diagnostic::DetailedDiagnostic>,
         drain: &DrainTracker,
     ) -> Result<bool, honk_config::error::DetailedConfigError> {
         if nodes.is_empty() {
@@ -76,24 +77,19 @@ impl ControlPlane {
         let incoming_len = nodes.len();
         let mut new_config = config_with_subscription_nodes(&current, subscription_id, nodes);
         new_config.validate_assembled()?;
-        let candidate_diagnostics = diagnostics.map(|diagnostics| {
-            let mut buckets = self.diagnostics.read().buckets.clone();
-            buckets.replace_provider(subscription_id, diagnostics);
-            buckets
-        });
+        let diagnostic_update = DiagnosticUpdate::ReplaceProvider {
+            id: subscription_id,
+            diagnostics,
+        };
         let candidate_start = new_config.nodes.len() - incoming_len;
         if subscription_nodes_unchanged(
             &current,
             subscription_id,
             &mut new_config.nodes[candidate_start..],
         ) {
-            if let Some(buckets) = candidate_diagnostics {
-                drop(config_guard);
-                let _config = self.config.write().await;
-                self.diagnostics.write().buckets = buckets;
-            } else {
-                drop(config_guard);
-            }
+            drop(config_guard);
+            let _config = self.config.write().await;
+            self.diagnostics.write().buckets.apply(diagnostic_update);
             info!(
                 subscription_id = %subscription_id,
                 "subscription unchanged; skipping runtime rebuild"
@@ -102,12 +98,8 @@ impl ControlPlane {
         }
         drop(config_guard);
         crate::dns::ecs::resolve_client_subnet(&mut new_config.dns).await;
-        self.apply_resolved_runtime_config_locked_with_diagnostics(
-            new_config,
-            drain,
-            candidate_diagnostics,
-        )
-        .await
+        self.apply_resolved_runtime_config_locked(new_config, drain, diagnostic_update, None)
+            .await
     }
 
     pub(in crate::control) async fn merge_authorized_subscription_nodes_with_drain(
@@ -128,16 +120,22 @@ impl ControlPlane {
             );
             return Ok(false);
         }
-        self.merge_subscription_nodes_locked(subscription_id, nodes, Some(diagnostics), drain)
+        self.merge_subscription_nodes_locked(subscription_id, nodes, diagnostics, drain)
             .await
     }
 
-    /// Public test/control wrapper for a subscription merge.
-    pub async fn merge_subscription_nodes(&self, subscription_id: uuid::Uuid, nodes: Vec<Node>) {
+    /// Publish a programmatic provider candidate and its diagnostics.
+    /// An empty node set leaves active nodes and diagnostics untouched.
+    pub async fn merge_subscription_nodes(
+        &self,
+        subscription_id: uuid::Uuid,
+        nodes: Vec<Node>,
+        diagnostics: Vec<honk_config::diagnostic::DetailedDiagnostic>,
+    ) {
         let drain = Arc::clone(&self.drain_tracker);
         let _reload = self.reload_lock.lock().await;
         if let Err(error) = self
-            .merge_subscription_nodes_locked(subscription_id, nodes, None, &drain)
+            .merge_subscription_nodes_locked(subscription_id, nodes, diagnostics, &drain)
             .await
         {
             crate::report_runtime_admission_error(&error);

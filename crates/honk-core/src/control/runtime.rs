@@ -320,7 +320,12 @@ impl ControlPlane {
                             client_subnet_changed, "refreshing runtime after network change"
                         );
                         match self
-                            .apply_resolved_runtime_config_locked(new_config, drain)
+                            .apply_resolved_runtime_config_locked(
+                                new_config,
+                                drain,
+                                crate::config_diagnostics::DiagnosticUpdate::Preserve,
+                                None,
+                            )
                             .await
                         {
                             Ok(applied) => applied,

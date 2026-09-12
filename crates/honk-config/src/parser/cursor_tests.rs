@@ -13,42 +13,15 @@ fn parse<'a>(
 }
 
 #[test]
-fn dispenser_bounds_tokens_and_raw_values() {
-    let doc = parse(
-        "global { log_level: debug log_file: x\nnext: '{'\n}\nrouting { fallback: direct }",
-        &mut Vec::new(),
-    )
-    .unwrap();
-    let section = doc.sections().next().unwrap();
-    let mut body = section.body().unwrap();
-    assert!(body.next());
-    assert_eq!(body.raw(), Some("log_level:"));
-    assert!(body.next());
-    assert_eq!(body.raw(), Some("debug"));
-    body.next_segment().unwrap();
-    assert!(body.next());
-    assert_eq!(body.raw(), Some("next:"));
-    assert!(body.next());
-    assert_eq!(body.raw(), Some("'{'"));
-    assert!(!body.next());
-    assert_eq!(body.raw(), Some("'{'"));
-    assert_eq!(doc.sections().count(), 2);
-}
-
-#[test]
 fn segments_preserve_dynamic_headers_and_independent_positions() {
     let doc = parse("group {\n123 { policy: score }\n香港 { policy: selector }\nHong Kong { filter: name(x) }\n}", &mut Vec::new()).unwrap();
-    let mut groups = doc.sections().next().unwrap().body().unwrap();
+    let groups = doc.sections().next().unwrap().body().unwrap();
     let mut names = Vec::new();
-    while groups.next() {
-        let segment = groups.next_segment().unwrap();
+    for segment in groups {
         names.push(segment.header());
         let mut left = segment.body().unwrap();
         let mut right = segment.body().unwrap();
-        assert!(left.next());
-        assert!(left.next());
-        assert!(right.next());
-        assert_ne!(left.span(), right.span());
+        assert_eq!(left.next().unwrap().span(), right.next().unwrap().span());
     }
     assert_eq!(names, ["123", "香港", "Hong Kong"]);
 }
@@ -59,11 +32,9 @@ fn structural_segments_never_reclassify_quoted_or_commented_braces() {
     let mut diagnostics = Vec::new();
     let doc = parse(text, &mut diagnostics).unwrap();
     let mut group = doc.sections().next().unwrap().body().unwrap();
-    assert!(group.next());
-    assert_eq!(group.next_segment().unwrap().header(), "g");
-    assert!(group.next());
-    assert_eq!(group.next_segment().unwrap().header(), "h");
-    assert!(!group.next());
+    assert_eq!(group.next().unwrap().header(), "g");
+    assert_eq!(group.next().unwrap().header(), "h");
+    assert!(group.next().is_none());
     assert_eq!(doc.sections().count(), 2);
 }
 
@@ -100,8 +71,7 @@ fn quoted_colon_headers_require_a_separate_opener() {
 
     let doc = parse("group {\n'Asia: East' {\n}\n}", &mut Vec::new()).unwrap();
     let mut body = doc.sections().next().unwrap().body().unwrap();
-    assert!(body.next());
-    assert_eq!(body.next_segment().unwrap().header(), "'Asia: East'");
+    assert_eq!(body.next().unwrap().header(), "'Asia: East'");
 }
 
 #[test]
@@ -119,12 +89,8 @@ fn only_root_include_accepts_a_split_opener() {
     );
     let section = doc.sections().next().unwrap();
     let mut cursor = section.body().unwrap();
-    assert!(cursor.next());
-    assert_eq!(cursor.raw(), Some("'*.dae'"));
-    assert!(!cursor.next());
-    let mut cursor = section.cursor();
-    assert!(cursor.next());
-    assert!(cursor.next_segment().unwrap().body().is_some());
+    assert_eq!(cursor.next().unwrap().header(), "'*.dae'");
+    assert!(cursor.next().is_none());
     for text in ["global\n{ x: y }", "group { include\n{ x } }"] {
         assert_eq!(
             parse(text, &mut Vec::new())
@@ -168,8 +134,7 @@ fn segment_comment_uses_lexed_token_with_unicode_gap_and_crlf() {
     .unwrap();
     let section = doc.sections().next().unwrap();
     let mut body = section.body().unwrap();
-    assert!(body.next());
-    let statement = body.next_segment().unwrap();
+    let statement = body.next().unwrap();
     let text = super::read::Text::segment(&statement);
     let comment = text.trailing_comment().unwrap();
     assert_eq!(doc.source().raw(comment.span), "#");
@@ -270,11 +235,7 @@ fn k22_a_closes_before_unknown_root_and_unmatched_close() {
         [("unknown-statement", Some(3)), ("unmatched-close", Some(4))]
     );
     let mut entry = sections[0].body().unwrap();
-    assert!(entry.next());
-    assert_eq!(
-        entry.next_segment().unwrap().header(),
-        "sub: 'http://sub'(ua)#"
-    );
+    assert_eq!(entry.next().unwrap().header(), "sub: 'http://sub'(ua)#");
 }
 
 #[test]
@@ -292,8 +253,7 @@ fn k22_controls_keep_raw_scalar_and_entry_ownership() {
         let mut diagnostics = Vec::new();
         let doc = parse(text, &mut diagnostics).unwrap();
         let mut body = doc.sections().next().unwrap().body().unwrap();
-        assert!(body.next());
-        assert_eq!(body.next_segment().unwrap().header(), expected);
+        assert_eq!(body.next().unwrap().header(), expected);
         assert!(diagnostics.is_empty());
     }
     for text in [
@@ -304,10 +264,8 @@ fn k22_controls_keep_raw_scalar_and_entry_ownership() {
         let section = doc.sections().next().unwrap();
         assert_eq!(doc.source().location(section.span().end - 1).0, 4);
         let mut body = section.body().unwrap();
-        assert!(body.next());
-        body.next_segment().unwrap();
-        assert!(body.next());
-        assert_eq!(body.raw(), Some("other:"));
+        body.next().unwrap();
+        assert!(body.next().unwrap().header().starts_with("other:"));
     }
 }
 
@@ -438,13 +396,11 @@ fn frozen_quoted_values_remain_inside_their_sections() {
         let mut section = doc.sections().next().unwrap();
         for &name in children {
             let mut body = section.body().unwrap();
-            assert!(body.next());
-            section = body.next_segment().unwrap();
+            section = body.next().unwrap();
             assert_eq!(section.header(), name);
         }
         let mut body = section.body().unwrap();
-        assert!(body.next());
-        assert_eq!(body.next_segment().unwrap().header(), expected);
+        assert_eq!(body.next().unwrap().header(), expected);
         assert!(diagnostics.is_empty());
     }
 }

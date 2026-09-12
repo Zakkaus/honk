@@ -167,6 +167,167 @@ async fn c14_reload_replaces_snapshot_at_commit() {
 }
 
 #[tokio::test]
+async fn c14_public_reload_replaces_full_candidate_provenance() {
+    let (config, buckets) = provider_config();
+    let cp = fixture(config.clone(), buckets).await;
+    let mut candidate = config;
+    candidate.global.check_tolerance_ms += 1;
+
+    assert!(
+        cp.reload_runtime_config(
+            candidate.clone(),
+            DiagnosticBuckets {
+                static_diagnostics: warning("replacement", 2),
+                ..Default::default()
+            },
+        )
+        .await
+    );
+
+    assert_eq!(cp.config.read().await.as_ref(), &candidate);
+    assert_eq!(
+        snapshot(&cp)
+            .await
+            .diagnostics
+            .iter()
+            .map(|row| row.code)
+            .collect::<Vec<_>>(),
+        ["replacement"]
+    );
+}
+
+#[tokio::test]
+async fn c14_full_reload_preserves_provider_ownership_for_clean_refresh() {
+    let (mut config, _) = provider_config();
+    let provider = config.subscriptions[0].clone();
+    let node = config.nodes[0].clone();
+    let cp = fixture(config.clone(), DiagnosticBuckets::default()).await;
+    config.global.check_tolerance_ms += 1;
+
+    assert!(
+        cp.reload_runtime_config(
+            config,
+            DiagnosticBuckets {
+                providers: vec![(provider.id, warning("provider-warning", 2))],
+                ..Default::default()
+            },
+        )
+        .await
+    );
+    assert_eq!(snapshot(&cp).await.diagnostics[0].code, "provider-warning");
+
+    cp.merge_subscription_nodes(provider.id, vec![node], Vec::new())
+        .await;
+    assert!(snapshot(&cp).await.diagnostics.is_empty());
+}
+
+#[tokio::test]
+async fn c14_duplicate_provider_buckets_reject_even_an_unchanged_config() {
+    let (config, buckets) = provider_config();
+    let provider = config.subscriptions[0].id;
+    let cp = fixture(config.clone(), buckets).await;
+    let before = snapshot(&cp).await;
+    let duplicate = DiagnosticBuckets {
+        providers: vec![
+            (provider, warning("duplicate-first", 2)),
+            (provider, warning("duplicate-second", 3)),
+        ],
+        ..Default::default()
+    };
+    assert!(!cp.reload_runtime_config(config.clone(), duplicate).await);
+    assert_eq!(snapshot(&cp).await, before);
+    assert_eq!(cp.config.read().await.as_ref(), &config);
+}
+
+#[tokio::test]
+async fn c14_public_merge_projects_unconfigured_provider_provenance() {
+    let cp = fixture(Config::default(), DiagnosticBuckets::default()).await;
+    let provider = Subscription::default();
+    let mut diagnostics = Vec::new();
+    let nodes = crate::subscription::parse_subscription_content_with_diagnostics(
+        &provider,
+        "socks5://127.0.0.1:1080#accepted\nREMARKS=private-provider-marker",
+        &mut diagnostics,
+    )
+    .unwrap();
+
+    cp.merge_subscription_nodes(provider.id, nodes, diagnostics)
+        .await;
+
+    assert!(
+        cp.config
+            .read()
+            .await
+            .nodes
+            .iter()
+            .any(|node| { node.name == "accepted" && node.subscription_id == Some(provider.id) })
+    );
+    let active = snapshot(&cp).await;
+    assert_eq!(active.diagnostics.len(), 1);
+    assert_eq!(active.sources.len(), 1);
+    let diagnostic = &active.diagnostics[0];
+    assert_eq!(diagnostic.code, "subscription-profile-entry");
+    assert_eq!(diagnostic.setting, "entries[2]");
+    assert_eq!(diagnostic.line, Some(2));
+    assert_eq!(diagnostic.source, active.sources[0].id);
+}
+
+#[tokio::test]
+async fn c14_sighup_retains_rebased_provider_provenance() {
+    let (config, buckets) = provider_config();
+    let retained_nodes = config.nodes.clone();
+    let cp = fixture(config.clone(), buckets).await;
+    let mut candidate = config;
+    candidate.nodes.clear();
+    candidate.global.check_tolerance_ms += 1;
+
+    assert!(reload(&cp, candidate, warning("replacement", 2)).await);
+
+    assert_eq!(cp.config.read().await.nodes, retained_nodes);
+    assert_eq!(
+        snapshot(&cp)
+            .await
+            .diagnostics
+            .iter()
+            .map(|row| row.code)
+            .collect::<Vec<_>>(),
+        ["replacement", "first", "second"]
+    );
+}
+
+#[tokio::test]
+async fn c14_network_refresh_preserves_active_provenance() {
+    let mut config = changed_routing_config();
+    config.global.lan_interface = vec!["c14-missing-lan".into()];
+    config.global.wan_interface = vec!["c14-missing-wan".into()];
+    config.routing.rules[0].name = "__local_direct_stale".into();
+    let mut cp = fixture(
+        config,
+        DiagnosticBuckets {
+            static_diagnostics: warning("active", 1),
+            ..Default::default()
+        },
+    )
+    .await;
+    let before = snapshot(&cp).await;
+    let mut authorizations = SubscriptionAuthorizations::new(&[]).unwrap();
+
+    assert!(
+        cp.dispatch_control_command(
+            ControlCommand::NetworkChanged,
+            &DrainTracker::new(),
+            &mut authorizations,
+        )
+        .await
+    );
+
+    let after = snapshot(&cp).await;
+    assert_eq!(after.diagnostics, before.diagnostics);
+    assert_eq!(after.sources, before.sources);
+    assert!(after.generation > before.generation);
+}
+
+#[tokio::test]
 async fn c14_failed_reload_keeps_active_snapshot() {
     let cp = fixture(
         Config::default(),
@@ -181,7 +342,16 @@ async fn c14_failed_reload_keeps_active_snapshot() {
     let original = cp.config.read().await.clone();
     let mut config = original.as_ref().clone();
     config.global.log_level = "debug".into();
-    assert!(!reload(&cp, config, warning("rejected", 2)).await);
+    assert!(
+        !cp.reload_runtime_config(
+            config,
+            DiagnosticBuckets {
+                static_diagnostics: warning("rejected", 2),
+                ..Default::default()
+            },
+        )
+        .await
+    );
     assert_eq!(snapshot(&cp).await, before);
     assert_eq!(*cp.config.read().await, original);
 }
@@ -189,10 +359,28 @@ async fn c14_failed_reload_keeps_active_snapshot() {
 #[tokio::test]
 async fn c14_equal_reload_replaces_provenance_without_new_generation() {
     let cp = fixture(Config::default(), DiagnosticBuckets::default()).await;
-    assert!(reload(&cp, Config::default(), warning("active", 1)).await);
+    assert!(
+        cp.reload_runtime_config(
+            Config::default(),
+            DiagnosticBuckets {
+                static_diagnostics: warning("active", 1),
+                ..Default::default()
+            },
+        )
+        .await
+    );
     let before = snapshot(&cp).await;
     let config = cp.config.read().await.as_ref().clone();
-    assert!(reload(&cp, config, warning("active", 9)).await);
+    assert!(
+        cp.reload_runtime_config(
+            config,
+            DiagnosticBuckets {
+                static_diagnostics: warning("active", 9),
+                ..Default::default()
+            },
+        )
+        .await
+    );
     let after = snapshot(&cp).await;
     assert_eq!(after.generation, before.generation);
     assert_eq!(before.diagnostics[0].line, Some(1));
@@ -206,17 +394,8 @@ async fn c14_provider_refresh_replaces_only_its_bucket() {
     let cp = fixture(config, buckets).await;
     let before = snapshot(&cp).await;
     let node = canonical_socks5("new", "127.0.0.1", 1082, Some(provider.id));
-    assert!(
-        refresh(
-            &cp,
-            &provider,
-            vec![node.clone()],
-            warning("replacement", 3),
-            false
-        )
-        .await
-        .unwrap()
-    );
+    cp.merge_subscription_nodes(provider.id, vec![node.clone()], warning("replacement", 3))
+        .await;
     let after = snapshot(&cp).await;
     assert_eq!(
         after
@@ -316,7 +495,8 @@ async fn c14_empty_refresh_has_no_body_snapshot() {
             .await
             .unwrap()
     );
-    cp.merge_subscription_nodes(provider.id, Vec::new()).await;
+    cp.merge_subscription_nodes(provider.id, Vec::new(), Vec::new())
+        .await;
     assert_eq!(snapshot(&cp).await, before);
     assert_eq!(cp.config.read().await.as_ref(), &config);
 }

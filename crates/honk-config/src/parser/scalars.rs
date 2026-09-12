@@ -193,7 +193,6 @@ fn list_value(
     };
     let parsed: Vec<String> = source
         .split(",")
-        .into_iter()
         .map(|item| item.unquote().raw().to_owned())
         .filter(|item| !filter_empty || !item.is_empty())
         .collect();
@@ -516,11 +515,10 @@ pub(super) fn parse_global_section(
 
 pub(super) fn nfqueue_present(section: &[Segment<'_, '_>]) -> bool {
     section.iter().any(|segment| {
-        let Some(mut body) = segment.body() else {
+        let Some(body) = segment.body() else {
             return false;
         };
-        while body.next() {
-            let child = body.next_segment().expect("global statement or block");
+        for child in body {
             if read::block_header(&child).is_none()
                 && Text::segment(&child)
                     .kv()
@@ -540,11 +538,10 @@ pub(super) fn parse_experimental_section(
     let mut config = ExperimentalConfig::default();
     let mut api_location = None;
     for root in section {
-        let Some(mut body) = root.body() else {
+        let Some(body) = root.body() else {
             continue;
         };
-        while body.next() {
-            let segment = body.next_segment().expect("statement or block header");
+        for segment in body {
             diagnostics.at_text(Text::segment(&segment));
             let Some(header) = read::block_header(&segment) else {
                 return Err(scalar_error(
@@ -580,9 +577,8 @@ pub(super) fn parse_experimental_section(
             };
             let lines = if name == "udp_nfqueue" {
                 let mut lines = Vec::new();
-                if let Some(mut body) = segment.body() {
-                    while body.next() {
-                        let child = body.next_segment().expect("NFQUEUE setting");
+                if let Some(body) = segment.body() {
+                    for child in body {
                         let text = Text::segment(&child);
                         diagnostics.at_text(text);
                         if read::block_header(&child).is_some() {

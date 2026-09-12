@@ -64,6 +64,10 @@ without advancing the generation. An authorized, admitted provider refresh repla
 only that provider's diagnostics, even when its nodes are unchanged; static-file
 and other-provider diagnostics remain.
 
+Library callers pass `DiagnosticBuckets` to `ControlPlane::reload_runtime_config(config, diagnostics)`, keeping static and provider-body diagnostics separate; programmatic inputs without diagnostics use `DiagnosticBuckets::default()`. `merge_subscription_nodes(provider, nodes, diagnostics)` accepts that provider's diagnostic vector, including for admitted providers without worker declarations. Full configuration replacement moves the complete candidate provenance into place, while provider replacement affects only that provider. SIGHUP retains the buckets of provider bodies actually retained by rebasing. Generated topology/ECS updates preserve source provenance. All changes publish under the existing configuration write barrier, acquiring the diagnostics lock only after the configuration lock.
+
+Full-replacement provider buckets must have unique UUIDs. Duplicate UUIDs reject the entire reload before publication, including when the effective configuration is unchanged; the active configuration and diagnostics remain intact.
+
 | Field | Meaning |
 | --- | --- |
 | `honk-diagnostics.generation` | Active configuration generation; startup begins at `0`. |
@@ -87,8 +91,9 @@ and other-provider diagnostics remain.
 
 The generation matches the active DNS runtime generation. Source IDs are
 snapshot-local, not filesystem identifiers. Sources are ordered static-file first,
-then providers in configured declaration order, with each source table in its
-original order. Only referenced sources and their ancestors are included.
+then providers in configured declaration order, followed by admitted non-worker
+providers in retained bucket order. Each source table keeps its original order;
+only referenced sources and their ancestors are included.
 Paths, raw input, credentials, and provider names or IDs are never exported.
 
 ### Delay measurement

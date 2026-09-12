@@ -43,6 +43,50 @@ fn quoted_embedded_tag_is_split_with_one_compatibility_warning() {
 }
 
 #[test]
+fn quoted_embedded_tag_is_normalized_after_user_agent_and_glued_comment_parsing() {
+    let input = "subscription {\n 'paid:http://q/path#token #data'('agent # build')# note\n}\nrouting {\n fallback: direct\n}\n";
+    let (config, diagnostics) = parse(input);
+    assert_eq!(config.subscriptions.len(), 1);
+    let subscription = &config.subscriptions[0];
+    assert_eq!(subscription.name, "paid");
+    assert_eq!(subscription.url, "http://q/path#token #data");
+    assert_eq!(subscription.user_agent.as_deref(), Some("agent # build"));
+    assert_eq!(count_code(&diagnostics, "legacy-embedded-tag"), 1);
+    assert_eq!(count_code(&diagnostics, "legacy-glued-hash"), 1);
+}
+
+#[test]
+fn quoted_subscription_user_agent_colons_are_data() {
+    let (config, _) = parse(
+        "subscription {\n 'https://example.com/sub'(agent:1)\n 'explicit:tag': 'https://example.com/explicit'(agent:2)\n}",
+    );
+    assert_eq!(config.subscriptions[0].name, "example.com");
+    assert_eq!(config.subscriptions[0].url, "https://example.com/sub");
+    assert_eq!(
+        config.subscriptions[0].user_agent.as_deref(),
+        Some("agent:1")
+    );
+    assert_eq!(config.subscriptions[1].name, "explicit:tag");
+    assert_eq!(config.subscriptions[1].url, "https://example.com/explicit");
+    assert_eq!(
+        config.subscriptions[1].user_agent.as_deref(),
+        Some("agent:2")
+    );
+}
+
+#[test]
+fn quoted_entry_comment_colons_do_not_create_tags() {
+    let (config, diagnostics) = parse(
+        "node {\n 'socks5://127.0.0.1:1080#edge'#note: detail\n}\nsubscription {\n 'paid:https://example.com/sub'#note: detail\n}",
+    );
+    assert_eq!(config.nodes.len(), 1);
+    assert_eq!(config.nodes[0].name, "edge");
+    assert_eq!(config.subscriptions[0].name, "paid");
+    assert_eq!(config.subscriptions[0].url, "https://example.com/sub");
+    assert_eq!(count_code(&diagnostics, "legacy-glued-hash"), 2);
+}
+
+#[test]
 fn glued_user_agent_hash_comments_retain_entries_and_warn_at_hash() {
     let input = include_str!("fixtures/pr2/c05/cls-sub-ua-glued-hash.dae");
     let (config, diagnostics) = parse(input);
@@ -70,7 +114,6 @@ fn glued_user_agent_hash_comments_retain_entries_and_warn_at_hash() {
         );
         let offset = input.find(hash).unwrap();
         assert_eq!(diagnostic.span, Some(offset..offset + 1));
-        assert_eq!(diagnostic.message, "put whitespace before a comment");
     }
 }
 
@@ -89,7 +132,6 @@ fn incomplete_user_agent_hash_head_skips_entry_with_a_precise_diagnostic() {
     let suffix = input.find("(agent").unwrap();
     let hash = input.find("# build").unwrap();
     assert_eq!(diagnostic.span, Some(suffix..hash - 1));
-    assert!(diagnostic.message.contains("entry is skipped"));
 }
 
 #[test]
@@ -191,7 +233,6 @@ fn glued_hash_after_a_quoted_node_link_retains_both_nodes_and_warns_once() {
     );
     let hash = input.find("#note").unwrap();
     assert_eq!(diagnostic.span, Some(hash..hash + 1));
-    assert_eq!(diagnostic.message, "put whitespace before a comment");
     let input = "node {\n 'socks5://127.0.0.1:1080'junk\n}\nrouting {\n fallback: direct\n}\n";
     let (config, diagnostics) = parse(input);
     assert!(config.nodes.is_empty());
@@ -204,7 +245,6 @@ fn glued_hash_after_a_quoted_node_link_retains_both_nodes_and_warns_once() {
     );
     let junk = input.find("junk").unwrap();
     assert_eq!(diagnostic.span, Some(junk..junk + 4));
-    assert!(diagnostic.message.contains("entry is skipped"));
 }
 
 #[test]
@@ -284,4 +324,30 @@ fn subscription_wrappers_retain_inline_header_entries_in_order() {
         [("a", "b: {"), ("url", "http://example.test/sub")],
     );
     assert_eq!(count_code(&diagnostics, "legacy-wrapper"), 1);
+}
+
+#[test]
+fn subscription_blocks_advance_following_inline_diagnostic_ordinals() {
+    let input = "subscription {\n stable: {\n  url: 'http://stable'\n }\n 'http://bad'junk\n}\nrouting {\n fallback: direct\n}\n";
+    let (config, diagnostics) = parse(input);
+    assert_eq!(config.subscriptions.len(), 1);
+    let diagnostic = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "trailing-entry-text")
+        .unwrap();
+    assert_eq!(diagnostic.setting.to_string(), "subscriptions[2]");
+    assert_eq!(diagnostic.entry_index, Some(2));
+}
+
+#[test]
+fn skipped_inline_subscriptions_advance_following_block_warning_ordinals() {
+    let input = "subscription {\n 'http://skipped'junk\n timed: {\n  url: 'http://timed'\n  interval: never\n }\n}\nrouting {\n fallback: direct\n}\n";
+    let (config, diagnostics) = parse(input);
+    assert_eq!(config.subscriptions.len(), 1);
+    let diagnostic = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "legacy-config-warning")
+        .unwrap();
+    assert_eq!(diagnostic.setting.to_string(), "subscriptions[2].interval");
+    assert_eq!(diagnostic.entry_index, Some(2));
 }

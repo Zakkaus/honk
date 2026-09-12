@@ -25,13 +25,19 @@ impl<'p, 'd, 'a> Expression<'p, 'd, 'a> {
     }
 
     fn sub(self, start: usize, end: usize) -> Self {
+        let first = self.pieces.partition_point(|piece| piece.span.end <= start);
+        let last = if start == end {
+            first
+        } else {
+            self.pieces.partition_point(|piece| piece.span.start < end)
+        };
         Self {
+            pieces: &self.pieces[first..last],
             span: Span {
                 start,
                 end,
                 ..self.span
             },
-            ..self
         }
     }
 
@@ -39,14 +45,7 @@ impl<'p, 'd, 'a> Expression<'p, 'd, 'a> {
         self.pieces.iter().filter_map(move |piece| {
             let start = piece.span.start.max(self.span.start);
             let end = piece.span.end.min(self.span.end);
-            (start < end).then_some(Text {
-                span: Span {
-                    start,
-                    end,
-                    ..piece.span
-                },
-                ..*piece
-            })
+            (start < end).then(|| piece.sub(start - piece.span.start, end - piece.span.start))
         })
     }
 
@@ -78,35 +77,36 @@ impl<'p, 'd, 'a> Expression<'p, 'd, 'a> {
             .find_map(|part| part.find(delimiter).map(|offset| part.span.start + offset))
     }
 
-    fn split(self, delimiter: &'p str) -> impl Iterator<Item = Self> + 'p {
-        let mut remaining = Some(self);
+    fn split<'s>(self, delimiter: &'s str) -> impl Iterator<Item = Self> + 's
+    where
+        'p: 's,
+        'd: 's,
+    {
+        let mut delimiters = self
+            .parts()
+            .flat_map(move |part| part.delimiter_positions(delimiter));
+        let mut start = self.span.start;
+        let mut done = false;
         std::iter::from_fn(move || {
-            let text = remaining.take()?;
-            if let Some(offset) = text.find(delimiter) {
-                remaining = Some(text.sub(offset + delimiter.len(), text.span.end));
-                Some(text.sub(text.span.start, offset).trim())
+            if done {
+                return None;
+            }
+            if let Some(end) = delimiters.next() {
+                let part = self.sub(start, end).trim();
+                start = end + delimiter.len();
+                Some(part)
             } else {
-                Some(text.trim())
+                done = true;
+                Some(self.sub(start, self.span.end).trim())
             }
         })
     }
 
-    fn parentheses(self) -> impl Iterator<Item = (usize, u8)> + 'p {
-        self.parts().flat_map(|part| {
-            part.raw()
-                .bytes()
-                .enumerate()
-                .filter_map(move |(offset, byte)| {
-                    let position = part.span.start + offset;
-                    (matches!(byte, b'(' | b')')
-                        && !part
-                            .tokens
-                            .iter()
-                            .flat_map(|token| &token.quoted)
-                            .any(|quote| quote.start <= position && position < quote.end))
-                    .then_some((position, byte))
-                })
-        })
+    fn parentheses(self) -> impl Iterator<Item = (usize, u8)> + 'p
+    where
+        'd: 'p,
+    {
+        self.parts().flat_map(Text::parentheses)
     }
 
     fn display(self) -> String {
@@ -170,7 +170,7 @@ impl<'p, 'd, 'a> Expression<'p, 'd, 'a> {
 pub(super) fn parse_section(
     section: &[Segment<'_, '_>],
     diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<RoutingConfig, crate::ConfigError> {
+) -> Result<RoutingConfig, super::ParseFailure> {
     let mut config = RoutingConfig::default();
     let lines = read::statements(section, diagnostics);
     let mut start = 0;
@@ -180,7 +180,8 @@ pub(super) fn parse_section(
         if start < end && lines[start].span.source != lines[end].span.source {
             return Err(crate::ConfigError::Parse(
                 "routing: unterminated parenthesized rule at source boundary".into(),
-            ));
+            )
+            .into());
         }
         for (_, byte) in Expression::new(&lines[end..=end]).parentheses() {
             if byte == b'(' {
@@ -221,18 +222,14 @@ pub(super) fn parse_section(
                     "unknown-statement",
                     "traffic statement without an arrow ignored",
                 ),
-                Err(error) => {
-                    let legacy = crate::ConfigError::Parse(error.diagnostic.message.to_owned());
-                    diagnostics.failure = Some(*error.diagnostic);
-                    return Err(legacy);
-                }
+                Err(error) => return Err(error.into()),
             }
         }
     }
     if depth != 0 {
-        return Err(crate::ConfigError::Parse(
-            "routing: unterminated parenthesized rule".into(),
-        ));
+        return Err(
+            crate::ConfigError::Parse("routing: unterminated parenthesized rule".into()).into(),
+        );
     }
     Ok(config)
 }

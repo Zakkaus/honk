@@ -28,10 +28,21 @@ impl<'d, 'a> Text<'d, 'a> {
     }
 
     pub fn sub(self, start: usize, end: usize) -> Self {
+        let span = self
+            .source
+            .span(self.span.start + start, self.span.start + end);
+        let first = self
+            .tokens
+            .partition_point(|token| token.span.end <= span.start);
+        let last = if span.start == span.end {
+            first
+        } else {
+            self.tokens
+                .partition_point(|token| token.span.start < span.end)
+        };
         Self {
-            span: self
-                .source
-                .span(self.span.start + start, self.span.start + end),
+            tokens: &self.tokens[first..last],
+            span,
             ..self
         }
     }
@@ -42,13 +53,27 @@ impl<'d, 'a> Text<'d, 'a> {
         self.sub(start, start + raw.trim().len())
     }
 
+    fn quotes(self) -> impl Iterator<Item = Span> + 'd {
+        let bounds = self.span;
+        self.tokens.iter().flat_map(move |token| {
+            let first = token
+                .quoted
+                .partition_point(|quote| quote.start < bounds.start);
+            let quoted = &token.quoted[first..];
+            let last = quoted.partition_point(|quote| quote.end <= bounds.end);
+            quoted[..last].iter().copied().filter(move |quote| {
+                quote.source == bounds.source
+                    && bounds.start <= quote.start
+                    && quote.end <= bounds.end
+            })
+        })
+    }
+
     pub fn quoted_prefix(self) -> Option<Self> {
         let text = self.trim();
-        self.tokens
-            .iter()
-            .flat_map(|token| &token.quoted)
-            .find(|span| span.start == text.span.start && span.end <= text.span.end)
-            .map(|&span| Self { span, ..self })
+        text.quotes()
+            .find(|span| span.start == text.span.start)
+            .map(|span| text.sub(0, span.end - text.span.start))
     }
 
     pub fn unquote(self) -> Self {
@@ -65,69 +90,111 @@ impl<'d, 'a> Text<'d, 'a> {
             text
         }
     }
-    pub fn find(self, delimiter: &str) -> Option<usize> {
-        self.raw().match_indices(delimiter).find_map(|(offset, _)| {
-            let position = self.span.start + offset;
-            (!self
-                .tokens
-                .iter()
-                .flat_map(|token| &token.quoted)
-                .any(|quote| {
-                    self.span.start <= quote.start
-                        && quote.end <= self.span.end
-                        && quote.start <= position
-                        && position < quote.end
-                }))
-            .then_some(offset)
+
+    pub(super) fn delimiter_positions<'s>(
+        self,
+        delimiter: &'s str,
+    ) -> impl Iterator<Item = usize> + 's
+    where
+        'd: 's,
+    {
+        assert!(!delimiter.is_empty(), "delimiter must not be empty");
+        let raw = self.raw();
+        let mut quotes = self.quotes().peekable();
+        let mut offset = 0;
+        std::iter::from_fn(move || {
+            loop {
+                if offset + delimiter.len() > raw.len() {
+                    return None;
+                }
+                let position = self.span.start + offset;
+                while quotes.peek().is_some_and(|quote| quote.end <= position) {
+                    quotes.next();
+                }
+                if let Some(quote) = quotes.peek().filter(|quote| quote.start <= position) {
+                    offset = quote.end - self.span.start;
+                    quotes.next();
+                    continue;
+                }
+                if raw[offset..].starts_with(delimiter) {
+                    offset += delimiter.len();
+                    return Some(position);
+                }
+                offset += raw[offset..].chars().next()?.len_utf8();
+            }
         })
     }
 
-    pub fn split(self, delimiter: &str) -> Vec<Self> {
-        let mut remaining = self;
-        let mut parts = Vec::new();
-        while let Some(offset) = remaining.find(delimiter) {
-            parts.push(remaining.sub(0, offset));
-            remaining = remaining.sub(offset + delimiter.len(), remaining.raw().len());
-        }
-        parts.push(remaining);
-        parts
+    pub fn find(self, delimiter: &str) -> Option<usize> {
+        self.delimiter_positions(delimiter)
+            .next()
+            .map(|position| position - self.span.start)
+    }
+
+    pub fn split<'s>(self, delimiter: &'s str) -> impl Iterator<Item = Self> + 's
+    where
+        'd: 's,
+    {
+        let mut delimiters = self.delimiter_positions(delimiter);
+        let mut start = self.span.start;
+        let mut done = false;
+        std::iter::from_fn(move || {
+            if done {
+                return None;
+            }
+            if let Some(end) = delimiters.next() {
+                let part = self.sub(start - self.span.start, end - self.span.start);
+                start = end + delimiter.len();
+                Some(part)
+            } else {
+                done = true;
+                Some(self.sub(start - self.span.start, self.span.end - self.span.start))
+            }
+        })
+    }
+
+    pub(super) fn parentheses(self) -> impl Iterator<Item = (usize, u8)> + 'd {
+        let raw = self.raw().as_bytes();
+        let mut quotes = self.quotes().peekable();
+        let mut offset = 0;
+        std::iter::from_fn(move || {
+            loop {
+                let &byte = raw.get(offset)?;
+                let position = self.span.start + offset;
+                while quotes.peek().is_some_and(|quote| quote.end <= position) {
+                    quotes.next();
+                }
+                if let Some(quote) = quotes.peek().filter(|quote| quote.start <= position) {
+                    offset = quote.end - self.span.start;
+                    quotes.next();
+                    continue;
+                }
+                offset += 1;
+                if matches!(byte, b'(' | b')') {
+                    return Some((position, byte));
+                }
+            }
+        })
     }
 
     /// Return the leading parenthesized body and its untouched trailing span.
     pub fn parenthesized(self) -> Option<(Self, Self)> {
-        let raw = self.raw().as_bytes();
-        if raw.first() != Some(&b'(') {
+        if !self.raw().starts_with('(') {
             return None;
         }
-        let mut quotes = self
-            .tokens
-            .iter()
-            .flat_map(|token| &token.quoted)
-            .filter(|quote| self.span.start <= quote.start && quote.end <= self.span.end)
-            .peekable();
         let mut depth = 0;
-        let mut index = 0;
-        while index < raw.len() {
-            let absolute = self.span.start + index;
-            while quotes.peek().is_some_and(|quote| quote.end <= absolute) {
-                quotes.next();
-            }
-            if let Some(quote) = quotes.peek().filter(|quote| quote.start <= absolute) {
-                index = quote.end - self.span.start;
-                quotes.next();
-                continue;
-            }
-            match raw[index] {
+        for (position, byte) in self.parentheses() {
+            match byte {
                 b'(' => depth += 1,
                 b')' => {
                     depth -= 1;
                     if depth == 0 {
-                        return Some((self.sub(1, index), self.sub(index + 1, raw.len())));
+                        let end = position - self.span.start;
+                        return Some((self.sub(1, end), self.sub(end + 1, self.raw().len())));
                     }
                 }
-                _ => {}
+                _ => unreachable!(),
             }
-            index += 1;
         }
         None
     }
@@ -161,19 +228,8 @@ impl<'d, 'a> Text<'d, 'a> {
     /// K01: warn once where the old parser truncated a glued hash.
     pub fn warn_glued_hash(self, diagnostics: &mut ParserDiagnostics<'_>) {
         let raw = self.raw();
-        for (offset, byte) in raw.bytes().enumerate() {
-            if byte != b'#' {
-                continue;
-            }
-            let absolute = self.span.start + offset;
-            if self
-                .tokens
-                .iter()
-                .flat_map(|token| &token.quoted)
-                .any(|quote| quote.start <= absolute && absolute < quote.end)
-            {
-                continue;
-            }
+        for position in self.delimiter_positions("#") {
+            let offset = position - self.span.start;
             if offset == 0 || raw.as_bytes()[offset - 1].is_ascii_whitespace() {
                 continue;
             }
@@ -216,9 +272,8 @@ pub(super) fn child_statements<'d, 'a>(
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Vec<Text<'d, 'a>> {
     let mut output = Vec::new();
-    if let Some(mut body) = segment.body() {
-        while body.next() {
-            let child = body.next_segment().expect("statement or block header");
+    if let Some(body) = segment.body() {
+        for child in body {
             if let Some(header) = block_header(&child) {
                 header.notice(
                     diagnostics,

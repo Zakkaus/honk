@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 
 use super::cursor::Segment;
+use super::lexer::quoted_end;
 use super::read::{self, Text};
 use super::scalars;
 use super::{ParserDiagnostics, lenient, normalize_geosite_code, parse_ip_prefer};
 use crate::ConfigDiagnostic;
 use crate::diagnostic::{DetailedDiagnostic, SafeValue, SettingPath, Severity};
 use crate::dns::DnsConfig;
+use crate::error::{DetailedConfigError, ErrorCategory};
 
 fn children<'d, 'a>(
     section: &Segment<'d, 'a>,
@@ -15,9 +17,8 @@ fn children<'d, 'a>(
     blocks: &mut Vec<Segment<'d, 'a>>,
     diagnostics: &mut ParserDiagnostics<'_>,
 ) {
-    if let Some(mut body) = section.body() {
-        while body.next() {
-            let child = body.next_segment().expect("DNS statement or block");
+    if let Some(body) = section.body() {
+        for child in body {
             if let Some(header) = read::block_header(&child) {
                 if recognized.contains(&header.raw()) {
                     blocks.push(child);
@@ -38,34 +39,59 @@ fn children<'d, 'a>(
 fn terminal_scalar_quote(
     line: Text<'_, '_>,
     diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<(), crate::ConfigError> {
+) -> Result<(), DetailedConfigError> {
     if !line.has_error() {
         return Ok(());
     }
-    let Some(index) = diagnostics.output.iter().rposition(|diagnostic| {
+    let prior = diagnostics.output.iter().rposition(|diagnostic| {
         diagnostic.code == "unterminated-quote"
             && diagnostic.source.same_source(&line.source.reference())
             && diagnostic
                 .span
                 .as_ref()
                 .is_some_and(|span| span.start < line.span.end && line.span.start < span.end)
-    }) else {
-        return Err(crate::ConfigError::Parse(
-            "unterminated scalar quote".into(),
-        ));
-    };
-    let mut diagnostic = diagnostics.output.remove(index);
+    });
+    let mut diagnostic = prior
+        .map(|index| diagnostics.remove(index))
+        .unwrap_or_else(|| {
+            line.source.diagnostic(
+                line.span,
+                Severity::Error,
+                "unterminated-quote",
+                "quote must close on the same physical line",
+            )
+        });
     diagnostic.terminal = true;
-    diagnostics.failure = Some(diagnostic);
-    Err(crate::ConfigError::Parse(
-        "unterminated scalar quote".into(),
-    ))
+    Err(DetailedConfigError {
+        category: ErrorCategory::Parse,
+        diagnostic: Box::new(diagnostic),
+    })
+}
+
+fn dns_error(
+    text: Text<'_, '_>,
+    code: &'static str,
+    field: &'static str,
+    message: &'static str,
+) -> DetailedConfigError {
+    let mut error = DetailedConfigError::new(
+        ErrorCategory::Parse,
+        code,
+        text.source.reference(),
+        SettingPath::new("dns").field(field),
+        message,
+    );
+    let (line, column) = text.source.location(text.span.start);
+    error.diagnostic.line = Some(line);
+    error.diagnostic.span = Some(text.span.start..text.span.end);
+    error.diagnostic.byte_column = Some(column);
+    error
 }
 
 fn raw_fields<'d, 'a>(
     lines: Vec<Text<'d, 'a>>,
     diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<(HashMap<&'d str, Text<'d, 'a>>, Vec<Text<'d, 'a>>), crate::ConfigError> {
+) -> Result<(HashMap<&'d str, Text<'d, 'a>>, Vec<Text<'d, 'a>>), DetailedConfigError> {
     let mut raw = HashMap::new();
     let mut hosts = Vec::new();
     for line in lines {
@@ -114,7 +140,7 @@ fn raw_fields<'d, 'a>(
 pub(super) fn parse_section(
     section: &[Segment<'_, '_>],
     diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<DnsConfig, crate::ConfigError> {
+) -> Result<DnsConfig, super::ParseFailure> {
     let mut lines = Vec::new();
     let mut dns_subs = Vec::new();
     for root in section {
@@ -131,21 +157,37 @@ pub(super) fn parse_section(
     let mut saw_upstream = false;
     if let Some(bind) = settings.get("bind") {
         cfg.bind = bind.unquote().raw().to_owned();
-        cfg.bind_endpoint()
-            .map_err(|error| crate::ConfigError::Parse(error.to_string()))?;
+        cfg.bind_endpoint().map_err(|_| {
+            dns_error(
+                *bind,
+                "invalid-config-value",
+                "bind",
+                "invalid configuration value",
+            )
+        })?;
     }
-    if settings.contains_key("hosts_file") {
-        return Err(crate::ConfigError::Parse(
-            "dns.hosts_file was removed; use one or more use_host paths".into(),
-        ));
+    if let Some(hosts_file) = settings.get("hosts_file") {
+        return Err(dns_error(
+            *hosts_file,
+            "removed-dns-hosts-file",
+            "hosts_file",
+            "hosts_file was removed; use one or more use_host paths",
+        )
+        .into());
     }
     for value in hosts {
         crate::dns::push_host_source(&mut cfg.hosts, value.unquote().raw());
     }
     if let Some(value) = settings.get("client_subnet") {
         cfg.client_subnet = value.unquote().raw().to_owned();
-        cfg.client_subnet_mode()
-            .map_err(|error| crate::ConfigError::Parse(error.to_string()))?;
+        cfg.client_subnet_mode().map_err(|_| {
+            dns_error(
+                *value,
+                "invalid-config-value",
+                "client_subnet",
+                "expected empty, auto, auto(IPv4), IPv4, or IPv4/prefix",
+            )
+        })?;
     }
     if let Some(v) = settings.get("ipversion_prefer") {
         let value = v.unquote().raw();
@@ -451,6 +493,24 @@ fn parse_fixed_domain_ttl(
     map
 }
 
+fn legacy_comment_has_unquoted_slash(comment: Text<'_, '_>) -> bool {
+    let bytes = comment.raw().as_bytes();
+    let mut offset = 0;
+    while offset + 1 < bytes.len() {
+        match bytes[offset] {
+            b'\'' | b'"' => {
+                let Some(end) = quoted_end(bytes, offset) else {
+                    return false;
+                };
+                offset = end;
+            }
+            b'/' if bytes[offset + 1] == b'/' => return true,
+            _ => offset += 1,
+        }
+    }
+    false
+}
+
 fn parse_dns_routing(
     section: &Segment<'_, '_>,
     routing: &mut crate::dns::DnsRouting,
@@ -475,10 +535,7 @@ fn parse_dns_routing(
             };
             if line.find("#").is_some()
                 || line.source.text().as_bytes()[comment.span.start - 1] != b' '
-                || suffix.find("//").is_some_and(|offset| {
-                    let prefix = suffix.sub(0, offset);
-                    prefix.find("'").is_none() && prefix.find("\"").is_none()
-                })
+                || legacy_comment_has_unquoted_slash(suffix)
             {
                 comment.notice(
                     diagnostics,
@@ -625,7 +682,6 @@ fn parse_dns_conditions(
         }
         let args: Vec<_> = arguments
             .split(",")
-            .into_iter()
             .map(Text::unquote)
             .filter(|arg| !arg.raw().is_empty())
             .collect();

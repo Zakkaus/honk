@@ -62,6 +62,10 @@ WebSocket upgrade 也可以改用 `?token=<percent-encoded-secret>`。honk 会�
 准入检查后，只替换该订阅的诊断，即使节点未变也是如此；
 静态文件和其他订阅的诊断保持不变。
 
+库调用方须向 `ControlPlane::reload_runtime_config(config, diagnostics)` 传入 `DiagnosticBuckets`，分别保留静态配置与订阅正文的诊断；没有诊断的程序构造输入使用 `DiagnosticBuckets::default()`。`merge_subscription_nodes(provider, nodes, diagnostics)` 接收该订阅的诊断向量，也支持已准入但没有 worker 声明的订阅。完整配置替换会移入候选配置的全部诊断来源信息，订阅替换只影响对应订阅。SIGHUP 仅保留重建候选配置时实际沿用的订阅正文的诊断；自动生成的拓扑/ECS 更新保留原输入来源。所有修改沿用配置写锁的发布屏障，先获取配置锁，再获取诊断锁。
+
+完整替换载荷中的 provider bucket 必须使用唯一 UUID。重复 UUID 会在发布前拒绝整个重载，即使有效配置未变也是如此；当前配置与诊断保持不变。
+
 | 字段 | 含义 |
 | --- | --- |
 | `honk-diagnostics.generation` | 当前配置的 `generation`；启动时为 `0`。 |
@@ -84,7 +88,7 @@ WebSocket upgrade 也可以改用 `?token=<percent-encoded-secret>`。honk 会�
 | `diagnostics[].terminal` | 该诊断是否表示本次尝试的终止错误。 |
 
 配置的 `generation` 与当前 DNS 运行时一致。来源标识仅在本次快照内有效，不是文件系统标识。
-来源先按静态文件、再按配置中的订阅声明顺序排列，各来源表保留原始顺序。
+来源先按静态文件、再按配置中的订阅声明顺序排列，最后按保留 bucket 的顺序列出已准入的非 worker 订阅；各来源表保留原始顺序。
 仅列出诊断引用的来源及其祖先，不导出文件路径、原始输入、凭据、订阅名称或订阅 ID。
 
 ### 延迟测量
