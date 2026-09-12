@@ -12,7 +12,7 @@ The scope is `GroupManager`, `AliveDialerSet`, the always-compiled Score scorer,
 
 `SharedGroupManager = Arc<parking_lot::RwLock<Arc<GroupManager>>>`
 
-A reload builds a complete replacement `GroupManager`, migrates Selector choices whose group and member tag still exist via `migrate_selector_choices_from`, installs callbacks, and swaps the inner `Arc`. Readers therefore see either the old or the new manager, never a partially rebuilt graph.
+A reload builds a complete replacement `GroupManager`, migrates Selector choices whose group and member tag still exist via `migrate_selector_choices_from`, installs interrupt, warm-up, and persistence callbacks before publication, and swaps the inner `Arc`. Readers therefore see either the old or the new manager, never a partially rebuilt graph.
 
 The `src/group/` facade and its internals are split by responsibility:
 

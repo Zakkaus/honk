@@ -12,7 +12,7 @@
 
 `Arc<parking_lot::RwLock<Arc<GroupManager>>>`
 
-重载会构建完整的替代 `GroupManager`，迁移组和成员 tag 仍然存在的 Selector 选择，安装回调，再切换内部 `Arc`。因此读者只会看到旧管理器或新管理器，不会看到构建到一半的组图。
+重载会构建完整的替代 `GroupManager`，迁移组和成员 tag 仍然存在的 Selector 选择，在发布前安装连接中断、预热和持久化回调，再切换内部 `Arc`。因此读者只会看到旧管理器或新管理器，不会看到构建到一半的组图。
 
 facade 与内部实现按职责拆分：
 
