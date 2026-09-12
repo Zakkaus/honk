@@ -1,6 +1,7 @@
+use super::cursor::Segment;
 use super::lexer::Span;
 use super::read::Text;
-use super::{Block, ParserDiagnostics, normalize_geosite_code, read, strip_tag_arg};
+use super::{ParserDiagnostics, normalize_geosite_code, read};
 use crate::diagnostic::{SettingPath, Severity};
 use crate::error::{DetailedConfigError, ErrorCategory};
 use crate::routing::{RoutingCondition, RoutingConfig, RoutingRule};
@@ -125,12 +126,23 @@ impl<'p, 'd, 'a> Expression<'p, 'd, 'a> {
         output
     }
 
-    fn value(self) -> String {
+    fn unquote(self) -> Self {
         let text = self.trim();
         let mut parts = text.parts();
         match (parts.next(), parts.next()) {
-            (Some(part), None) => part.unquote().raw().to_owned(),
-            _ => text.display(),
+            (Some(part), None) => {
+                let part = part.unquote();
+                text.sub(part.span.start, part.span.end)
+            }
+            _ => text,
+        }
+    }
+
+    fn value(self) -> std::borrow::Cow<'d, str> {
+        let mut parts = self.parts();
+        match (parts.next(), parts.next()) {
+            (Some(part), None) => std::borrow::Cow::Borrowed(part.raw()),
+            _ => std::borrow::Cow::Owned(self.display()),
         }
     }
 
@@ -156,11 +168,11 @@ impl<'p, 'd, 'a> Expression<'p, 'd, 'a> {
 }
 
 pub(super) fn parse_section(
-    section: &Block,
+    section: &[Segment<'_, '_>],
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Result<RoutingConfig, crate::ConfigError> {
     let mut config = RoutingConfig::default();
-    let lines = read::statements(section);
+    let lines = read::statements(section, diagnostics);
     let mut start = 0;
     let mut depth = 0usize;
     let mut ordinal = 0;
@@ -203,7 +215,12 @@ pub(super) fn parse_section(
                     }
                     config.rules.push(rule);
                 }
-                Ok(None) => {}
+                Ok(None) => statement.parts().next().unwrap().notice(
+                    diagnostics,
+                    Severity::Warning,
+                    "unknown-statement",
+                    "traffic statement without an arrow ignored",
+                ),
                 Err(error) => {
                     let legacy = crate::ConfigError::Parse(error.diagnostic.message.to_owned());
                     diagnostics.failure = Some(*error.diagnostic);
@@ -301,17 +318,25 @@ fn parse_route_matcher(
     ] {
         if let Some(args) = parse_call(matcher, name, ordinal)? {
             match name {
-                "pname" => target.process_name.extend(args),
                 "dip" => parse_ip_args(&args, &mut target),
-                "sip" => target.source_ip.extend(args),
                 "domain" => parse_domain_args(&args, &mut target),
-                "dport" => target.port.extend(args),
-                "sport" => target.source_port.extend(args),
-                "l4proto" => target.protocol.extend(args),
-                "ipversion" => target.ip_version.extend(args),
-                "mac" => target.mac.extend(args),
-                "dscp" => target.dscp.extend(args),
-                _ => unreachable!(),
+                _ => {
+                    let field = match name {
+                        "pname" => target.process_name,
+                        "sip" => target.source_ip,
+                        "dport" => target.port,
+                        "sport" => target.source_port,
+                        "l4proto" => target.protocol,
+                        "ipversion" => target.ip_version,
+                        "mac" => target.mac,
+                        "dscp" => target.dscp,
+                        _ => unreachable!(),
+                    };
+                    field.extend(
+                        args.into_iter()
+                            .map(|argument| argument.value().into_owned()),
+                    );
+                }
             }
             return Ok(());
         }
@@ -322,14 +347,15 @@ fn parse_route_matcher(
         if matcher.starts_with(prefix) {
             let value = matcher
                 .sub(matcher.span.start + prefix.len(), matcher.span.end)
+                .unquote()
                 .value();
             match prefix {
                 "geosite:" => target.geosite.push(normalize_geosite_code(&value)),
                 "geoip:" => target.geo_ip.push(normalize_geosite_code(&value)),
-                "domain:" | "suffix:" => target.domain_suffix.push(value),
-                "keyword:" => target.domain_keyword.push(value),
-                "full:" => target.domain.push(value),
-                "regex:" => target.domain_regex.push(value),
+                "domain:" | "suffix:" => target.domain_suffix.push(value.into_owned()),
+                "keyword:" => target.domain_keyword.push(value.into_owned()),
+                "full:" => target.domain.push(value.into_owned()),
+                "regex:" => target.domain_regex.push(value.into_owned()),
                 _ => unreachable!(),
             }
             return Ok(());
@@ -342,11 +368,11 @@ fn parse_route_matcher(
     ))
 }
 
-fn parse_call(
-    matcher: Expression<'_, '_, '_>,
+fn parse_call<'p, 'd, 'a>(
+    matcher: Expression<'p, 'd, 'a>,
     name: &str,
     ordinal: usize,
-) -> Result<Option<Vec<String>>, DetailedConfigError> {
+) -> Result<Option<Vec<Expression<'p, 'd, 'a>>>, DetailedConfigError> {
     if !matcher.parts().next().is_some_and(|part| {
         part.raw()
             .strip_prefix(name)
@@ -372,36 +398,49 @@ fn parse_call(
     Ok(Some(
         call.sub(call.span.start + 1, position)
             .split(",")
-            .map(Expression::value)
+            .map(Expression::unquote)
             .filter(|value| !value.is_empty())
             .collect(),
     ))
 }
 
-fn parse_domain_args(args: &[String], cond: &mut crate::routing::ConditionFields<'_>) {
+fn parse_domain_args(
+    args: &[Expression<'_, '_, '_>],
+    cond: &mut crate::routing::ConditionFields<'_>,
+) {
     for a in args {
-        if let Some(v) = strip_tag_arg(a, "geosite:") {
-            cond.geosite.push(normalize_geosite_code(&v));
-        } else if let Some(v) = strip_tag_arg(a, "keyword:") {
-            cond.domain_keyword.push(v);
-        } else if let Some(v) = strip_tag_arg(a, "full:") {
-            cond.domain.push(v);
-        } else if let Some(v) = strip_tag_arg(a, "regex:") {
-            cond.domain_regex.push(v);
-        } else if let Some(v) = strip_tag_arg(a, "suffix:") {
-            cond.domain_suffix.push(v);
+        let prefix = ["geosite:", "keyword:", "full:", "regex:", "suffix:"]
+            .into_iter()
+            .find(|prefix| a.starts_with(prefix));
+        if let Some(prefix) = prefix {
+            let value = a
+                .sub(a.span.start + prefix.len(), a.span.end)
+                .unquote()
+                .value();
+            match prefix {
+                "geosite:" => cond.geosite.push(normalize_geosite_code(&value)),
+                "keyword:" => cond.domain_keyword.push(value.into_owned()),
+                "full:" => cond.domain.push(value.into_owned()),
+                "regex:" => cond.domain_regex.push(value.into_owned()),
+                "suffix:" => cond.domain_suffix.push(value.into_owned()),
+                _ => unreachable!(),
+            }
         } else {
-            cond.domain_suffix.push(a.clone());
+            cond.domain_suffix.push(a.value().into_owned());
         }
     }
 }
 
-fn parse_ip_args(args: &[String], cond: &mut crate::routing::ConditionFields<'_>) {
+fn parse_ip_args(args: &[Expression<'_, '_, '_>], cond: &mut crate::routing::ConditionFields<'_>) {
     for a in args {
-        if let Some(v) = strip_tag_arg(a, "geoip:") {
-            cond.geo_ip.push(normalize_geosite_code(&v));
+        if a.starts_with("geoip:") {
+            let value = a
+                .sub(a.span.start + "geoip:".len(), a.span.end)
+                .unquote()
+                .value();
+            cond.geo_ip.push(normalize_geosite_code(&value));
         } else {
-            cond.ip.push(a.clone());
+            cond.ip.push(a.value().into_owned());
         }
     }
 }

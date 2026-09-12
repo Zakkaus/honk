@@ -1,22 +1,19 @@
 use std::collections::HashMap;
 
 use super::cursor::Segment;
-use super::lexer::TokenKind;
 use super::read::{self, Text};
 use super::scalars;
-use super::{
-    Block, ParserDiagnostics, lenient, normalize_geosite_code, parse_ip_prefer, strip_tag_arg,
-};
+use super::{ParserDiagnostics, lenient, normalize_geosite_code, parse_ip_prefer};
 use crate::ConfigDiagnostic;
 use crate::diagnostic::{DetailedDiagnostic, SafeValue, SettingPath, Severity};
 use crate::dns::DnsConfig;
 
-// Preserve unknown-wrapper traversal until C13 changes that policy.
 fn children<'d, 'a>(
     section: &Segment<'d, 'a>,
     recognized: &[&str],
     lines: &mut Vec<Text<'d, 'a>>,
     blocks: &mut Vec<Segment<'d, 'a>>,
+    diagnostics: &mut ParserDiagnostics<'_>,
 ) {
     if let Some(mut body) = section.body() {
         while body.next() {
@@ -25,16 +22,12 @@ fn children<'d, 'a>(
                 if recognized.contains(&header.raw()) {
                     blocks.push(child);
                 } else {
-                    let mut statement = Text::segment(&child);
-                    if let Some(opener) = child
-                        .tokens()
-                        .iter()
-                        .find(|token| token.kind == TokenKind::OpenBrace)
-                    {
-                        statement.span.end = opener.span.end;
-                    }
-                    lines.push(statement);
-                    children(&child, recognized, lines, blocks);
+                    header.notice(
+                        diagnostics,
+                        Severity::Warning,
+                        "unknown-block",
+                        "unknown nested block ignored",
+                    );
                 }
             } else {
                 lines.push(Text::segment(&child));
@@ -69,17 +62,44 @@ fn terminal_scalar_quote(
     ))
 }
 
-fn raw_fields<'d>(
-    lines: Vec<Text<'d, 'static>>,
+fn raw_fields<'d, 'a>(
+    lines: Vec<Text<'d, 'a>>,
     diagnostics: &mut ParserDiagnostics<'_>,
-) -> Result<(HashMap<&'d str, Text<'d, 'static>>, Vec<Text<'d, 'static>>), crate::ConfigError> {
+) -> Result<(HashMap<&'d str, Text<'d, 'a>>, Vec<Text<'d, 'a>>), crate::ConfigError> {
     let mut raw = HashMap::new();
     let mut hosts = Vec::new();
     for line in lines {
         terminal_scalar_quote(line, diagnostics)?;
         let Some((key, value)) = line.kv() else {
+            line.notice(
+                diagnostics,
+                Severity::Warning,
+                "unknown-statement",
+                "unknown DNS statement ignored",
+            );
             continue;
         };
+        if ![
+            "bind",
+            "hosts_file",
+            "use_host",
+            "client_subnet",
+            "ipversion_prefer",
+            "optimistic_cache",
+            "optimistic_cache_ttl",
+            "optimistic_stale_reply_ttl",
+            "max_cache_size",
+        ]
+        .contains(&key.raw())
+        {
+            key.notice(
+                diagnostics,
+                Severity::Warning,
+                "unknown-key",
+                "unknown scalar key ignored",
+            );
+            continue;
+        }
         let key = key.raw();
         diagnostics.register_field(key, value);
         value.warn_glued_hash(diagnostics);
@@ -92,18 +112,18 @@ fn raw_fields<'d>(
 }
 
 pub(super) fn parse_section(
-    section: &Block,
+    section: &[Segment<'_, '_>],
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Result<DnsConfig, crate::ConfigError> {
-    diagnostics.at_section(section, &["upstream", "routing", "fixed_domain_ttl"]);
     let mut lines = Vec::new();
     let mut dns_subs = Vec::new();
-    for owned in &section.segments {
+    for root in section {
         children(
-            &owned.get(),
+            root,
             &["upstream", "routing", "fixed_domain_ttl"],
             &mut lines,
             &mut dns_subs,
+            diagnostics,
         );
     }
     let (settings, hosts) = raw_fields(lines, diagnostics)?;
@@ -196,7 +216,22 @@ pub(super) fn parse_section(
             }
             "routing" => {
                 let mut blocks = Vec::new();
-                children(&sub, &["request", "response"], &mut Vec::new(), &mut blocks);
+                let mut lines = Vec::new();
+                children(
+                    &sub,
+                    &["request", "response"],
+                    &mut lines,
+                    &mut blocks,
+                    diagnostics,
+                );
+                for line in lines {
+                    line.notice(
+                        diagnostics,
+                        Severity::Warning,
+                        "unknown-statement",
+                        "DNS routing requires request or response blocks",
+                    );
+                }
                 for block in blocks {
                     parse_dns_routing(&block, &mut cfg.routing, diagnostics);
                 }
@@ -217,7 +252,10 @@ fn parse_dns_upstreams(
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Vec<crate::dns::DnsUpstream> {
     let mut upstreams = Vec::new();
-    for (index, line) in read::child_statements(section).into_iter().enumerate() {
+    for (index, line) in read::child_statements(section, diagnostics)
+        .into_iter()
+        .enumerate()
+    {
         if line.has_error() {
             continue;
         }
@@ -363,7 +401,10 @@ fn parse_fixed_domain_ttl(
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> HashMap<String, u32> {
     let mut map = HashMap::new();
-    for (index, line) in read::child_statements(section).into_iter().enumerate() {
+    for (index, line) in read::child_statements(section, diagnostics)
+        .into_iter()
+        .enumerate()
+    {
         if line.has_error() {
             continue;
         }
@@ -417,21 +458,27 @@ fn parse_dns_routing(
 ) {
     let is_response = read::block_header(section).unwrap().raw() == "response";
     let kind = if is_response { "response" } else { "request" };
-    for (index, line) in read::child_statements(section).into_iter().enumerate() {
+    for (index, line) in read::child_statements(section, diagnostics)
+        .into_iter()
+        .enumerate()
+    {
         if line.has_error() {
             continue;
         }
         let ordinal = index + 1;
         diagnostics.entry_text(line, ordinal);
         if let Some(comment) = line.trailing_comment() {
-            let suffix = &line.source.text()[comment.span.start..];
+            let token = line.comment.expect("trailing comment token");
+            let suffix = Text {
+                span: token.span,
+                ..line
+            };
             if line.find("#").is_some()
                 || line.source.text().as_bytes()[comment.span.start - 1] != b' '
-                || suffix
-                    .lines()
-                    .next()
-                    .and_then(|text| text.split_once("//"))
-                    .is_some_and(|(prefix, _)| !prefix.contains(['\'', '"']))
+                || suffix.find("//").is_some_and(|offset| {
+                    let prefix = suffix.sub(0, offset);
+                    prefix.find("'").is_none() && prefix.find("\"").is_none()
+                })
             {
                 comment.notice(
                     diagnostics,
@@ -576,12 +623,11 @@ fn parse_dns_conditions(
                 "quoted qtype aggregates remain lists; prefer bare or individually quoted items",
             );
         }
-        let args: Vec<String> = arguments
+        let args: Vec<_> = arguments
             .split(",")
             .into_iter()
-            .map(|arg| arg.unquote().raw())
-            .filter(|arg| !arg.is_empty())
-            .map(str::to_owned)
+            .map(Text::unquote)
+            .filter(|arg| !arg.raw().is_empty())
             .collect();
         let condition = match name {
             "qname" => crate::dns::DnsCond::Qname {
@@ -591,7 +637,7 @@ fn parse_dns_conditions(
             "qtype" => {
                 let types: Option<Vec<u16>> = args
                     .iter()
-                    .flat_map(|argument| argument.split(','))
+                    .flat_map(|argument| argument.raw().split(','))
                     .map(crate::dns::parse_qtype_token)
                     .collect();
                 let Some(types) = types else {
@@ -601,12 +647,16 @@ fn parse_dns_conditions(
                 crate::dns::DnsCond::Qtype { not, types }
             }
             "sip" => {
+                let args: Vec<_> = args.into_iter().map(|arg| arg.raw().to_owned()).collect();
                 if !validate_dns_networks(&args, diagnostics, route_kind, ordinal) {
                     return Vec::new();
                 }
                 crate::dns::DnsCond::Sip { not, cidrs: args }
             }
-            "upstream" => crate::dns::DnsCond::Upstream { not, names: args },
+            "upstream" => crate::dns::DnsCond::Upstream {
+                not,
+                names: args.into_iter().map(|arg| arg.raw().to_owned()).collect(),
+            },
             "ip" => {
                 let (cidrs, geoip) = parse_dns_ip_args(&args);
                 if !validate_dns_networks(&cidrs, diagnostics, route_kind, ordinal) {
@@ -671,43 +721,45 @@ fn validate_dns_networks(
 }
 
 /// Parse qname(args) into a list of domain matchers.
-fn parse_dns_qname_args(args: &[String]) -> Vec<crate::dns::DnsDomainMatcher> {
+fn parse_dns_qname_args(args: &[Text<'_, '_>]) -> Vec<crate::dns::DnsDomainMatcher> {
     let mut matchers = Vec::new();
     for a in args {
         let a = a.trim();
-        if a.is_empty() {
+        if a.raw().is_empty() {
             continue;
         }
-        if let Some(v) = strip_tag_arg(a, "geosite:") {
-            matchers.push(crate::dns::DnsDomainMatcher::Geosite(
-                normalize_geosite_code(&v),
-            ));
-        } else if let Some(v) = strip_tag_arg(a, "keyword:") {
-            matchers.push(crate::dns::DnsDomainMatcher::Keyword(v));
-        } else if let Some(v) = strip_tag_arg(a, "full:") {
-            matchers.push(crate::dns::DnsDomainMatcher::Full(v));
-        } else if let Some(v) = strip_tag_arg(a, "regex:") {
-            matchers.push(crate::dns::DnsDomainMatcher::Regex(v));
-        } else if let Some(v) = strip_tag_arg(a, "suffix:") {
-            matchers.push(crate::dns::DnsDomainMatcher::Suffix(v));
+        let prefix = ["geosite:", "keyword:", "full:", "regex:", "suffix:"]
+            .into_iter()
+            .find(|prefix| a.raw().starts_with(prefix));
+        if let Some(prefix) = prefix {
+            let value = a.sub(prefix.len(), a.raw().len()).unquote().raw();
+            matchers.push(match prefix {
+                "geosite:" => crate::dns::DnsDomainMatcher::Geosite(normalize_geosite_code(value)),
+                "keyword:" => crate::dns::DnsDomainMatcher::Keyword(value.to_owned()),
+                "full:" => crate::dns::DnsDomainMatcher::Full(value.to_owned()),
+                "regex:" => crate::dns::DnsDomainMatcher::Regex(value.to_owned()),
+                "suffix:" => crate::dns::DnsDomainMatcher::Suffix(value.to_owned()),
+                _ => unreachable!(),
+            });
         } else {
             // Bare argument → suffix (dae compatible)
-            matchers.push(crate::dns::DnsDomainMatcher::Suffix(a.to_string()));
+            matchers.push(crate::dns::DnsDomainMatcher::Suffix(a.raw().to_owned()));
         }
     }
     matchers
 }
 
 /// Parse ip(...) args into (cidrs, geoip_codes).
-fn parse_dns_ip_args(args: &[String]) -> (Vec<String>, Vec<String>) {
+fn parse_dns_ip_args(args: &[Text<'_, '_>]) -> (Vec<String>, Vec<String>) {
     let mut cidrs = Vec::new();
     let mut geoip = Vec::new();
     for a in args {
         let a = a.trim();
-        if let Some(v) = strip_tag_arg(a, "geoip:") {
-            geoip.push(v.to_lowercase());
+        if a.raw().starts_with("geoip:") {
+            let value = a.sub("geoip:".len(), a.raw().len()).unquote().raw();
+            geoip.push(value.to_lowercase());
         } else {
-            cidrs.push(a.to_string());
+            cidrs.push(a.raw().to_owned());
         }
     }
     (cidrs, geoip)

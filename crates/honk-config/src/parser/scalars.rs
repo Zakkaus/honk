@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
+use super::cursor::Segment;
 use super::diagnostics::ParserDiagnostics;
 use super::read::{self, Text};
-use super::structure::Block;
 use crate::config::GlobalConfig;
 use crate::diagnostic::{SettingPath, SettingSegment, Severity};
 use crate::experimental::ExperimentalConfig;
@@ -104,27 +104,39 @@ const GLOBAL_KEYS: &[&str] = &[
     "max_concurrent_dials",
 ];
 
-fn raw_fields<'d>(
-    section: &'d Block,
+fn raw_fields<'d, 'a>(
+    section: &[Segment<'d, 'a>],
     diagnostics: &mut ParserDiagnostics<'_>,
-) -> HashMap<&'d str, Text<'d, 'static>> {
+) -> HashMap<&'d str, Text<'d, 'a>> {
     let mut raw = HashMap::new();
-    for line in read::statements(section) {
+    for line in read::statements(section, diagnostics) {
         let Some((key, value)) = line.kv() else {
+            line.notice(
+                diagnostics,
+                Severity::Warning,
+                "unknown-statement",
+                "unknown scalar statement ignored",
+            );
             continue;
         };
-        let key = key.raw();
-        diagnostics.register_field(key, value);
-        if GLOBAL_KEYS.contains(&key) {
-            value.warn_glued_hash(diagnostics);
+        if !GLOBAL_KEYS.contains(&key.raw()) {
+            key.notice(
+                diagnostics,
+                Severity::Warning,
+                "unknown-key",
+                "unknown scalar key ignored",
+            );
+            continue;
         }
-        raw.insert(key, value);
+        diagnostics.register_field(key.raw(), value);
+        value.warn_glued_hash(diagnostics);
+        raw.insert(key.raw(), value);
     }
     raw
 }
 
 pub(super) fn bool_value(
-    settings: &HashMap<&str, Text<'_, 'static>>,
+    settings: &HashMap<&str, Text<'_, '_>>,
     key: &str,
     setting: &'static str,
     diagnostics: &mut ParserDiagnostics<'_>,
@@ -163,7 +175,7 @@ pub(super) fn bool_value(
 }
 
 fn list_value(
-    value: Text<'_, 'static>,
+    value: Text<'_, '_>,
     aggregate_compat: bool,
     legacy_unquote_items: bool,
     filter_empty: bool,
@@ -214,7 +226,7 @@ fn list_value(
 }
 
 pub(super) fn parse_global_section(
-    section: &Block,
+    section: &[Segment<'_, '_>],
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Result<GlobalConfig, super::ParseFailure> {
     let settings = raw_fields(section, diagnostics);
@@ -502,30 +514,38 @@ pub(super) fn parse_global_section(
     Ok(cfg)
 }
 
-pub(super) fn nfqueue_present(section: &Block) -> bool {
-    read::statements(section).into_iter().any(|line| {
-        line.kv()
-            .is_some_and(|(key, _)| key.raw() == "nfqueue_enable")
+pub(super) fn nfqueue_present(section: &[Segment<'_, '_>]) -> bool {
+    section.iter().any(|segment| {
+        let Some(mut body) = segment.body() else {
+            return false;
+        };
+        while body.next() {
+            let child = body.next_segment().expect("global statement or block");
+            if read::block_header(&child).is_none()
+                && Text::segment(&child)
+                    .kv()
+                    .is_some_and(|(key, _)| key.raw() == "nfqueue_enable")
+            {
+                return true;
+            }
+        }
+        false
     })
 }
 
 pub(super) fn parse_experimental_section(
-    section: &Block,
+    section: &[Segment<'_, '_>],
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Result<ExperimentalConfig, super::ParseFailure> {
     let mut config = ExperimentalConfig::default();
     let mut api_location = None;
-    for owned in &section.segments {
-        let root = owned.get();
+    for root in section {
         let Some(mut body) = root.body() else {
-            let text = Text::segment(&root).trim();
-            return Err(crate::ConfigError::Parse(format!(
-                "unknown experimental setting: {}",
-                text.raw()
-            )));
+            continue;
         };
         while body.next() {
             let segment = body.next_segment().expect("statement or block header");
+            diagnostics.at_text(Text::segment(&segment));
             let Some(header) = read::block_header(&segment) else {
                 return Err(scalar_error(
                     Text::segment(&segment),
@@ -548,21 +568,83 @@ pub(super) fn parse_experimental_section(
                 ][..],
                 "cache_file" => &["enabled", "path", "cache_id", "store_fakeip", "store_dns"][..],
                 "udp_nfqueue" => &["enabled"][..],
-                _ => &[][..],
+                _ => {
+                    return Err(scalar_error(
+                        header,
+                        "unknown-experimental-setting",
+                        "experimental",
+                        "unknown experimental setting",
+                    )
+                    .into());
+                }
             };
-            for line in read::child_statements(&segment) {
+            let lines = if name == "udp_nfqueue" {
+                let mut lines = Vec::new();
+                if let Some(mut body) = segment.body() {
+                    while body.next() {
+                        let child = body.next_segment().expect("NFQUEUE setting");
+                        let text = Text::segment(&child);
+                        diagnostics.at_text(text);
+                        if read::block_header(&child).is_some() {
+                            return Err(scalar_error(
+                                text,
+                                "unknown-nfqueue-setting",
+                                "experimental.udp_nfqueue",
+                                "unknown NFQUEUE setting; only enabled is supported",
+                            )
+                            .into());
+                        }
+                        lines.push(text);
+                    }
+                }
+                lines
+            } else {
+                read::child_statements(&segment, diagnostics)
+            };
+            for line in lines {
+                diagnostics.at_text(line);
                 let Some((key, value)) = line.kv() else {
+                    if name == "udp_nfqueue" {
+                        return Err(scalar_error(
+                            line,
+                            "unknown-nfqueue-setting",
+                            "experimental.udp_nfqueue",
+                            "unknown NFQUEUE setting; only enabled is supported",
+                        )
+                        .into());
+                    }
+                    line.notice(
+                        diagnostics,
+                        Severity::Warning,
+                        "unknown-statement",
+                        "unknown scalar statement ignored",
+                    );
                     continue;
                 };
-                let key = key.raw();
-                diagnostics.register_field(key, value);
-                if name == "clash_api" && key == "external_controller" {
+                if !known_keys.contains(&key.raw()) {
+                    if name == "udp_nfqueue" {
+                        return Err(scalar_error(
+                            line,
+                            "unknown-nfqueue-setting",
+                            "experimental.udp_nfqueue",
+                            "unknown NFQUEUE setting; only enabled is supported",
+                        )
+                        .into());
+                    }
+                    key.notice(
+                        diagnostics,
+                        Severity::Warning,
+                        "unknown-key",
+                        "unknown scalar key ignored",
+                    );
+                    continue;
+                }
+                diagnostics.register_field(key.raw(), value);
+                if name == "clash_api" && key.raw() == "external_controller" {
                     api_location = Some(diagnostics.field_location("external_controller"));
                 }
-                if known_keys.contains(&key) {
-                    value.warn_glued_hash(diagnostics);
-                }
-                values.insert(key, value);
+                value.warn_glued_hash(diagnostics);
+                values.insert(key.raw(), value);
             }
             match name {
                 "clash_api" => {
@@ -629,11 +711,6 @@ pub(super) fn parse_experimental_section(
                     }
                 }
                 "udp_nfqueue" => {
-                    if let Some(key) = values.keys().find(|key| **key != "enabled") {
-                        return Err(crate::ConfigError::Parse(format!(
-                            "unknown experimental.udp_nfqueue setting: {key}"
-                        )));
-                    }
                     let enabled = values
                         .get("enabled")
                         .map(|text| {

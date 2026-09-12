@@ -274,6 +274,8 @@ Benchmarks kept on `main`: `benches/dns.rs` (criterion, `harness = false`) cover
 
 Only documented format: original **dae syntax**, `{ include { ... } global { ... } node { ... } group { ... } routing { ... } dns { ... } subscription { ... } experimental { ... } }`, parsed by `honk-config/src/parser/mod.rs`. `include` accepts bare/quoted `.dae` globs, entry-relative; merge entry sections first, reject repeated/cyclic/escaping files. Examples: `config.dae` (full), `config.min.dae` (minimal), `example.dae` (annotated). Reference: `doc/en/reference/`; guide: `doc/en/configuration.md`.
 
+Parser layout (`crates/honk-config/src/parser/`): `lexer.rs` turns the source into tokens with byte spans and quoted spans under one rule (a quote opens at a token's first byte or right after an unquoted `(` or `,`; a quoted span is opaque; a token continues while glued; a standalone unquoted brace is structural; a token-head `#` is a comment; an unclosed quote is one located error token to end of line). `cursor.rs` builds a `Document` of root sections (`Root`) and bounded segments and owns every structural diagnostic. `read.rs` is the shared reader helper (`Text`: span slicing, dequoting by quoted span, glued-hash and trailing-comment location). Section readers (`scalars.rs`, `entries.rs`, `groups.rs`, `routing.rs`, `dns.rs`) interpret only their own grammar and emit diagnostics as data through `diagnostics.rs`; nothing below a reader knows about keys, URLs, user agents or call names, and no reader reads source bytes. The dialect's rules and every deliberate change are in `doc/en/reference/dialect.md`.
+
 Held-first-packet UDP has exactly one `global` key:
 
 ```dae

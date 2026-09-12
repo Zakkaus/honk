@@ -58,14 +58,14 @@ WebSocket upgrade 也可以改用 `?token=<percent-encoded-secret>`。honk 会�
 文件和订阅诊断。重载失败或订阅刷新被拒绝时，当前诊断列表保持不变；
 接口不缓存最近一次失败尝试。
 
-有效配置未变的成功重载可以替换诊断信息而不增加代号。订阅刷新通过授权和
+有效配置未变的成功重载可以替换诊断信息而不递增 `generation`。订阅刷新通过授权和
 准入检查后，只替换该订阅的诊断，即使节点未变也是如此；
 静态文件和其他订阅的诊断保持不变。
 
 | 字段 | 含义 |
 | --- | --- |
-| `honk-diagnostics.generation` | 当前配置的代号；启动时为 `0`。 |
-| `honk-diagnostics.sources` | 当前诊断及其祖先引用的来源元数据。 |
+| `honk-diagnostics.generation` | 当前配置的 `generation`；启动时为 `0`。 |
+| `honk-diagnostics.sources` | 保留的诊断所引用的来源及这些来源的祖先，仅包含元数据。 |
 | `sources[].id` | 本次快照内的不透明数字来源标识，供 `diagnostics[].source` 引用。 |
 | `sources[].ordinal` | 来源在单次解析尝试的来源表中的原始序号，从 `0` 开始。 |
 | `sources[].parent` | 父来源的 `id`；根来源为 `null`。 |
@@ -81,9 +81,9 @@ WebSocket upgrade 也可以改用 `?token=<percent-encoded-secret>`。honk 会�
 | `diagnostics[].message` | 静态诊断消息。 |
 | `diagnostics[].entry_index` | 原始条目序号；未知时为 `null`。 |
 | `diagnostics[].related_indices` | 相关原始条目的序号。 |
-| `diagnostics[].terminal` | 该诊断是否表示导致解析终止的错误。 |
+| `diagnostics[].terminal` | 该诊断是否表示本次尝试的终止错误。 |
 
-配置代号与当前 DNS 运行时的代号一致。来源标识仅在本次快照内有效，不代表文件路径。
+配置的 `generation` 与当前 DNS 运行时一致。来源标识仅在本次快照内有效，不是文件系统标识。
 来源先按静态文件、再按配置中的订阅声明顺序排列，各来源表保留原始顺序。
 仅列出诊断引用的来源及其祖先，不导出文件路径、原始输入、凭据、订阅名称或订阅 ID。
 

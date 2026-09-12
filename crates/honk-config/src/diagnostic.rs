@@ -215,7 +215,7 @@ impl DetailedDiagnostic {
     }
 }
 
-// The old scanner/readers remain until PR2; only this boundary projects their data.
+// Legacy diagnostic producers cross the redaction boundary here.
 pub(crate) fn project_legacy(d: ConfigDiagnostic, source: SourceRef) -> DetailedDiagnostic {
     let setting = [
         "global.tproxy_port",

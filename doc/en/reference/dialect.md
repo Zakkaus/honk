@@ -1,6 +1,6 @@
 # The honk dialect of dae configuration
 
-honk reads dae's configuration syntax, but it is a dialect: where honk and dae read the same text differently, honk's reading is the contract and these differences are not adjusted to follow dae. This page lists every known difference so that a file written for one can be checked against the other. The "dae" column states only what dae's grammar (`dae_config.g4`) says; dae's value conversion is not described here. The "honk" column is what the parser does on the commit this page was written against (`main` at `66fc946`, after #190): every example was loaded through `parse_dae_config` and the result recorded, so any row can be re-checked by loading the same text.
+honk reads dae configuration syntax as a dialect: where honk and dae interpret the same text differently, honk's documented behavior is the contract. This page describes the source-backed parser's current rules. The dae column covers only its grammar (`dae_config.g4`), not value conversion.
 
 ## Lexical rules
 
@@ -8,13 +8,13 @@ honk reads dae's configuration syntax, but it is a dialect: where honk and dae r
 |---|---|---|
 | `#` inside a bare value, `log_file: /tmp/a#b`, `use_host: /tmp/a#b`, or `group(hk#suffix)` | `#` is a safe character inside a bare literal | Glued `#` is data, with `legacy-glued-hash` at the formerly truncated boundary. Scalar paths retain `/tmp/a#b`; the subgroup name is `hk#suffix`. Insert whitespace before an intended comment. |
 | `#` glued to an outbound name in a routing rule, `domain(x) -> proxy#c` | one bare literal, `proxy#c` | Literal target `proxy#c`, with `legacy-glued-hash`; normal target validation still applies. Write `-> proxy # comment` for a comment. |
-| `/* … */` | block comment, skipped | Not recognised. The text is not skipped: `/* log_level: debug */` is a line whose key is `/* log_level`, which is unknown and ignored, but braces or a valid `key: value` inside such a span are read as configuration. |
+| `/* … */` | block comment, skipped | No block-comment syntax. A statement beginning with `/*` receives `unsupported-comment` and is ignored; following physical lines still participate in configuration. Use `#` on each intended comment line. |
 | `[key: value]` after a declaration, `filter: name(x) [add_latency: -500ms]` | accepted as an annotation | Not recognised; the filter is reported as unparseable and ignored. honk has no per-node latency bias. |
 | An apostrophe inside a bare scalar, `log_file: /tmp/don't`, or an opened traffic argument quote | lexer error for the bare apostrophe | `/tmp/don't` is literal. Quotes open only at token head or immediately after unquoted `(` or `,`. A traffic quote that does not close on its physical line fails with located `unterminated-quote`; close the quote rather than relying on brace recovery. |
-| Braces inside quotes, `secret: 'a}b'` | data | Data. Braces inside an unquoted trailing comment are still structure: keep such comments on their own line. |
-| Block opener without a space, `global{ … }` | whitespace is skipped, so this is a block | Error ``unexpected `{` ``: an inline opener needs whitespace before `{`; a line-final `{` does not. |
-| An extra `}`, or an empty file | an extra `}` is rejected; empty or comment-only input is accepted | An extra `}` is ignored with a diagnostic; a file with no `{` and `}` fails with `not a dae config file`. |
-| Block names, `123 {`, `香港 {`, `Hong Kong {` | a block name is one `ID` | A line-final `{` names a block with any text before it. |
+| Braces inside quotes, `secret: 'a}b'`, or comments | data | Quoted braces and comment-owned braces are data. Changed legacy comment-brace interpretation emits `legacy-comment-brace`; put the real closing brace outside the comment. |
+| Block opener without a space, `global{ … }` | whitespace is skipped, so this is a block | `block-delimiter-spacing` error, whether inline or line-final. Separate block braces from the header with whitespace. Compact empty blocks such as `global {}` remain accepted. |
+| An extra `}`, or an empty file | an extra `}` is rejected; empty or comment-only input is accepted | Extra closers are ignored with `unmatched-close`; a document without a block is rejected. Extra-close compatibility will be reviewed after the first PR2 release. |
+| Group names, `123 {`, `香港 {`, `Hong Kong {` | a block name is one `ID` | The raw header before separated `{` is the dynamic group name. Unknown top-level names are diagnosed and skipped, not interpreted as plugins. |
 | Two declarations on one line, `global { log_level: debug log_file: x }` | whitespace-separated declarations | One declaration: `log_level` is `debug log_file: x`. One `key: value` per line; one-line blocks hold one statement. |
 | The opening brace on the next line, `global` newline `{` | whitespace, newlines included, is skipped | Ordinary split headers fail. Only top-level `include` retains a split opener, including intervening blank/comment lines, with located `legacy-include-opener`. Put `{` on the include header line; compatibility will be reviewed after the first PR2 release. |
 
@@ -77,6 +77,8 @@ honk reads dae's configuration syntax, but it is a dialect: where honk and dae r
 
 | Input | dae grammar | honk |
 |---|---|---|
-| Unknown content in `experimental` | any declaration | An unknown line directly in `experimental` is an error (`unknown experimental setting: …`); unknown keys inside `clash_api` and `cache_file` are ignored; unknown keys inside the legacy `udp_nfqueue` are errors. |
-| Unknown nested blocks in `global`, `dns`, `routing` | any expression | Their lines are read as if they were at the section's level. |
+| Unknown content in `experimental` | any declaration | Unknown outer settings and unsupported legacy `udp_nfqueue` content, including nested blocks, are errors. Unknown scalar keys inside `clash_api` and `cache_file` receive `unknown-key` and are ignored; this forward-compatibility boundary does not weaken NFQUEUE validation. |
+| Unknown nested blocks in `global`, `dns`, `routing`, group settings, or recognized experimental children | any expression | One `unknown-block` warning at the header; skip the complete balanced subtree, including DNS child contexts. Descendant settings and rules no longer leak into the parent. Move known settings to their documented block level. |
+| Node/subscription wrappers and nested subscription-setting wrappers | not a separate wrapper feature | Retained bounded compatibility traversal, with `legacy-wrapper` at each wrapper. Arbitrary names at group root are real groups, not wrappers. Wrapper compatibility will be reviewed after the first PR2 release. |
+| Unknown root statements and scalar keys | arbitrary identifiers | Warn and omit after structure recognition; unknown root blocks are skipped as complete subtrees. Names of groups, entry tags, upstreams and TTL owners are dynamic names, not unknown schema keys. Traffic lines without arrows are diagnosed and omitted unless they declare a fallback. |
 | `include { … }` | a block like any other | Patterns expand only on file loading, with the ordering and confinement rules in the [configuration guide](../configuration.md); string parsing checks structure without opening files. Only token-head `#` starts a comment. `absolute.dae#note` is a literal pattern, not `absolute.dae`, and emits `legacy-include-hash`; normal `.dae` filtering still applies. Separate include comments with whitespace or quote literal hashes. |

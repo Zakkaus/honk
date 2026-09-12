@@ -58,7 +58,6 @@ fn structural_segments_never_reclassify_quoted_or_commented_braces() {
     let text = "group {\ng { filter: name('a } b') } # } {\nh { filter: '}' }\n}\nglobal { path: /tmp/{x}.log }";
     let mut diagnostics = Vec::new();
     let doc = parse(text, &mut diagnostics).unwrap();
-    assert!(diagnostics.is_empty());
     let mut group = doc.sections().next().unwrap().body().unwrap();
     assert!(group.next());
     assert_eq!(group.next_segment().unwrap().header(), "g");
@@ -73,6 +72,7 @@ fn glued_header_braces_report_the_actual_byte() {
     for text in [
         "global{\n x: y\n}",
         "global{ x: y }",
+        "global{}",
         "group {\nHong Kong{\n}\n}",
     ] {
         let mut diagnostics = Vec::new();
@@ -135,6 +135,44 @@ fn only_root_include_accepts_a_split_opener() {
             "unexpected-open-brace"
         );
     }
+}
+
+#[test]
+fn compact_include_keeps_empty_root_and_split_warning() {
+    let mut diagnostics = Vec::new();
+    let doc = parse("include\n{}\nglobal {}", &mut diagnostics).unwrap();
+    let sections = doc.sections().collect::<Vec<_>>();
+    assert_eq!(
+        sections
+            .iter()
+            .map(|section| section.header())
+            .collect::<Vec<_>>(),
+        ["include", "global"]
+    );
+    assert!(sections.iter().all(|section| section.body().is_none()));
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code, diagnostic.line))
+            .collect::<Vec<_>>(),
+        [("legacy-include-opener", Some(2))]
+    );
+}
+
+#[test]
+fn segment_comment_uses_lexed_token_with_unicode_gap_and_crlf() {
+    let doc = parse(
+        "global {\r\n key: value\u{2003}# note\r\n}\r\n",
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let section = doc.sections().next().unwrap();
+    let mut body = section.body().unwrap();
+    assert!(body.next());
+    let statement = body.next_segment().unwrap();
+    let text = super::read::Text::segment(&statement);
+    let comment = text.trailing_comment().unwrap();
+    assert_eq!(doc.source().raw(comment.span), "#");
 }
 
 #[test]
@@ -424,4 +462,21 @@ fn coordinate_predicates_distinguish_glued_and_separated_source() {
     assert!(!adjacent(words[0].span, words[1].span));
     assert!(adjacent(words[0].quoted[0], source.span(3, 4)));
     assert!(!adjacent(words[0].quoted[0], words[0].quoted[1]));
+}
+
+#[test]
+fn quoted_colon_in_a_root_header_still_opens_a_compact_empty_block() {
+    // A colon inside quotes is data; `'a: b' {}` is an (unknown) empty root block,
+    // not a `key: {}` statement.
+    let input = "'a: b' {}\nglobal {}\n";
+    let mut diagnostics = Vec::new();
+    let source = Source::new(input, DiagnosticSources::new(None).root());
+    let document = Document::parse(source, &mut diagnostics).expect("document");
+    assert_eq!(
+        document.sections().count(),
+        1,
+        "only `global` is a known root"
+    );
+    let codes: Vec<&str> = diagnostics.iter().map(|d| d.code).collect();
+    assert_eq!(codes, ["unknown-block"], "{diagnostics:#?}");
 }

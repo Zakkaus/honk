@@ -3,7 +3,6 @@
 use super::cursor::Segment;
 use super::diagnostics::ParserDiagnostics;
 use super::lexer::{Source, Span, Token, TokenKind};
-use super::structure::Block;
 use crate::diagnostic::Severity;
 
 #[derive(Clone, Copy)]
@@ -11,6 +10,7 @@ pub(super) struct Text<'d, 'a> {
     pub source: &'d Source<'a>,
     pub tokens: &'d [Token],
     pub span: Span,
+    pub comment: Option<&'d Token>,
 }
 
 impl<'d, 'a> Text<'d, 'a> {
@@ -19,6 +19,7 @@ impl<'d, 'a> Text<'d, 'a> {
             source: segment.source(),
             tokens: segment.tokens(),
             span: segment.header_span(),
+            comment: segment.comment(),
         }
     }
 
@@ -146,24 +147,18 @@ impl<'d, 'a> Text<'d, 'a> {
                 && self.span.start < token.span.end
         })
     }
-
-    /// K01: a `#` glued to data is data, not a comment. Warn once at the
-    /// first such byte outside a quoted span so users who relied on the old
-    /// truncation see where their value now continues.
-    /// The `#` that starts a comment after this text on the same line, if any.
-    /// Segments carry no trivia tokens, so the position is read from the source;
-    /// it is only ever used to locate a diagnostic, never to reinterpret the line.
+    /// The `#` that starts a comment after this text on its source line, if any.
+    /// The lexer owns comment boundaries; this view only narrows the token span
+    /// to the hash byte used by existing diagnostics.
     pub fn trailing_comment(self) -> Option<Self> {
-        let rest = self.source.text()[self.span.end..].split('\n').next()?;
-        let gap = rest.len() - rest.trim_start().len();
-        rest[gap..].starts_with('#').then(|| Self {
-            span: self
-                .source
-                .span(self.span.end + gap, self.span.end + gap + 1),
+        let comment = self.comment?;
+        (comment.span.start >= self.span.end).then(|| Self {
+            span: self.source.span(comment.span.start, comment.span.start + 1),
             ..self
         })
     }
 
+    /// K01: warn once where the old parser truncated a glued hash.
     pub fn warn_glued_hash(self, diagnostics: &mut ParserDiagnostics<'_>) {
         let raw = self.raw();
         for (offset, byte) in raw.bytes().enumerate() {
@@ -216,37 +211,45 @@ pub(super) fn block_header<'d, 'a>(segment: &Segment<'d, 'a>) -> Option<Text<'d,
         .then(|| header.sub(0, last.span.start - header.span.start).trim())
 }
 
-pub(super) fn child_statements<'d, 'a>(segment: &Segment<'d, 'a>) -> Vec<Text<'d, 'a>> {
-    fn append<'d, 'a>(segment: &Segment<'d, 'a>, output: &mut Vec<Text<'d, 'a>>) {
-        if let Some(mut body) = segment.body() {
-            while body.next() {
-                let child = body.next_segment().expect("statement or block header");
-                if child.body().is_some() {
-                    let mut header = Text::segment(&child);
-                    header.span.end = child
-                        .tokens()
-                        .iter()
-                        .find(|token| token.kind == TokenKind::OpenBrace)
-                        .unwrap()
-                        .span
-                        .end;
-                    output.push(header);
-                    append(&child, output);
+pub(super) fn child_statements<'d, 'a>(
+    segment: &Segment<'d, 'a>,
+    diagnostics: &mut ParserDiagnostics<'_>,
+) -> Vec<Text<'d, 'a>> {
+    let mut output = Vec::new();
+    if let Some(mut body) = segment.body() {
+        while body.next() {
+            let child = body.next_segment().expect("statement or block header");
+            if let Some(header) = block_header(&child) {
+                header.notice(
+                    diagnostics,
+                    Severity::Warning,
+                    "unknown-block",
+                    "unknown nested block ignored; move settings to their documented level",
+                );
+            } else {
+                let text = Text::segment(&child);
+                if text.raw().starts_with("/*") {
+                    text.notice(
+                        diagnostics,
+                        Severity::Warning,
+                        "unsupported-comment",
+                        "use `#` on each intended comment line",
+                    );
                 } else {
-                    output.push(Text::segment(&child));
+                    output.push(text);
                 }
             }
         }
     }
-    let mut output = Vec::new();
-    append(segment, &mut output);
     output
 }
 
-pub(super) fn statements(section: &Block) -> Vec<Text<'_, 'static>> {
+pub(super) fn statements<'d, 'a>(
+    section: &[Segment<'d, 'a>],
+    diagnostics: &mut ParserDiagnostics<'_>,
+) -> Vec<Text<'d, 'a>> {
     section
-        .segments
         .iter()
-        .flat_map(|owned| child_statements(&owned.get()))
+        .flat_map(|segment| child_statements(segment, diagnostics))
         .collect()
 }

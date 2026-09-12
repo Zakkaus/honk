@@ -243,9 +243,17 @@ fn unknown_wrapper_headers_cannot_enable_dns_listeners() {
         "dns { bind: 127.0.0.1:53 { } }",
         "dns { bind: 127.0.0.1:53 {} }",
     ] {
+        let (config, diagnostics) = parse(source);
         assert!(
-            parse_dae_config_with_detailed_diagnostics(source, &mut Vec::new()).is_err(),
+            config.dns.bind.is_empty(),
             "unknown wrapper became a scalar binding: {source}"
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|d| d.code == "unknown-block")
+                .count(),
+            1
         );
     }
 }

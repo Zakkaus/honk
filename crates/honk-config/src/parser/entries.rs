@@ -1,22 +1,19 @@
 use super::cursor::Segment;
 use super::diagnostics::ParserDiagnostics;
 use super::read::Text;
-use super::structure::Block;
 use crate::ConfigDiagnostic;
 use crate::diagnostic::Severity;
 use crate::node::Node;
 use crate::subscription::Subscription;
 
 pub(super) fn parse_node_section(
-    section: &Block,
+    section: &[Segment<'_, '_>],
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Result<Vec<Node>, super::ParseFailure> {
     let mut nodes = Vec::new();
     let mut entry_index = 0;
-    for owned in &section.segments {
-        let root = owned.get();
+    for root in section {
         let Some(mut body) = root.body() else {
-            visit_node_segment(&root, diagnostics, &mut nodes, &mut entry_index)?;
             continue;
         };
         while body.next() {
@@ -166,15 +163,13 @@ fn warn_glued_comment(tail: Text<'_, '_>, diagnostics: &mut ParserDiagnostics<'_
 }
 
 pub(super) fn parse_subscription_section(
-    section: &Block,
+    section: &[Segment<'_, '_>],
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Result<Vec<Subscription>, crate::ConfigError> {
     let mut subscriptions = Vec::new();
     let mut entry_index = 0;
-    for owned in &section.segments {
-        let root = owned.get();
+    for root in section {
         let Some(mut body) = root.body() else {
-            visit_subscription_segment(&root, diagnostics, &mut subscriptions, &mut entry_index);
             continue;
         };
         while body.next() {
@@ -277,13 +272,18 @@ fn collect_subscription_fields<'d, 'a>(
             text.span.end = opener.span.end;
         }
         if let Some((key, value)) = text.kv() {
-            let key = key.raw();
-            diagnostics.register_field(key, value);
+            diagnostics.register_field(key.raw(), value);
             let value = value.unquote();
-            match key {
+            match key.raw() {
                 "url" => fields.url = Some(value),
                 "ua" => fields.user_agent = Some(value),
                 "interval" => fields.interval = Some(value),
+                _ if super::read::block_header(&child).is_none() => key.notice(
+                    diagnostics,
+                    Severity::Warning,
+                    "unknown-key",
+                    "unknown scalar key ignored",
+                ),
                 _ => {}
             }
         }

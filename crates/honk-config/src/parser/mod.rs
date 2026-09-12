@@ -8,7 +8,6 @@ mod routing;
 
 mod read;
 mod scalars;
-mod structure;
 use entries::{parse_node_section, parse_subscription_section};
 use groups::{parse_group_section, resolve_group_filters_inner};
 use scalars::{parse_experimental_section, parse_global_section};
@@ -22,8 +21,9 @@ mod lexer_tests;
 #[cfg(test)]
 mod cursor_tests;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use self::diagnostics::ParserDiagnostics;
 use crate::diagnostic::{
@@ -34,8 +34,8 @@ use crate::group::Group;
 use crate::node::Node;
 use crate::subscription::Subscription;
 use crate::{Config, ConfigDiagnostic};
+use cursor::{Document, Root, Segment};
 use lexer::quoted_end;
-use structure::Block;
 enum ParseFailure {
     Legacy(crate::ConfigError),
     Detailed(crate::error::DetailedConfigError),
@@ -116,19 +116,25 @@ fn parse_dae_file_inner(
         loaded: HashSet::new(),
         stack: Vec::new(),
         saw_include: false,
-        entry_input: String::new(),
+        entry_input: Arc::from(""),
     };
-    let blocks = match loader.expand_file(&entry, diagnostics) {
-        Ok(blocks) => blocks,
-        Err(err @ crate::ConfigError::Include(_)) => return Err(ParseFailure::Legacy(err)),
-        Err(err) if loader.saw_include => {
-            return Err(ParseFailure::Legacy(crate::ConfigError::Include(format!(
-                "failed to parse configuration after resolving includes: {err}"
-            ))));
+    let documents = match loader.expand_file(&entry, diagnostics) {
+        Ok(documents) => documents,
+        Err(error) => {
+            if loader.saw_include {
+                let mut error = match error {
+                    ParseFailure::Legacy(error) => diagnostics.error(error),
+                    ParseFailure::Detailed(error) => error,
+                };
+                if error.category != crate::error::ErrorCategory::UnsupportedPolicy {
+                    error.category = crate::error::ErrorCategory::Include;
+                }
+                return Err(ParseFailure::Detailed(error));
+            }
+            return Err(error);
         }
-        Err(err) => return Err(ParseFailure::Legacy(err)),
     };
-    match parse_blocks(blocks, diagnostics) {
+    match parse_documents(&documents, diagnostics) {
         Ok(config) => Ok(config),
         Err(err) => {
             *semantic = loader.saw_include || !is_structured_document(&loader.entry_input);
@@ -186,7 +192,7 @@ struct IncludeLoader {
     loaded: HashSet<PathBuf>,
     stack: Vec<PathBuf>,
     saw_include: bool,
-    entry_input: String,
+    entry_input: Arc<str>,
 }
 
 impl IncludeLoader {
@@ -194,7 +200,7 @@ impl IncludeLoader {
         &mut self,
         path: &Path,
         diagnostics: &mut ParserDiagnostics<'_>,
-    ) -> Result<Vec<Block>, crate::ConfigError> {
+    ) -> Result<Vec<Document<'static>>, ParseFailure> {
         if !self.loaded.insert(path.to_path_buf()) {
             let mut chain = self
                 .stack
@@ -205,7 +211,8 @@ impl IncludeLoader {
             return Err(crate::ConfigError::Include(format!(
                 "circular or duplicate include is not allowed: {}",
                 chain.join(" -> ")
-            )));
+            ))
+            .into());
         }
 
         let parent = diagnostics.source();
@@ -225,27 +232,25 @@ impl IncludeLoader {
                     path.display()
                 ))
             })?;
-            let roots = structure::scan_readers(&input, diagnostics, &mut self.saw_include);
-            if self.stack.len() == 1 && !matches!(&roots, Err(crate::ConfigError::Include(_))) {
-                check_dae_input(&input)?;
-            }
-            let roots = roots?;
-            diagnostics.register_blocks(&roots, &source);
+            let input: Arc<str> = input.into();
             if self.stack.len() == 1 {
-                self.entry_input = input;
+                self.entry_input = input.clone();
             }
-            let mut blocks = Vec::new();
+            let source_text = lexer::Source::shared(input, source.clone());
+            let document = Document::parse(source_text, diagnostics.output).map_err(|error| {
+                self.saw_include |= error.saw_include;
+                diagnostics.structure_error(error.error)
+            })?;
             let mut patterns = Vec::new();
-            for block in roots {
-                if block.name == "include" {
-                    self.saw_include = true;
-                    for segment in &block.segments {
-                        patterns.extend(parse_include_body(segment.get(), path)?);
-                    }
-                } else {
-                    blocks.push(block);
-                }
+            for segment in document
+                .sections()
+                .filter(|segment| segment.header() == "include")
+            {
+                self.saw_include = true;
+                warn_include_hash(&segment, diagnostics);
+                patterns.extend(parse_include_body(segment, path)?);
             }
+            let mut documents = vec![document];
 
             // dae merges an entry's own sections before the sections of its
             // included descendants, regardless of where `include` occurs in
@@ -254,10 +259,10 @@ impl IncludeLoader {
                 diagnostics.set_source(source.clone());
                 for child in self.expand_pattern(&pattern, path)? {
                     diagnostics.set_source(source.clone());
-                    blocks.extend(self.expand_file(&child, diagnostics)?);
+                    documents.extend(self.expand_file(&child, diagnostics)?);
                 }
             }
-            Ok(blocks)
+            Ok(documents)
         })();
         self.stack.pop();
         result
@@ -340,6 +345,28 @@ fn normalize_dae_glob_pattern(pattern: &Path) -> PathBuf {
         .collect::<Vec<_>>()
         .join("/");
     PathBuf::from(normalized)
+}
+
+fn warn_include_hash(segment: &Segment<'_, '_>, diagnostics: &mut ParserDiagnostics<'_>) {
+    if let Some(mut body) = segment.body() {
+        while body.next() {
+            let token = body.token().unwrap();
+            let text = read::Text {
+                source: segment.source(),
+                tokens: std::slice::from_ref(token),
+                span: token.span,
+                comment: None,
+            };
+            if let Some(offset) = text.find("#") {
+                text.sub(offset, offset + 1).notice(
+                    diagnostics,
+                    crate::diagnostic::Severity::Warning,
+                    "legacy-include-hash",
+                    "glued `#` is data; separate include comments with whitespace",
+                );
+            }
+        }
+    }
 }
 
 fn parse_include_body(
@@ -432,10 +459,15 @@ pub fn parse_dae_config_with_detailed_diagnostics(
     let source = DiagnosticSources::new(None).root();
     let mut sink = ParserDiagnostics::new(diagnostics, source.clone());
     let result: Result<Config, ParseFailure> = (|| {
-        check_dae_input(input)?;
-        let blocks = structure::scan_readers(input, &mut sink, &mut false)?;
-        sink.register_blocks(&blocks, &source);
-        parse_blocks(blocks, &mut sink)
+        let document = Document::parse(lexer::Source::new(input, source), sink.output)
+            .map_err(|error| sink.structure_error(error.error))?;
+        for segment in document
+            .sections()
+            .filter(|segment| segment.header() == "include")
+        {
+            warn_include_hash(&segment, &mut sink);
+        }
+        parse_documents(&[document], &mut sink)
     })();
     let result = result.map_err(|error| match error {
         ParseFailure::Detailed(error) => error,
@@ -444,68 +476,48 @@ pub fn parse_dae_config_with_detailed_diagnostics(
     finish_attempt(result, sink.output)
 }
 
-fn check_dae_input(input: &str) -> Result<(), crate::ConfigError> {
-    let mut has_open = false;
-    let mut has_close = false;
-    for line in input.lines().map(str::trim_start) {
-        if !line.starts_with('#') {
-            has_open |= line.contains('{');
-            has_close |= line.contains('}');
-        }
-    }
-    if !has_open || !has_close {
-        return Err(crate::ConfigError::Parse("not a dae config file".into()));
-    }
-    Ok(())
-}
-
-fn parse_blocks(
-    blocks: Vec<Block>,
+fn parse_documents(
+    documents: &[Document<'_>],
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Result<Config, ParseFailure> {
-    let mut sections = Vec::<Block>::new();
-    let mut indices = HashMap::<String, usize>::new();
-    for block in blocks {
-        if let Some(&index) = indices.get(&block.name) {
-            sections[index].items.extend(block.items);
-            sections[index].segments.extend(block.segments);
-        } else {
-            indices.insert(block.name.clone(), sections.len());
-            sections.push(block);
+    let mut sections: Vec<(&str, Vec<Segment<'_, '_>>)> = Vec::new();
+    for document in documents {
+        for segment in document.sections() {
+            let name = segment.header();
+            if Root::parse(name) == Some(Root::Include) {
+                continue;
+            }
+            if let Some((_, segments)) = sections.iter_mut().find(|(key, _)| *key == name) {
+                segments.push(segment);
+            } else {
+                sections.push((name, vec![segment]));
+            }
         }
     }
 
     let canonical_nfqueue_present = sections
         .iter()
-        .filter(|section| section.name == "global")
-        .any(scalars::nfqueue_present);
+        .filter(|(name, _)| *name == "global")
+        .any(|(_, segments)| scalars::nfqueue_present(segments));
     let mut config = Config::default();
-
-    for section in &sections {
-        diagnostics.at_section(section, &[]);
-        match section.name.as_str() {
-            "global" => config.global = parse_global_section(section, diagnostics)?,
-            "dns" => config.dns = dns::parse_section(section, diagnostics)?,
-            "routing" => config.routing = routing::parse_section(section, diagnostics)?,
-            "node" => {
-                for node in parse_node_section(section, diagnostics)? {
-                    config.nodes.push(node);
-                }
+    for (name, segments) in &sections {
+        diagnostics.at_section(name, read::Text::segment(&segments[0]));
+        match Root::parse(name) {
+            Some(Root::Global) => config.global = parse_global_section(segments, diagnostics)?,
+            Some(Root::Dns) => config.dns = dns::parse_section(segments, diagnostics)?,
+            Some(Root::Routing) => config.routing = routing::parse_section(segments, diagnostics)?,
+            Some(Root::Node) => config.nodes = parse_node_section(segments, diagnostics)?,
+            Some(Root::Group) => config.groups = parse_group_section(segments, diagnostics)?,
+            Some(Root::Subscription) => {
+                config.subscriptions = parse_subscription_section(segments, diagnostics)?
             }
-            "group" => {
-                for group in parse_group_section(section, diagnostics)? {
-                    config.groups.push(group);
-                }
+            Some(Root::Experimental) => {
+                config.experimental = parse_experimental_section(segments, diagnostics)?;
             }
-            "subscription" => {
-                for sub in parse_subscription_section(section, diagnostics)? {
-                    config.subscriptions.push(sub);
-                }
-            }
-            "experimental" => {
-                config.experimental = parse_experimental_section(section, diagnostics)?;
-            }
-            _ => {}
+            // Includes were spliced before dispatch; an unknown root never gets here
+            // because the document only indexes known roots (K43 notices are emitted
+            // there), so the last arm is a compile-time completeness check, not a guard.
+            Some(Root::Include) | None => {}
         }
     }
     config.apply_legacy_nfqueue(canonical_nfqueue_present);
@@ -540,74 +552,6 @@ pub fn resolve_group_filters(groups: &mut [Group], nodes: &[Node], subscriptions
     resolve_group_filters_inner(groups, nodes, subscriptions, None);
 }
 
-fn unquote_filter_argument(value: &str) -> &str {
-    let value = value.trim();
-    if value.len() >= 2 {
-        let bytes = value.as_bytes();
-        if matches!(
-            (bytes[0], bytes[value.len() - 1]),
-            (b'\'', b'\'') | (b'"', b'"')
-        ) {
-            return &value[1..value.len() - 1];
-        }
-    }
-    value
-}
-
-#[expect(dead_code, reason = "Retained for C13 last-caller retirement")]
-fn find_unquoted(input: &str, delimiter: &str) -> Option<usize> {
-    let bytes = input.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if matches!(bytes[index], b'\'' | b'"') {
-            index = quoted_end(bytes, index)?;
-        } else if bytes[index..].starts_with(delimiter.as_bytes()) {
-            return Some(index);
-        } else {
-            index += 1;
-        }
-    }
-    None
-}
-
-#[expect(dead_code, reason = "Retained for C13 last-caller retirement")]
-fn split_unquoted<'a>(input: &'a str, delimiter: &'a str) -> impl Iterator<Item = &'a str> {
-    let mut remaining = Some(input);
-    std::iter::from_fn(move || {
-        let input = remaining.take()?;
-        if let Some(index) = find_unquoted(input, delimiter) {
-            remaining = Some(&input[index + delimiter.len()..]);
-            Some(&input[..index])
-        } else {
-            Some(input)
-        }
-    })
-}
-
-#[expect(dead_code, reason = "Retained for C13 last-caller retirement")]
-fn extract_fn_args(expr: &str, fn_name: &str) -> Option<Vec<String>> {
-    let body = expr.strip_prefix(fn_name)?.strip_prefix('(')?;
-    let end = find_unquoted(body, ")")?;
-    if !body[end + 1..].trim().is_empty() {
-        return None;
-    }
-    let args = &body[..end];
-    Some(
-        split_unquoted(args, ",")
-            .map(unquote_filter_argument)
-            .filter(|arg| !arg.is_empty())
-            .map(str::to_owned)
-            .collect(),
-    )
-}
-
-/// Strip a `prefix:` marker from a route argument.  Dae syntax allows spaces
-/// after the colon (`geosite: cn`), and the value may carry its own quotes.
-fn strip_tag_arg(arg: &str, prefix: &str) -> Option<String> {
-    arg.strip_prefix(prefix)
-        .map(|value| unquote_filter_argument(value).to_string())
-}
-
 /// Normalize a geosite list name.
 fn normalize_geosite_code(code: &str) -> String {
     // Keep the code verbatim: `@attr` is an attribute filter applied at
@@ -615,16 +559,6 @@ fn normalize_geosite_code(code: &str) -> String {
     // name — remapping it to `-` silently mismatched into a nonexistent
     // category.
     code.trim().to_string()
-}
-
-fn parse_checked_bool(s: &str, setting: &str) -> Result<bool, crate::ConfigError> {
-    match s.to_ascii_lowercase().as_str() {
-        "true" | "yes" | "1" | "on" => Ok(true),
-        "false" | "no" | "0" | "off" => Ok(false),
-        _ => Err(crate::ConfigError::Parse(format!(
-            "invalid boolean for {setting}: {s}"
-        ))),
-    }
 }
 
 /// Keep `fallback` when `parsed` is `None` and record why. For settings whose
@@ -644,52 +578,9 @@ fn lenient<T>(
     }
 }
 
-/// Lenient boolean for dae settings honk does not reject. Recognised spellings are dae's
-/// (`true/t/1/y/yes/on`, `false/f/0/n/no/off`, case-insensitive) and produce no
-/// diagnostic; `t` and `y` still yield false, a divergence recorded in the lab notes.
-fn lenient_bool(value: &str, setting: &str, diagnostics: &mut ParserDiagnostics<'_>) -> bool {
-    let lowered = value.to_lowercase();
-    match lowered.as_str() {
-        "true" | "yes" | "1" | "on" => true,
-        "false" | "f" | "0" | "n" | "no" | "off" | "t" | "y" => false,
-        _ => {
-            diagnostics.push(ConfigDiagnostic {
-                setting: setting.to_string(),
-                value: value.to_string(),
-                message: "value is not a boolean spelling honk recognises; using fallback false"
-                    .to_string(),
-            });
-            false
-        }
-    }
-}
-
 fn parse_hex_or_dec(s: &str) -> Option<u32> {
     let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
     u32::from_str_radix(s, 16).ok().or_else(|| s.parse().ok())
-}
-
-// Invalid URLTest tolerance or compatibility sniffing timeout does not justify
-// rejecting the configuration; keep the documented default. Refuse non-finite
-// and negative values rather than letting `as u64` saturate to `u64::MAX` or zero.
-fn lenient_duration_ms(
-    value: &str,
-    setting: &str,
-    default: u64,
-    diagnostics: &mut ParserDiagnostics<'_>,
-) -> u64 {
-    lenient(
-        crate::types::parse_duration_ms(value),
-        default,
-        diagnostics,
-        || ConfigDiagnostic {
-            setting: setting.to_string(),
-            value: value.to_string(),
-            message: format!(
-                "duration is not milliseconds, `ms` or `s`; keeping the default ({default}ms)"
-            ),
-        },
-    )
 }
 
 fn parse_ip_prefer(s: &str) -> Option<crate::dns::DnsStrategy> {

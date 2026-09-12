@@ -26,6 +26,7 @@ The built-in outbounds `direct` and `block` are injected at startup and may be u
 - Second-based durations accept bare seconds or `ms`, `s`, `m`, and `h` suffixes. Millisecond settings such as `check_tolerance` accept bare milliseconds, `ms`, or `s`.
 - An unquoted token-head `#` starts a comment; hashes inside bare values remain data. Entry readers also accept a glued `#` after a closing link quote or subscription `(UA)` suffix, with `legacy-glued-hash`; put whitespace before comments. Token-head comment braces never close blocks.
 - Braces inside matching single or double quotes are data. An unmatched closing `}` is ignored with a diagnostic; an unclosed block rejects the document. Detailed diagnostics carry physical line numbers where the current reader provides them; error text never echoes arbitrary input.
+- Unknown scalar keys are diagnosed and ignored. Unknown nested blocks are skipped as complete balanced subtrees, not flattened into their parent. Only documented node/subscription wrapper compatibility remains; unknown outer experimental settings and unsupported legacy NFQUEUE content are errors.
 
 ### Splitting a configuration with `include {}`
 

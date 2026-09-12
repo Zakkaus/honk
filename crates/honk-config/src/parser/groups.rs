@@ -2,26 +2,23 @@ use std::collections::HashMap;
 
 use regex::Regex;
 
+use super::cursor::Segment;
 use super::diagnostics::ParserDiagnostics;
 use super::lexer::{Source, TokenKind};
 use super::read::{self, Text};
-use super::structure::Block;
 use crate::diagnostic::{DiagnosticSources, Severity};
 use crate::group::{Group, GroupPolicy};
 use crate::node::Node;
 use crate::subscription::Subscription;
 use crate::{ConfigDiagnostic, ConfigError};
 
-/// Parse the repeated `group { ... }` roots through source-backed cursor
-/// segments. The old block projection is intentionally not consulted here.
 pub(super) fn parse_group_section(
-    section: &Block,
+    section: &[Segment<'_, '_>],
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> Result<Vec<Group>, ConfigError> {
     let mut groups = Vec::new();
 
-    for owned in &section.segments {
-        let root = owned.get();
+    for root in section {
         let Some(mut body) = root.body() else {
             continue;
         };
@@ -30,6 +27,12 @@ pub(super) fn parse_group_section(
                 .next_segment()
                 .expect("group section body contains a segment");
             let Some(group_text) = read::block_header(&segment) else {
+                Text::segment(&segment).notice(
+                    diagnostics,
+                    Severity::Warning,
+                    "unknown-statement",
+                    "group declaration requires a block",
+                );
                 continue;
             };
             diagnostics.begin_group_text(group_text, groups.len() + 1);
@@ -39,10 +42,25 @@ pub(super) fn parse_group_section(
                 ..Default::default()
             };
             let mut fields: HashMap<&str, Text<'_, '_>> = HashMap::new();
-            for statement in read::child_statements(&segment) {
+            for statement in read::child_statements(&segment, diagnostics) {
                 let Some((key, value)) = statement.kv() else {
+                    statement.notice(
+                        diagnostics,
+                        Severity::Warning,
+                        "unknown-statement",
+                        "unknown group statement ignored",
+                    );
                     continue;
                 };
+                if !["filter", "policy", "final", "default", "check_url"].contains(&key.raw()) {
+                    key.notice(
+                        diagnostics,
+                        Severity::Warning,
+                        "unknown-key",
+                        "unknown scalar key ignored",
+                    );
+                    continue;
+                }
                 let key = key.raw().trim();
                 if key == "filter" {
                     append_filter(&mut group, value.trim(), diagnostics);
@@ -289,6 +307,7 @@ fn parse_runtime_filter(
         source: &source,
         tokens: &tokens,
         span: source.span(0, end),
+        comment: None,
     };
     let text = text.trim();
     let lexical_error = text.has_error();

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use super::read::Text;
-use super::structure::{Block, Item};
 use crate::diagnostic::{
     ConfigDiagnostic, DetailedDiagnostic, SafeValue, SettingPath, SourceRef, project_legacy,
 };
@@ -21,11 +20,10 @@ struct GroupLocation {
     filters: Vec<Location>,
 }
 
-/// Transient old-reader coordinates; no input text survives in returned diagnostics.
+/// Attempt-local source coordinates; paths are constructed only when emitting diagnostics.
 pub(super) struct ParserDiagnostics<'a> {
     pub output: &'a mut Vec<DetailedDiagnostic>,
     current: Location,
-    statements: HashMap<usize, Location>,
     fields: HashMap<String, Location>,
     groups: Vec<GroupLocation>,
     group: Option<usize>,
@@ -48,7 +46,6 @@ impl<'a> ParserDiagnostics<'a> {
                 span: None,
                 byte_column: None,
             },
-            statements: HashMap::new(),
             fields: HashMap::new(),
             groups: Vec::new(),
             group: None,
@@ -60,6 +57,18 @@ impl<'a> ParserDiagnostics<'a> {
 
     pub fn source(&self) -> SourceRef {
         self.current.source.clone()
+    }
+
+    pub fn structure_error(&mut self, error: DetailedConfigError) -> super::ParseFailure {
+        // Document owns standalone attempts; the parser's outer boundary owns this terminal.
+        if let Some(index) = self.output.iter().rposition(|diagnostic| {
+            diagnostic.terminal
+                && diagnostic.source.same_source(&error.diagnostic.source)
+                && diagnostic.span == error.diagnostic.span
+        }) {
+            self.output.remove(index);
+        }
+        super::ParseFailure::Detailed(error)
     }
 
     pub fn field_location(&self, field: &str) -> (SourceRef, Option<usize>) {
@@ -114,60 +123,6 @@ impl<'a> ParserDiagnostics<'a> {
         self.fields.clear();
     }
 
-    pub fn register_blocks(&mut self, blocks: &[Block], source: &SourceRef) {
-        for block in blocks {
-            self.register_block(block, source);
-        }
-    }
-
-    fn register_block(&mut self, block: &Block, source: &SourceRef) {
-        self.statements.insert(
-            block.header.as_ptr() as usize,
-            Location {
-                source: source.clone(),
-                line: Some(block.line),
-                span: None,
-                byte_column: None,
-            },
-        );
-        self.statements.insert(
-            block.closing.as_ptr() as usize,
-            Location {
-                source: source.clone(),
-                line: None,
-                span: None,
-                byte_column: None,
-            },
-        );
-        for item in &block.items {
-            match item {
-                Item::Statement(text, line) => {
-                    self.statements.insert(
-                        text.as_ptr() as usize,
-                        Location {
-                            source: source.clone(),
-                            line: Some(*line),
-                            span: None,
-                            byte_column: None,
-                        },
-                    );
-                }
-                Item::Block(child) => self.register_block(child, source),
-            }
-        }
-    }
-
-    fn location(&self, line: &str) -> Location {
-        self.statements
-            .get(&(line.as_ptr() as usize))
-            .cloned()
-            .unwrap_or_else(|| self.current.clone())
-    }
-
-    pub fn at_line(&mut self, line: &str) {
-        self.current = self.location(line);
-    }
-
     fn text_location(text: Text<'_, '_>) -> Location {
         let (line, column) = text.source.location(text.span.start);
         Location {
@@ -219,9 +174,9 @@ impl<'a> ParserDiagnostics<'a> {
         self.group = None;
         self.subscription = Some(index);
     }
-    pub fn at_section(&mut self, section: &Block, excluded: &[&str]) {
-        self.at_line(&section.header);
-        self.root = match section.name.as_str() {
+    pub fn at_section(&mut self, name: &str, text: Text<'_, '_>) {
+        self.at_text(text);
+        self.root = match name {
             "node" => "nodes",
             "subscription" => "subscriptions",
             "group" => "groups",
@@ -231,16 +186,6 @@ impl<'a> ParserDiagnostics<'a> {
         self.subscription = None;
         self.entry = None;
         self.fields.clear();
-        for line in section.lines_except(excluded) {
-            let trimmed = line.trim();
-            if trimmed.starts_with('#') {
-                continue;
-            }
-            if let Some((key, _)) = trimmed.split_once(':') {
-                self.fields
-                    .insert(key.trim().to_owned(), self.location(line));
-            }
-        }
     }
 
     pub fn select_group(&mut self, index: usize) {
@@ -302,12 +247,6 @@ impl<'a> ParserDiagnostics<'a> {
         diagnostic.span = location.span;
         diagnostic.byte_column = location.byte_column;
         self.output.push(diagnostic);
-    }
-
-    pub fn extend(&mut self, diagnostics: impl IntoIterator<Item = ConfigDiagnostic>) {
-        for diagnostic in diagnostics {
-            self.push(diagnostic);
-        }
     }
 
     pub fn notice(&mut self, mut diagnostic: DetailedDiagnostic) {
