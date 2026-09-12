@@ -246,6 +246,7 @@ async fn c20_authorized_refresh_rejects_conflicting_provider_before_noop() {
             revision,
             &authorizations,
             vec![conflicting],
+            Vec::new(),
             &DrainTracker::new(),
         )
         .await
@@ -287,6 +288,7 @@ async fn c20_authorized_refresh_admits_reserved_provider_name() {
             revision,
             &authorizations,
             nodes,
+            Vec::new(),
             &DrainTracker::new(),
         )
         .await
@@ -325,7 +327,7 @@ async fn c20_startup_post_prepare_rejects_stale_node_identity() {
     let mut config = config_with_provider_node(canonical, None, Vec::new());
     config.nodes[0].address = "192.0.2.31".into();
 
-    let _supervisor = SubscriptionSupervisor::prepare(&mut config, None)
+    let _supervisor = SubscriptionSupervisor::prepare(&mut config, None, Vec::new())
         .await
         .expect("post-prepare fixture");
     honk_config::parser::resolve_group_filters(
@@ -384,7 +386,7 @@ async fn c20_startup_post_prepare_admits_reserved_provider_name() {
     config.global.nfqueue_enable = false;
     config.ensure_builtin_nodes();
     config.subscriptions.push(subscription);
-    let _supervisor = SubscriptionSupervisor::prepare(&mut config, None)
+    let _supervisor = SubscriptionSupervisor::prepare(&mut config, None, Vec::new())
         .await
         .expect("startup subscription preparation");
     server.await.unwrap();

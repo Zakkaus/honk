@@ -53,6 +53,7 @@ impl ControlPlane {
         &self,
         subscription_id: uuid::Uuid,
         mut nodes: Vec<Node>,
+        diagnostics: Option<Vec<honk_config::diagnostic::DetailedDiagnostic>>,
         drain: &DrainTracker,
     ) -> Result<bool, honk_config::error::DetailedConfigError> {
         if nodes.is_empty() {
@@ -70,23 +71,43 @@ impl ControlPlane {
                 node.subscription_id = Some(subscription_id);
             }
         }
-        let current = self.config.read().await.clone();
+        let config_guard = self.config.read().await;
+        let current = Arc::clone(&config_guard);
         let incoming_len = nodes.len();
         let mut new_config = config_with_subscription_nodes(&current, subscription_id, nodes);
         new_config.validate_assembled()?;
+        let candidate_diagnostics = diagnostics.map(|diagnostics| {
+            let mut buckets = self.diagnostics.read().buckets.clone();
+            buckets.replace_provider(subscription_id, diagnostics);
+            buckets
+        });
         let candidate_start = new_config.nodes.len() - incoming_len;
         if subscription_nodes_unchanged(
             &current,
             subscription_id,
             &mut new_config.nodes[candidate_start..],
         ) {
+            if let Some(buckets) = candidate_diagnostics {
+                drop(config_guard);
+                let _config = self.config.write().await;
+                self.diagnostics.write().buckets = buckets;
+            } else {
+                drop(config_guard);
+            }
             info!(
                 subscription_id = %subscription_id,
                 "subscription unchanged; skipping runtime rebuild"
             );
             return Ok(true);
         }
-        self.apply_runtime_config_locked(new_config, drain).await
+        drop(config_guard);
+        crate::dns::ecs::resolve_client_subnet(&mut new_config.dns).await;
+        self.apply_resolved_runtime_config_locked_with_diagnostics(
+            new_config,
+            drain,
+            candidate_diagnostics,
+        )
+        .await
     }
 
     pub(in crate::control) async fn merge_authorized_subscription_nodes_with_drain(
@@ -95,6 +116,7 @@ impl ControlPlane {
         revision: u64,
         authorizations: &crate::subscription::SubscriptionAuthorizations,
         nodes: Vec<Node>,
+        diagnostics: Vec<honk_config::diagnostic::DetailedDiagnostic>,
         drain: &DrainTracker,
     ) -> Result<bool, honk_config::error::DetailedConfigError> {
         let _reload = self.reload_lock.lock().await;
@@ -106,7 +128,7 @@ impl ControlPlane {
             );
             return Ok(false);
         }
-        self.merge_subscription_nodes_locked(subscription_id, nodes, drain)
+        self.merge_subscription_nodes_locked(subscription_id, nodes, Some(diagnostics), drain)
             .await
     }
 
@@ -115,7 +137,7 @@ impl ControlPlane {
         let drain = Arc::clone(&self.drain_tracker);
         let _reload = self.reload_lock.lock().await;
         if let Err(error) = self
-            .merge_subscription_nodes_locked(subscription_id, nodes, &drain)
+            .merge_subscription_nodes_locked(subscription_id, nodes, None, &drain)
             .await
         {
             crate::report_runtime_admission_error(&error);

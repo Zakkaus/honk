@@ -26,7 +26,7 @@ The table follows the router in `crates/honk-core/src/clash_api.rs`.
 | --- | --- | --- |
 | GET | `/` | Return the Clash hello document, or redirect a non-JSON client to `/ui/` when external UI hosting is enabled. |
 | GET | `/version` | Return `honk <build-version>` (including the release tag, using the same build identity as the CLI) and Clash premium/meta capability flags. |
-| GET | `/configs` | Return the current mode and the implemented Clash-compatible configuration snapshot. |
+| GET | `/configs` | Return the current mode, the implemented Clash-compatible configuration snapshot, and safe active-generation diagnostics under `honk-diagnostics`. |
 | PUT | `/configs` | Compatibility no-op; accepts the request and returns `204 No Content`. |
 | PATCH | `/configs` | Set `mode` to `Rule`, `Global`, or `Direct`; matching is case-insensitive. |
 | GET | `/proxies` | Return every node and group plus the synthetic `GLOBAL` selector. |
@@ -50,6 +50,46 @@ The table follows the router in `crates/honk-core/src/clash_api.rs`.
 | GET | `/ui`, `/ui/*` | Redirect `/ui` to `/ui/` and serve the configured external UI directory. |
 
 `/traffic`, `/memory`, and `/logs` send one JSON document per line for a plain HTTP GET. `/logs` installs dynamic tracing interest only while subscribers exist; with no subscribers, the Clash tracing layer does not format events. Each subscriber's level filter runs after the shared queue. Lagged clients skip overwritten events without a gap marker.
+
+### Diagnostics in `/configs`
+
+`GET /configs` preserves the existing Clash fields and adds `honk-diagnostics`.
+Settings and diagnostics are read from one committed configuration snapshot.
+Startup publishes only admitted file and subscription diagnostics. Failed reloads
+and rejected subscription refreshes leave the active list unchanged; there is no
+last-failed-attempt cache.
+
+A successful reload with unchanged effective settings can replace diagnostics
+without advancing the generation. An authorized, admitted provider refresh replaces
+only that provider's diagnostics, even when its nodes are unchanged; static-file
+and other-provider diagnostics remain.
+
+| Field | Meaning |
+| --- | --- |
+| `honk-diagnostics.generation` | Active configuration generation; startup begins at `0`. |
+| `honk-diagnostics.sources` | Metadata-only source rows referenced by retained diagnostics or their parents. |
+| `sources[].id` | Opaque numeric source ID used by `diagnostics[].source` in this snapshot. |
+| `sources[].ordinal` | Original zero-based ordinal within the attempt-local source table. |
+| `sources[].parent` | Opaque `id` of the parent source, or `null` for a root source. |
+| `honk-diagnostics.diagnostics` | Safe diagnostics retained for the active configuration and admitted providers. |
+| `diagnostics[].code` | Stable diagnostic code. |
+| `diagnostics[].severity` | Lower-case severity: `info`, `warning`, or `error`. |
+| `diagnostics[].source` | Opaque `sources[].id`. |
+| `diagnostics[].span` | Zero-based byte range `{start, end}` with exclusive `end`, or `null` when unavailable. |
+| `diagnostics[].line` | Optional physical line number, or `null`. |
+| `diagnostics[].byte_column` | Optional byte column, or `null`. |
+| `diagnostics[].setting` | Fixed schema path with original sequence ordinals; it never contains operator-supplied names. |
+| `diagnostics[].value` | Safe value representation; private values are redacted. |
+| `diagnostics[].message` | Static diagnostic message. |
+| `diagnostics[].entry_index` | Optional original entry ordinal, or `null`. |
+| `diagnostics[].related_indices` | Related original entry ordinals. |
+| `diagnostics[].terminal` | Whether this diagnostic represents the terminal failure. |
+
+The generation matches the active DNS runtime generation. Source IDs are
+snapshot-local, not filesystem identifiers. Sources are ordered static-file first,
+then providers in configured declaration order, with each source table in its
+original order. Only referenced sources and their ancestors are included.
+Paths, raw input, credentials, and provider names or IDs are never exported.
 
 ### Delay measurement
 

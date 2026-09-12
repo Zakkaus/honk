@@ -5,6 +5,9 @@ use super::reload::{
 };
 use super::*;
 
+#[path = "c14_diagnostics_tests.rs"]
+mod c14_diagnostics;
+
 use crate::control::udp_endpoint::{EndpointReservation, UdpEndpoint};
 use crate::dns;
 use crate::ebpf::mock::MockEbpfBackend;
@@ -665,9 +668,10 @@ async fn reload_dispatch_assigns_worker_revision_and_accepts_only_that_revision(
 
     let mut cp = test_cp().await;
     let mut startup = Config::default();
-    let mut supervisor = crate::subscription::SubscriptionSupervisor::prepare(&mut startup, None)
-        .await
-        .unwrap();
+    let mut supervisor =
+        crate::subscription::SubscriptionSupervisor::prepare(&mut startup, None, Vec::new())
+            .await
+            .unwrap();
     let (command_tx, mut commands) = tokio::sync::mpsc::channel(4);
     supervisor.start(command_tx);
     let supervisor_handle = supervisor.handle();
@@ -690,6 +694,7 @@ async fn reload_dispatch_assigns_worker_revision_and_accepts_only_that_revision(
             ControlCommand::ReloadConfig {
                 request_id: 1,
                 config: Box::new(candidate),
+                diagnostics: Vec::new(),
                 result,
             },
             &drain,
@@ -729,6 +734,7 @@ async fn reload_dispatch_assigns_worker_revision_and_accepts_only_that_revision(
                     subscription_id: Some(subscription_id),
                     ..Default::default()
                 }],
+                diagnostics: Vec::new(),
             },
             &drain,
             &mut authorizations,
@@ -769,6 +775,7 @@ async fn applied_reload_with_dropped_supervisor_handoff_stops_dispatch() {
             ControlCommand::ReloadConfig {
                 request_id: 2,
                 config: Box::new(candidate),
+                diagnostics: Vec::new(),
                 result,
             },
             &DrainTracker::new(),
@@ -2490,6 +2497,7 @@ async fn subscription_refresh_duplicate_static_node_reports_one_safe_rejection()
         subscription_id: subscription.id,
         revision: authorizations.revision(subscription.id).unwrap(),
         nodes,
+        diagnostics: Vec::new(),
     };
     let log = capture_runtime_admission(cp.dispatch_control_command(
         command,
