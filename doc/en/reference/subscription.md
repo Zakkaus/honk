@@ -78,7 +78,7 @@ Subscription bodies and the nodes created from them remain runtime state; neithe
 
 Startup parses stored bodies before launching network refreshes. A valid restored body supplies active nodes immediately, so that subscription does not participate in the five-second first-fetch wait. Its network refresh still runs in the background. A missing or invalid stored body is ignored and keeps that subscription in the bounded first-fetch wait until the fetch finishes or the deadline expires; a later valid refresh replaces the corrupt file.
 
-On SIGHUP, subscriptions with the same fetch identity (URL + configured `ua` + headers) retain their runtime ID. The reload carries active nodes belonging to still-enabled subscriptions, restores a stored body only when no nodes survive for that subscription, commits the rebuilt configuration, and then starts an immediate background refresh.
+On SIGHUP, subscriptions with the same fetch identity (URL + configured `ua` + headers) retain their runtime ID. The reload carries active nodes belonging to still-enabled subscriptions, commits the rebuilt configuration, and then starts an immediate background refresh. It does not read stored bodies, even when no nodes survive for a subscription; stored-body recovery runs only at startup.
 
 Failure handling preserves a usable runtime rather than clearing it:
 
