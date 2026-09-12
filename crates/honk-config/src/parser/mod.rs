@@ -225,8 +225,7 @@ impl IncludeLoader {
                     path.display()
                 ))
             })?;
-            let roots =
-                structure::scan_readers(&input, Some(path), diagnostics, &mut self.saw_include);
+            let roots = structure::scan_readers(&input, diagnostics, &mut self.saw_include);
             if self.stack.len() == 1 && !matches!(&roots, Err(crate::ConfigError::Include(_))) {
                 check_dae_input(&input)?;
             }
@@ -240,8 +239,8 @@ impl IncludeLoader {
             for block in roots {
                 if block.name == "include" {
                     self.saw_include = true;
-                    if let Some(body) = block.include_body.as_deref() {
-                        patterns.extend(parse_include_body(body, path)?);
+                    for segment in &block.segments {
+                        patterns.extend(parse_include_body(segment.get(), path)?);
                     }
                 } else {
                     blocks.push(block);
@@ -343,64 +342,68 @@ fn normalize_dae_glob_pattern(pattern: &Path) -> PathBuf {
     PathBuf::from(normalized)
 }
 
-fn parse_include_body(body: &str, source: &Path) -> Result<Vec<String>, crate::ConfigError> {
-    let bytes = body.as_bytes();
-    let mut index = 0;
+fn parse_include_body(
+    segment: cursor::Segment<'_, '_>,
+    source: &Path,
+) -> Result<Vec<String>, crate::ConfigError> {
     let mut patterns = Vec::new();
-
-    while index < bytes.len() {
-        loop {
-            while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-                index += 1;
-            }
-            if index < bytes.len() && bytes[index] == b'#' {
-                while index < bytes.len() && bytes[index] != b'\n' {
-                    index += 1;
-                }
-            } else {
-                break;
-            }
-        }
-        if index >= bytes.len() {
-            break;
-        }
-        if matches!(bytes[index], b'{' | b'}') {
+    let Some(mut body) = segment.body() else {
+        return Ok(patterns);
+    };
+    while body.next() {
+        let entry = body.next_segment().expect("include pattern or block");
+        if entry.body().is_some() {
             return Err(crate::ConfigError::Include(format!(
                 "include section in '{}' accepts only file patterns",
                 source.display()
             )));
         }
-
-        let value = if matches!(bytes[index], b'\'' | b'"') {
-            let start = index + 1;
-            let end = quoted_end(bytes, index).ok_or_else(|| {
-                crate::ConfigError::Include(format!(
-                    "unterminated quoted include path in '{}'",
-                    source.display()
-                ))
-            })?;
-            index = end;
-            body[start..end - 1].to_string()
-        } else {
-            let start = index;
-            while index < bytes.len()
-                && !bytes[index].is_ascii_whitespace()
-                && bytes[index] != b'#'
-                && !matches!(bytes[index], b'{' | b'}')
-            {
+        let raw = entry.source().raw(entry.header_span());
+        let bytes = raw.as_bytes();
+        let mut index = 0;
+        while index < bytes.len() {
+            while index < bytes.len() && bytes[index].is_ascii_whitespace() {
                 index += 1;
             }
-            body[start..index].to_string()
-        };
-        if value.is_empty() {
-            return Err(crate::ConfigError::Include(format!(
-                "empty include path in '{}'",
-                source.display()
-            )));
+            if index == bytes.len() {
+                break;
+            }
+            if matches!(bytes[index], b'{' | b'}') {
+                return Err(crate::ConfigError::Include(format!(
+                    "include section in '{}' accepts only file patterns",
+                    source.display()
+                )));
+            }
+            // Adjacent quoted paths remain file-reader syntax, not lexical boundaries.
+            let value = if matches!(bytes[index], b'\'' | b'"') {
+                let start = index + 1;
+                let end = quoted_end(bytes, index).ok_or_else(|| {
+                    crate::ConfigError::Include(format!(
+                        "unterminated quoted include path in '{}'",
+                        source.display()
+                    ))
+                })?;
+                index = end;
+                &raw[start..end - 1]
+            } else {
+                let start = index;
+                while index < bytes.len()
+                    && !bytes[index].is_ascii_whitespace()
+                    && !matches!(bytes[index], b'{' | b'}')
+                {
+                    index += 1;
+                }
+                &raw[start..index]
+            };
+            if value.is_empty() {
+                return Err(crate::ConfigError::Include(format!(
+                    "empty include path in '{}'",
+                    source.display()
+                )));
+            }
+            patterns.push(value.to_owned());
         }
-        patterns.push(value);
     }
-
     Ok(patterns)
 }
 
@@ -430,7 +433,7 @@ pub fn parse_dae_config_with_detailed_diagnostics(
     let mut sink = ParserDiagnostics::new(diagnostics, source.clone());
     let result: Result<Config, ParseFailure> = (|| {
         check_dae_input(input)?;
-        let blocks = structure::scan_readers(input, None, &mut sink, &mut false)?;
+        let blocks = structure::scan_readers(input, &mut sink, &mut false)?;
         sink.register_blocks(&blocks, &source);
         parse_blocks(blocks, &mut sink)
     })();

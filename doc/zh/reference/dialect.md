@@ -16,7 +16,7 @@ honk 读取 dae 的配置语法，但它是一种方言：honk 与 dae 对同一
 | 多余的 `}`，或空文件 | 多余的 `}` 被拒绝；空输入或只有注释的输入被接受 | 多余的 `}` 被忽略并报告诊断；没有 `{` 与 `}` 的文件报错 `not a dae config file`。 |
 | 块名，`123 {`、`香港 {`、`Hong Kong {` | 块名必须是一个 `ID` | 行尾的 `{` 之前的任何文本都作为块名。 |
 | 一行两个声明，`global { log_level: debug log_file: x }` | 空白分隔的两个声明 | 一个声明：`log_level` 的值是 `debug log_file: x`。每行一个 `key: value`；单行块只容纳一条语句。 |
-| 起始花括号另起一行，`global` 换行 `{` | 空白（含换行）被跳过 | 错误 ``unexpected `{` at line 2``：块在带 `{` 的那一行开始。只有顶层 `include` 可以把 `{` 放在下一行。 |
+| 起始花括号另起一行，`global` 换行 `{` | 空白（含换行）被跳过 | 普通块的起始花括号不能另起一行。只有顶层 `include` 保留此兼容语法，允许中间有空行或注释行，并产生带位置的 `legacy-include-opener` 警告。请把 `{` 放在 include 头所在行；首次 PR2 发布后再评估这项兼容行为。 |
 
 ## 标量与列表
 
@@ -79,4 +79,4 @@ honk 读取 dae 的配置语法，但它是一种方言：honk 与 dae 对同一
 |---|---|---|
 | `experimental` 里的未知内容 | 任意声明 | 直接位于 `experimental` 下的未知行是错误（`unknown experimental setting: …`）；`clash_api` 与 `cache_file` 里的未知键被忽略；旧版 `udp_nfqueue` 里的未知键是错误。 |
 | `global`、`dns`、`routing` 里的未知嵌套块 | 任意表达式 | 其中的行按处于该配置段层级读取。 |
-| `include { … }` | 与其他块相同的块 | 只在加载文件时展开模式，规则见[配置指南](../configuration.md)；解析配置字符串时仍扫描该块的花括号（未闭合的 include 是错误），但不读取其中的模式。include 块内未加引号的 `#` 结束一个模式。 |
+| `include { … }` | 与其他块相同的块 | 只在加载文件时展开模式，顺序与目录限制见[配置指南](../configuration.md)；字符串解析检查结构，但不打开文件。只有词元开头的 `#` 引入注释。`absolute.dae#note` 是字面模式，不是 `absolute.dae`，并产生 `legacy-include-hash` 警告；仍按 `.dae` 扩展名筛选。include 注释前须留空白，字面 `#` 可加引号。 |

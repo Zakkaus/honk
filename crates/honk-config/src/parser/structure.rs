@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use super::lexer::quoted_end;
 use std::ops::Range;
 use std::sync::Arc;
@@ -17,7 +15,6 @@ pub struct Block {
     pub line: usize,
     pub header: String,
     pub closing: String,
-    pub include_body: Option<String>,
     pub segments: Vec<OwnedSegment>,
 }
 
@@ -102,25 +99,17 @@ impl Block {
     }
 }
 
-/// Scan dae's brace structure without interpreting settings or expressions.
-///
-/// `source` is used only for the include-specific error wording.  Includes are
-/// bounded and retained as raw blocks, but their path patterns are deliberately
-/// left to the include reader in the next parser layer.
-/// `saw_include` remains set on errors so file loading preserves include error mapping.
+/// Legacy structure snapshots for the unmigrated scanner.
 #[cfg(test)]
 pub fn scan(
     input: &str,
-    source: Option<&Path>,
     diagnostics: &mut Vec<ConfigDiagnostic>,
-    saw_include: &mut bool,
 ) -> Result<Vec<Block>, ConfigError> {
     let lines = Line::all(input);
     let mut scanner = Scanner::default();
     let mut position = (0, 0);
     while position.0 < lines.len() {
-        let next = scanner.process_line(input, &lines, position, source, diagnostics);
-        *saw_include |= scanner.saw_include;
+        let next = scanner.process_line(&lines, position, diagnostics);
         position = next?;
     }
 
@@ -136,7 +125,6 @@ pub fn scan(
 /// Keep unmigrated sections on their bounded old adapter until their owning commit.
 pub(super) fn scan_readers(
     input: &str,
-    path: Option<&Path>,
     diagnostics: &mut ParserDiagnostics<'_>,
     saw_include: &mut bool,
 ) -> Result<Vec<Block>, ConfigError> {
@@ -165,6 +153,7 @@ pub(super) fn scan_readers(
                         | "group"
                         | "routing"
                         | "dns"
+                        | "include"
                 );
                 let glued = name.strip_suffix('{').is_some_and(|name| {
                     matches!(
@@ -176,6 +165,7 @@ pub(super) fn scan_readers(
                             | "group"
                             | "routing"
                             | "dns"
+                            | "include"
                     )
                 });
                 let opener = tokens[index + 1..]
@@ -187,12 +177,46 @@ pub(super) fn scan_readers(
                         && token.kind == TokenKind::Word
                         && source.raw(token.span) == "{}"
                 });
-                tokens[index].line == position.0 + 1 && (glued || (named && !empty))
+                tokens[index].line == position.0 + 1
+                    && (glued || (named && (!empty || name == "include")))
             });
         if migrated {
             migrated_root_seen = true;
             let start = first.unwrap();
             let byte_start = tokens[start].span.start;
+            let include = source.raw(tokens[start].span) == "include";
+            if include {
+                let opener =
+                    (start + 1..tokens.len()).find(|&index| !tokens[index].kind.is_trivia());
+                *saw_include |= opener.is_some_and(|index| {
+                    tokens[index].kind == TokenKind::OpenBrace
+                        || source.raw(tokens[index].span) == "{}"
+                });
+                // Compact empty roots keep their frozen spelling until C13.
+                if let Some(index) = opener.filter(|&index| source.raw(tokens[index].span) == "{}")
+                {
+                    let byte_end = tokens[index].span.end;
+                    if tokens[index].line != tokens[start].line {
+                        diagnostics.output.push(source.diagnostic(
+                            tokens[index].span,
+                            crate::diagnostic::Severity::Warning,
+                            "legacy-include-opener",
+                            "put the include opener on its header line",
+                        ));
+                    }
+                    scanner.roots.push(Block {
+                        name: "include".to_owned(),
+                        items: Vec::new(),
+                        line: tokens[start].line,
+                        header: "include".to_owned(),
+                        closing: String::new(),
+                        segments: Vec::new(),
+                    });
+                    let line = line_for_offset(&lines, byte_end);
+                    position = (line, byte_end - lines[line].start);
+                    continue;
+                }
+            }
             let mut opened = false;
             let mut depth = 0usize;
             let mut end = tokens.len();
@@ -215,7 +239,8 @@ pub(super) fn scan_readers(
             let byte_end = tokens[end - 1].span.end;
             let dns_root = source.raw(tokens[start].span) == "dns";
             for token in &tokens[start..end] {
-                if token.kind == TokenKind::Comment
+                if !include
+                    && token.kind == TokenKind::Comment
                     && source.raw(token.span).contains(['{', '}'])
                     && (!dns_root
                         || source.text()[..token.span.start]
@@ -259,13 +284,31 @@ pub(super) fn scan_readers(
                 })?,
             );
             for segment in document.sections() {
+                if segment.header() == "include" {
+                    let mut body = segment.body().expect("include block");
+                    while body.next() {
+                        let token = body.token().unwrap();
+                        let text = super::read::Text {
+                            source: segment.source(),
+                            tokens: std::slice::from_ref(token),
+                            span: token.span,
+                        };
+                        if let Some(offset) = text.find("#") {
+                            text.sub(offset, offset + 1).notice(
+                                diagnostics,
+                                crate::diagnostic::Severity::Warning,
+                                "legacy-include-hash",
+                                "glued `#` is data; separate include comments with whitespace",
+                            );
+                        }
+                    }
+                }
                 scanner.roots.push(Block {
                     name: segment.header().to_owned(),
                     items: Vec::new(),
                     line: source.location(segment.span().start).0,
                     header: segment.header().to_owned(),
                     closing: String::new(),
-                    include_body: None,
                     segments: vec![OwnedSegment {
                         document: document.clone(),
                         range: segment.range(),
@@ -318,8 +361,7 @@ pub(super) fn scan_readers(
             }
         }
         let mut legacy = Vec::new();
-        let next = scanner.process_line(input, &lines, position, path, &mut legacy);
-        *saw_include |= scanner.saw_include;
+        let next = scanner.process_line(&lines, position, &mut legacy);
         diagnostics.extend(legacy);
         position = next?;
     }
@@ -358,8 +400,6 @@ struct Scanner {
     roots: Vec<Block>,
     frames: Vec<Block>,
     braces: Vec<Brace>,
-    pending_include: Option<usize>,
-    saw_include: bool,
 }
 
 #[derive(Debug)]
@@ -368,56 +408,15 @@ enum Brace {
     Anonymous,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum IncludeCandidate {
-    Open(usize),
-    Pending,
-}
-
 impl Scanner {
     fn process_line(
         &mut self,
-        input: &str,
         lines: &[Line<'_>],
         (index, cursor): (usize, usize),
-        source: Option<&Path>,
         diagnostics: &mut Vec<ConfigDiagnostic>,
     ) -> Result<(usize, usize), ConfigError> {
         let line_text = lines[index].text;
         let line_number = lines[index].number;
-
-        if let Some(pending_line) = self.pending_include {
-            let trimmed_start = line_text.len() - line_text.trim_start().len();
-            let bytes = line_text.as_bytes();
-            if trimmed_start < bytes.len() && bytes[trimmed_start] == b'{' {
-                self.pending_include = None;
-                return self.process_include(
-                    input,
-                    lines,
-                    index,
-                    trimmed_start,
-                    pending_line,
-                    source,
-                );
-            }
-            if line_text.trim().is_empty() || line_text.trim_start().starts_with('#') {
-                return Ok((index + 1, 0));
-            }
-            self.pending_include = None;
-        }
-
-        if self.at_root() {
-            match include_candidate(line_text, cursor) {
-                Some(IncludeCandidate::Open(brace)) => {
-                    return self.process_include(input, lines, index, brace, line_number, source);
-                }
-                Some(IncludeCandidate::Pending) => {
-                    self.pending_include = Some(line_number);
-                    return Ok((index + 1, 0));
-                }
-                None => {}
-            }
-        }
 
         Ok(
             match self.process_normal_line(line_text, line_number, cursor, diagnostics)? {
@@ -425,48 +424,6 @@ impl Scanner {
                 None => (index + 1, 0),
             },
         )
-    }
-
-    fn process_include(
-        &mut self,
-        input: &str,
-        lines: &[Line<'_>],
-        line_index: usize,
-        brace: usize,
-        header_line: usize,
-        source: Option<&Path>,
-    ) -> Result<(usize, usize), ConfigError> {
-        self.saw_include = true;
-        let open = lines[line_index].start + brace;
-        let body_start = open + 1;
-        let close = find_include_close(input, body_start);
-        let close = match close {
-            Some(close) => close,
-            None => {
-                if let Some(source) = source {
-                    return Err(ConfigError::Include(format!(
-                        "unclosed include section in '{}'",
-                        source.display()
-                    )));
-                }
-                return Err(ConfigError::Parse(format!(
-                    "unclosed block `include` opened at line {header_line}"
-                )));
-            }
-        };
-
-        self.roots.push(Block {
-            name: "include".to_string(),
-            items: Vec::new(),
-            line: header_line,
-            header: "include {".to_string(),
-            closing: "}".to_string(),
-            include_body: Some(input[body_start..close].to_string()),
-            segments: Vec::new(),
-        });
-
-        let close_line = line_for_offset(lines, close);
-        Ok((close_line, close - lines[close_line].start + 1))
     }
 
     fn process_normal_line(
@@ -515,7 +472,6 @@ impl Scanner {
                             line,
                             header: text[segment_start..=index].trim().to_string(),
                             closing: String::new(),
-                            include_body: None,
                             segments: Vec::new(),
                         });
                         self.braces.push(Brace::Named);
@@ -637,62 +593,6 @@ fn named_opener(
         return None;
     }
     Some(prefix)
-}
-
-fn include_candidate(text: &str, cursor: usize) -> Option<IncludeCandidate> {
-    let bytes = text.as_bytes();
-    let start = text.len() - text[cursor..].trim_start().len();
-    if !text[start..].starts_with("include") {
-        return None;
-    }
-    let mut index = start + "include".len();
-    if index < bytes.len()
-        && !bytes[index].is_ascii_whitespace()
-        && !matches!(bytes[index], b'{' | b'#')
-    {
-        return None;
-    }
-    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-        index += 1;
-    }
-    if index == bytes.len() || bytes[index] == b'#' {
-        Some(IncludeCandidate::Pending)
-    } else if bytes[index] == b'{' {
-        Some(IncludeCandidate::Open(index))
-    } else {
-        None
-    }
-}
-
-fn find_include_close(input: &str, body_start: usize) -> Option<usize> {
-    let bytes = input.as_bytes();
-    let mut depth = 1usize;
-    let mut index = body_start;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'#' => {
-                while index < bytes.len() && bytes[index] != b'\n' {
-                    index += 1;
-                }
-            }
-            b'\'' | b'"' => {
-                index = quoted_end(bytes, index)?;
-            }
-            b'{' => {
-                depth += 1;
-                index += 1;
-            }
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(index);
-                }
-                index += 1;
-            }
-            _ => index += 1,
-        }
-    }
-    None
 }
 
 fn line_for_offset(lines: &[Line<'_>], offset: usize) -> usize {

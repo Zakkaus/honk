@@ -16,7 +16,7 @@ honk reads dae's configuration syntax, but it is a dialect: where honk and dae r
 | An extra `}`, or an empty file | an extra `}` is rejected; empty or comment-only input is accepted | An extra `}` is ignored with a diagnostic; a file with no `{` and `}` fails with `not a dae config file`. |
 | Block names, `123 {`, `香港 {`, `Hong Kong {` | a block name is one `ID` | A line-final `{` names a block with any text before it. |
 | Two declarations on one line, `global { log_level: debug log_file: x }` | whitespace-separated declarations | One declaration: `log_level` is `debug log_file: x`. One `key: value` per line; one-line blocks hold one statement. |
-| The opening brace on the next line, `global` newline `{` | whitespace, newlines included, is skipped | Error ``unexpected `{` at line 2``: a block opens on the line that carries its `{`. Only a top-level `include` may put `{` on the following line. |
+| The opening brace on the next line, `global` newline `{` | whitespace, newlines included, is skipped | Ordinary split headers fail. Only top-level `include` retains a split opener, including intervening blank/comment lines, with located `legacy-include-opener`. Put `{` on the include header line; compatibility will be reviewed after the first PR2 release. |
 
 ## Scalars and lists
 
@@ -79,4 +79,4 @@ honk reads dae's configuration syntax, but it is a dialect: where honk and dae r
 |---|---|---|
 | Unknown content in `experimental` | any declaration | An unknown line directly in `experimental` is an error (`unknown experimental setting: …`); unknown keys inside `clash_api` and `cache_file` are ignored; unknown keys inside the legacy `udp_nfqueue` are errors. |
 | Unknown nested blocks in `global`, `dns`, `routing` | any expression | Their lines are read as if they were at the section's level. |
-| `include { … }` | a block like any other | Patterns are expanded only when a file is loaded, with the rules in the [configuration guide](../configuration.md); parsing a configuration string still scans the block's braces (an unclosed include is an error) but does not read its patterns. Inside an include block an unquoted `#` ends a pattern. |
+| `include { … }` | a block like any other | Patterns expand only on file loading, with the ordering and confinement rules in the [configuration guide](../configuration.md); string parsing checks structure without opening files. Only token-head `#` starts a comment. `absolute.dae#note` is a literal pattern, not `absolute.dae`, and emits `legacy-include-hash`; normal `.dae` filtering still applies. Separate include comments with whitespace or quote literal hashes. |

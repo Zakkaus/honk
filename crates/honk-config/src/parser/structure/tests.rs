@@ -1,13 +1,10 @@
-use std::path::Path;
-
 use super::super::lexer::quoted_end;
 use super::{Block, Item, scan};
-use crate::{ConfigDiagnostic, ConfigError};
+use crate::ConfigDiagnostic;
 
 fn scanned(input: &str) -> Vec<Block> {
     let mut diagnostics = Vec::new();
-    let blocks =
-        scan(input, None, &mut diagnostics, &mut false).expect("scanner input should be valid");
+    let blocks = scan(input, &mut diagnostics).expect("scanner input should be valid");
     assert!(
         diagnostics.is_empty(),
         "valid scanner input emitted diagnostics: {diagnostics:?}"
@@ -17,19 +14,8 @@ fn scanned(input: &str) -> Vec<Block> {
 
 fn scanned_with_diagnostics(input: &str) -> (Vec<Block>, Vec<ConfigDiagnostic>) {
     let mut diagnostics = Vec::new();
-    let blocks =
-        scan(input, None, &mut diagnostics, &mut false).expect("scanner input should be valid");
+    let blocks = scan(input, &mut diagnostics).expect("scanner input should be valid");
     (blocks, diagnostics)
-}
-
-fn parse_error(input: &str, source: Option<&Path>) -> String {
-    let mut diagnostics = Vec::new();
-    let error =
-        scan(input, source, &mut diagnostics, &mut false).expect_err("scanner input should fail");
-    match error {
-        ConfigError::Parse(message) => message,
-        other => panic!("unexpected scanner error: {other:?}"),
-    }
 }
 
 fn statement(text: &str, line: usize) -> Item {
@@ -206,57 +192,6 @@ fn stray_close_is_dropped_and_reports_exact_diagnostic_fields() {
 }
 
 #[test]
-fn scanner_reports_exact_unexpected_and_unclosed_errors() {
-    assert_eq!(parse_error("{\n", None), "unexpected `{` at line 1");
-    assert_eq!(
-        parse_error("\n# comment\n {\n", None),
-        "unexpected `{` at line 3"
-    );
-    assert_eq!(
-        parse_error("global {\n", None),
-        "unclosed block `global` opened at line 1"
-    );
-    assert_eq!(
-        parse_error("global {\n", Some(Path::new("/tmp/settings.dae"))),
-        "unclosed block `global` opened at line 1"
-    );
-}
-
-#[test]
-fn unclosed_include_uses_include_error_when_source_is_known() {
-    let mut diagnostics = Vec::new();
-    let error = scan(
-        "include {\n proxy.dae\n",
-        Some(Path::new("/tmp/settings.dae")),
-        &mut diagnostics,
-        &mut false,
-    )
-    .expect_err("unclosed include should fail");
-    assert_eq!(
-        error.to_string(),
-        "Include error: unclosed include section in '/tmp/settings.dae'"
-    );
-    assert!(diagnostics.is_empty());
-}
-
-#[test]
-fn include_header_comments_are_skipped_and_raw_body_is_preserved() {
-    let input = "include # header comment\n# between header and brace\n{\nfoo.dae # trailing comment\n# comment containing }\n\"bar {file}.dae\"\n}\nglobal {\n log_level: debug\n}\n";
-    let blocks = scanned(input);
-    assert_eq!(blocks.len(), 2);
-    let include = &blocks[0];
-    assert_eq!(include.name, "include");
-    assert_eq!(include.line, 1);
-    assert_eq!(include.header, "include {");
-    assert_eq!(include.closing, "}");
-    assert_eq!(
-        include.include_body.as_deref(),
-        Some("\nfoo.dae # trailing comment\n# comment containing }\n\"bar {file}.dae\"\n")
-    );
-    assert_eq!(blocks[1].name, "global");
-}
-
-#[test]
 fn projection_omits_recognised_blocks_and_recurses_unrecognised_blocks_in_source_order() {
     let input = "global {\n root: zero\n recognised {\n  hidden: one\n }\n unknown {\n  before: two\n  deep {\n   nested: three\n  }\n  after: four\n }\n tail: five\n}\n";
     let blocks = scanned(input);
@@ -401,37 +336,6 @@ fn unicode_headers_do_not_require_ascii_byte_boundaries() {
     assert_eq!(blocks[0].name, "香港节点");
     assert_eq!(blocks[0].line, 1);
     assert_eq!(blocks[0].items, [statement("policy: score", 2)]);
-}
-
-#[test]
-fn include_mode_resumes_after_another_block_on_the_same_line() {
-    let blocks = scanned("global {} include { 'a{b}.dae' # }\n next.dae\n} routing {}");
-    assert_eq!(
-        blocks
-            .iter()
-            .map(|block| block.name.as_str())
-            .collect::<Vec<_>>(),
-        ["global", "include", "routing"]
-    );
-    assert_eq!(blocks[1].line, 1);
-    assert_eq!(
-        blocks[1].include_body.as_deref(),
-        Some(" 'a{b}.dae' # }\n next.dae\n")
-    );
-    assert_eq!(blocks[2].line, 3);
-}
-
-#[test]
-fn include_quotes_do_not_recover_as_ordinary_characters() {
-    let error = scan(
-        "include { 'unterminated.dae }",
-        Some(Path::new("entry.dae")),
-        &mut Vec::new(),
-        &mut false,
-    )
-    .unwrap_err();
-    assert!(matches!(error, ConfigError::Include(message)
-        if message == "unclosed include section in 'entry.dae'"));
 }
 
 #[test]
