@@ -2684,7 +2684,7 @@ experimental {
             .iter()
             .map(|diagnostic| diagnostic.code)
             .collect::<Vec<_>>(),
-        ["legacy-bool-shorthand"; 3]
+        ["legacy-bool-shorthand"; 4]
     );
     assert!(!config.global.tproxy_port_protect);
     assert!(!config.global.disable_waiting_network);

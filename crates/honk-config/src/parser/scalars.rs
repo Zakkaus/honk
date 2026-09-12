@@ -123,7 +123,7 @@ fn raw_fields<'d>(
     raw
 }
 
-fn bool_value(
+pub(super) fn bool_value(
     settings: &HashMap<&str, Text<'_, 'static>>,
     key: &str,
     setting: &'static str,

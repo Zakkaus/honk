@@ -18,6 +18,10 @@ This page defines the current dae-syntax `dns { ... }` section and its runtime s
 | `max_cache_size` | `10000` | Maximum cache entries and the input to the retained wire-byte budget. |
 | `fixed_domain_ttl { ... }` | empty | Per-domain positive and NODATA TTL overrides; `0` disables caching for every response code, including negatives. |
 
+Scalar values own the remainder of their physical line and split only at the key colon, so bare IPv6 endpoints and `client_subnet: auto(9.9.9.9)` remain intact. Exactly one matched enclosing quote pair is removed. An opened scalar quote must close on the same line; malformed quotes fail the configuration.
+
+For scalar settings, only an unquoted token-head `#` starts a comment. `use_host: /tmp/a#b` selects the literal path `/tmp/a#b` with `legacy-glued-hash`; write `use_host: /tmp/a # comment` for a comment. Repeated `use_host` declarations retain source order and existing deduplication. For `optimistic_cache`, shorthands `t`, `y`, `f`, and `n` still mean false, but emit `legacy-bool-shorthand`; use `true` or `false`.
+
 ## Standalone listener (`bind`)
 
 The standalone listener uses ordinary, unmarked sockets in the host network namespace. Transparent TCP and UDP port-53 interception remains active when the standalone listener is disabled.

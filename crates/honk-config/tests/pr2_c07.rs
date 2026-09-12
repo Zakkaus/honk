@@ -82,3 +82,29 @@ fn quoted_arguments_preserve_spaces_hashes_and_braces() {
             .all(|diagnostic| diagnostic.code != "legacy-glued-hash")
     );
 }
+
+#[test]
+fn unfinished_traffic_calls_do_not_cross_include_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = dir.path().join("entry.dae");
+    std::fs::write(
+        &entry,
+        format!(
+            "# {}\ninclude {{ child.dae }}\nrouting {{ domain( }}\n",
+            "source offset padding ".repeat(8)
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("child.dae"),
+        "routing { example.com) -> direct }\n",
+    )
+    .unwrap();
+    assert!(honk_config::Config::from_file(entry.to_str().unwrap()).is_err());
+}
+
+#[test]
+fn nested_parentheses_do_not_hide_trailing_matcher_text() {
+    let source = "routing { domain(regex:(foo)) -> direct }";
+    assert!(parse_dae_config_with_detailed_diagnostics(source, &mut Vec::new()).is_err());
+}

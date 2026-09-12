@@ -18,6 +18,10 @@
 | `max_cache_size` | `10000` | 缓存最大条目数，也是保留 wire 字节预算的输入。 |
 | `fixed_domain_ttl { ... }` | 空 | 按域名覆盖正应答和 NODATA 的 TTL；`0` 禁止缓存所有响应码的应答，包括负应答。 |
 
+标量值占据该物理行的剩余部分，只在键后的冒号处分隔，因此裸写的 IPv6 地址和 `client_subnet: auto(9.9.9.9)` 保持完整。解析器只移除一对包围整个值的匹配引号。已开启的标量引号必须在同一行闭合，否则配置失败。
+
+标量设置中，只有引号外、词法单元开头的 `#` 才开始注释。`use_host: /tmp/a#b` 选择字面路径 `/tmp/a#b`，并产生 `legacy-glued-hash` 警告；注释请写成 `use_host: /tmp/a # comment`。重复的 `use_host` 声明保持来源顺序和既有去重行为。`optimistic_cache` 的布尔简写 `t`、`y`、`f`、`n` 仍表示假，但产生 `legacy-bool-shorthand` 警告；请改用 `true` 或 `false`。
+
 ## 独立监听器（`bind`）
 
 独立监听器使用 host 网络命名空间中的普通、未打 mark 的 socket。关闭独立监听器时，透明 TCP/UDP 53 端口拦截仍然生效。

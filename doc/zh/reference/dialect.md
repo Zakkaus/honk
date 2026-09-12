@@ -6,7 +6,7 @@ honk 读取 dae 的配置语法，但它是一种方言：honk 与 dae 对同一
 
 | 输入 | dae 文法 | honk |
 |---|---|---|
-| 裸值内的 `#`，`log_file: /tmp/a#b` | `#` 是裸字面量内的安全字符，值为 `/tmp/a#b` | 标量设置在引号外第一个 `#` 处截断，不论是否紧贴：`/tmp/a`。要保留 `#` 就给值加引号。 |
+| 裸值内的 `#`，如 `log_file: /tmp/a#b`、`use_host: /tmp/a#b` 或 `group(hk#suffix)` | `#` 是裸字面量内的安全字符 | 紧贴前文的 `#` 是数据，在旧版截断处产生 `legacy-glued-hash` 警告。标量路径保留为 `/tmp/a#b`，子组名称为 `hk#suffix`。需要注释时，请在 `#` 前加空白。 |
 | 路由规则里紧贴出站名的 `#`，`domain(x) -> proxy#c` | 一个裸字面量 `proxy#c` | 字面目标为 `proxy#c`，产生 `legacy-glued-hash` 警告，仍须通过通常的目标校验。注释请写成 `-> proxy # comment`。 |
 | `/* … */` | 块注释，跳过 | 不识别，也不跳过：`/* log_level: debug */` 这一行的键是 `/* log_level`，未知因而忽略；但这类文本里的花括号或合法的 `key: value` 会被当作配置读取。 |
 | 声明后的 `[key: value]`，`filter: name(x) [add_latency: -500ms]` | 作为注解接受 | 不识别；该过滤条件被报告为无法解析并忽略。honk 没有按节点的延迟偏置。 |
@@ -24,8 +24,8 @@ honk 读取 dae 的配置语法，但它是一种方言：honk 与 dae 对同一
 |---|---|---|
 | 带冒号的裸值，`bind: 127.0.0.1:53` | 不是一个字面量，必须加引号 | 接受裸写：值是第一个 `:` 之后的全部文本。 |
 | 调用形态的值，`client_subnet: auto(9.9.9.9)` | 函数表达式 | 文本 `auto(9.9.9.9)` 就是值，由该设置自行解析。 |
-| 带引号的列表项，`lan_interface: 'eth0', 'eth1'` | 两个字面量 | 接口列表先剥去整个值两端的引号再按逗号拆分，各项不再去引号，因此得到 `eth0'` 与 `'eth1`。`tcp_check_url` 与 `udp_check_dns` 会额外逐项剥去单引号。列表项请裸写：`lan_interface: eth0, eth1`。 |
-| 布尔值 `t`、`y`、`f`、`n` | 裸字面量 | 宽松设置（不区分大小写）：`true`、`yes`、`1`、`on` 为真；`false`、`f`、`no`、`n`、`0`、`off`、`t`、`y` 为假；其他写法为假并报告诊断。`global.nfqueue_enable` 与旧版 `experimental.udp_nfqueue.enabled` 是严格解析：`t`、`y`、`f`、`n` 及未知写法都是错误。 |
+| 带引号的列表项，`lan_interface: 'eth0', 'eth1'` | 两个字面量 | 先拆分列表，再逐项移除一对包围该项的引号，结果为 `eth0`、`eth1`。解析结果与旧版不同的引号写法产生 `legacy-list-quoting` 警告。检查目标列表仍兼容整体加引号的逗号列表，并产生 `legacy-quoted-list` 警告；建议逐项加引号或裸写。 |
+| 布尔值 `t`、`y`、`f`、`n` | 裸字面量 | 宽松设置不区分大小写：`true`、`yes`、`1`、`on` 为真；`false`、`f`、`no`、`n`、`0`、`off`、`t`、`y` 为假。四种单字母简写产生 `legacy-bool-shorthand` 警告；未知写法为假并报告诊断。建议使用 `true` 或 `false`。`global.nfqueue_enable` 与旧版 `experimental.udp_nfqueue.enabled` 仍严格解析，拒绝简写。 |
 | mark，`so_mark_from_dae: 0x10` 与 `so_mark_from_dae: 10` | 裸字面量 | 两者都按十六进制读取：16 与 16。无法解析的 mark 回退为 0 并报告诊断。 |
 | 毫秒设置里的小数秒，`check_tolerance: 1.5s` | 裸字面量 | 1500 毫秒。无法解析的毫秒时长（`check_tolerance`、`sniffing_timeout`）回退到该设置的默认值并报告诊断；无法解析的秒时长（`check_interval`、订阅 `interval`）回退为 `0` 并报告诊断。 |
 | `fixed_domain_ttl` 条目 `x: 60#note`、`y: '60'`、`z: 60 ignored` | `60#note` 与 `'60'` 是字面量，`60 ignored` 是两个词法单元 | `x`、`y` 被报告并忽略（值必须是裸十进制）；`z` 存为 60，尾部文本忽略。 |

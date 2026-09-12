@@ -148,14 +148,37 @@ impl<'a> Source<'a> {
     /// Includes trivia, so concatenating raw token spans recovers the entire input.
     /// Quote errors append once and remain nonterminal until the reader decides recovery.
     pub fn tokenize(&self, diagnostics: &mut Vec<DetailedDiagnostic>) -> Vec<Token> {
+        self.tokenize_span(self.span(0, self.text().len()), diagnostics)
+    }
+
+    pub(super) fn tokenize_span(
+        &self,
+        span: Span,
+        diagnostics: &mut Vec<DetailedDiagnostic>,
+    ) -> Vec<Token> {
         let bytes = self.text().as_bytes();
         let mut tokens = Vec::new();
-        for (line_index, &start) in self.line_starts.iter().enumerate() {
+        let first_line = self
+            .line_starts
+            .partition_point(|&start| start <= span.start)
+            - 1;
+        for (line_index, &line_start) in self
+            .line_starts
+            .iter()
+            .enumerate()
+            .skip(first_line)
+            .take_while(|&(_, &start)| start < span.end)
+        {
             let next = self
                 .line_starts
                 .get(line_index + 1)
                 .copied()
-                .unwrap_or(bytes.len());
+                .unwrap_or(bytes.len())
+                .min(span.end);
+            let start = line_start.max(span.start);
+            if start >= next {
+                continue;
+            }
             let mut end = next;
             if end > start && bytes[end - 1] == b'\n' {
                 end -= 1;

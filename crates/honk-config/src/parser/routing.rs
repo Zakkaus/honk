@@ -165,6 +165,11 @@ pub(super) fn parse_section(
     let mut depth = 0usize;
     let mut ordinal = 0;
     for end in 0..lines.len() {
+        if start < end && lines[start].span.source != lines[end].span.source {
+            return Err(crate::ConfigError::Parse(
+                "routing: unterminated parenthesized rule at source boundary".into(),
+            ));
+        }
         for (_, byte) in Expression::new(&lines[end..=end]).parentheses() {
             if byte == b'(' {
                 depth += 1;
@@ -350,36 +355,27 @@ fn parse_call(
         return Ok(None);
     }
     let call = matcher.sub(matcher.span.start + name.len(), matcher.span.end);
-    let mut depth = 0;
-    for (position, byte) in call.parentheses() {
-        if byte == b'(' {
-            depth += 1;
-        } else {
-            depth -= 1;
+    let Some((position, _)) = call.parentheses().find(|(_, byte)| *byte == b')') else {
+        return Ok(None);
+    };
+    let trailing = call.sub(position + 1, call.span.end);
+    if !trailing.trim().is_empty() {
+        if trailing.span.start == trailing.trim().span.start {
+            return Err(trailing.trim().error(
+                "trailing-matcher-text",
+                "matcher call has trailing text",
+                ordinal,
+            ));
         }
-        if depth != 0 {
-            continue;
-        }
-        let trailing = call.sub(position + 1, call.span.end);
-        if !trailing.trim().is_empty() {
-            if trailing.span.start == trailing.trim().span.start {
-                return Err(trailing.trim().error(
-                    "trailing-matcher-text",
-                    "matcher call has trailing text",
-                    ordinal,
-                ));
-            }
-            return Ok(None);
-        }
-        return Ok(Some(
-            call.sub(call.span.start + 1, position)
-                .split(",")
-                .map(Expression::value)
-                .filter(|value| !value.is_empty())
-                .collect(),
-        ));
+        return Ok(None);
     }
-    Ok(None)
+    Ok(Some(
+        call.sub(call.span.start + 1, position)
+            .split(",")
+            .map(Expression::value)
+            .filter(|value| !value.is_empty())
+            .collect(),
+    ))
 }
 
 fn parse_domain_args(args: &[String], cond: &mut crate::routing::ConditionFields<'_>) {

@@ -1,11 +1,63 @@
+use std::collections::HashMap;
+
+use super::read::{self, Text};
+use super::scalars;
 use super::{
-    Block, ParserDiagnostics, extract_fn_args, find_unquoted, lenient, lenient_bool,
-    normalize_geosite_code, parse_ip_prefer, parse_kv_pair, parse_kv_pairs, split_unquoted,
-    strip_tag_arg,
+    Block, ParserDiagnostics, extract_fn_args, find_unquoted, lenient, normalize_geosite_code,
+    parse_ip_prefer, split_unquoted, strip_tag_arg,
 };
 use crate::ConfigDiagnostic;
 use crate::diagnostic::{DetailedDiagnostic, SafeValue, SettingPath};
 use crate::dns::DnsConfig;
+
+fn terminal_scalar_quote(
+    line: Text<'_, '_>,
+    diagnostics: &mut ParserDiagnostics<'_>,
+) -> Result<(), crate::ConfigError> {
+    if !line.has_error() {
+        return Ok(());
+    }
+    let Some(index) = diagnostics.output.iter().rposition(|diagnostic| {
+        diagnostic.code == "unterminated-quote"
+            && diagnostic.source.same_source(&line.source.reference())
+            && diagnostic
+                .span
+                .as_ref()
+                .is_some_and(|span| span.start < line.span.end && line.span.start < span.end)
+    }) else {
+        return Err(crate::ConfigError::Parse(
+            "unterminated scalar quote".into(),
+        ));
+    };
+    let mut diagnostic = diagnostics.output.remove(index);
+    diagnostic.terminal = true;
+    diagnostics.failure = Some(diagnostic);
+    Err(crate::ConfigError::Parse(
+        "unterminated scalar quote".into(),
+    ))
+}
+
+fn raw_fields<'d>(
+    section: &'d Block,
+    diagnostics: &mut ParserDiagnostics<'_>,
+) -> Result<(HashMap<&'d str, Text<'d, 'static>>, Vec<Text<'d, 'static>>), crate::ConfigError> {
+    let mut raw = HashMap::new();
+    let mut hosts = Vec::new();
+    for line in read::statements(section) {
+        terminal_scalar_quote(line, diagnostics)?;
+        let Some((key, value)) = line.kv() else {
+            continue;
+        };
+        let key = key.raw();
+        diagnostics.register_field(key, value);
+        value.warn_glued_hash(diagnostics);
+        if key == "use_host" {
+            hosts.push(value);
+        }
+        raw.insert(key, value);
+    }
+    Ok((raw, hosts))
+}
 
 pub(super) fn parse_section(
     section: &Block,
@@ -13,77 +65,82 @@ pub(super) fn parse_section(
 ) -> Result<DnsConfig, crate::ConfigError> {
     diagnostics.at_section(section, &["upstream", "routing", "fixed_domain_ttl"]);
     let dns_subs = section.blocks_matching(&["upstream", "routing", "fixed_domain_ttl"]);
+    let (settings, hosts) = raw_fields(section, diagnostics)?;
     let mut cfg = DnsConfig::default();
     let mut saw_upstream = false;
-    let dns_lines = section.lines_except(&["upstream", "routing", "fixed_domain_ttl"]);
-    let kv = parse_kv_pairs(dns_lines.iter().copied());
-    if let Some(bind) = kv.get("bind") {
-        cfg.bind.clone_from(bind);
+    if let Some(bind) = settings.get("bind") {
+        cfg.bind = bind.unquote().raw().to_owned();
         cfg.bind_endpoint()
             .map_err(|error| crate::ConfigError::Parse(error.to_string()))?;
     }
-    if kv.contains_key("hosts_file") {
+    if settings.contains_key("hosts_file") {
         return Err(crate::ConfigError::Parse(
             "dns.hosts_file was removed; use one or more use_host paths".into(),
         ));
     }
-    for (key, source) in dns_lines.into_iter().filter_map(parse_kv_pair) {
-        if key == "use_host" {
-            crate::dns::push_host_source(&mut cfg.hosts, source);
-        }
+    for value in hosts {
+        crate::dns::push_host_source(&mut cfg.hosts, value.unquote().raw());
     }
-    if let Some(value) = kv.get("client_subnet") {
-        cfg.client_subnet.clone_from(value);
+    if let Some(value) = settings.get("client_subnet") {
+        cfg.client_subnet = value.unquote().raw().to_owned();
         cfg.client_subnet_mode()
             .map_err(|error| crate::ConfigError::Parse(error.to_string()))?;
     }
-
-    if let Some(v) = kv.get("ipversion_prefer") {
+    if let Some(v) = settings.get("ipversion_prefer") {
+        let value = v.unquote().raw();
         cfg.strategy = lenient(
-            parse_ip_prefer(v),
+            parse_ip_prefer(value),
             crate::dns::DnsStrategy::Both,
             diagnostics,
             || {
                 ConfigDiagnostic {
                 setting: "dns.ipversion_prefer".to_string(),
-                value: v.to_string(),
+                value: value.to_string(),
                 message: "honk could not parse the preference as decimal 0, 4 or 6; using fallback: no preference"
                     .to_string(),
             }
             },
         );
     }
-    if let Some(v) = kv.get("optimistic_cache") {
-        cfg.cache.enabled = lenient_bool(v, "dns.optimistic_cache", diagnostics);
+    if settings.contains_key("optimistic_cache") {
+        cfg.cache.enabled = scalars::bool_value(
+            &settings,
+            "optimistic_cache",
+            "dns.optimistic_cache",
+            diagnostics,
+        );
     }
-    if let Some(v) = kv.get("optimistic_cache_ttl") {
-        cfg.cache.ttl = lenient(v.parse().ok(), 60, diagnostics, || {
+    if let Some(v) = settings.get("optimistic_cache_ttl") {
+        let value = v.unquote().raw();
+        cfg.cache.ttl = lenient(value.parse().ok(), 60, diagnostics, || {
             ConfigDiagnostic {
-                setting: "dns.optimistic_cache_ttl".to_string(),
-                value: v.to_string(),
-                message: "honk could not parse this value as an unsigned decimal integer in range; using fallback 60"
-                    .to_string(),
-            }
+            setting: "dns.optimistic_cache_ttl".to_string(),
+            value: value.to_string(),
+            message: "honk could not parse this value as an unsigned decimal integer in range; using fallback 60"
+                .to_string(),
+        }
         });
     }
-    if let Some(v) = kv.get("optimistic_stale_reply_ttl") {
-        cfg.cache.stale_reply_ttl = lenient(v.parse().ok(), 30, diagnostics, || {
+    if let Some(v) = settings.get("optimistic_stale_reply_ttl") {
+        let value = v.unquote().raw();
+        cfg.cache.stale_reply_ttl = lenient(value.parse().ok(), 30, diagnostics, || {
             ConfigDiagnostic {
                 setting: "dns.optimistic_stale_reply_ttl".to_string(),
-                value: v.to_string(),
+                value: value.to_string(),
                 message: "honk could not parse this value as an unsigned decimal integer in range; using fallback 30"
                     .to_string(),
             }
         });
     }
-    if let Some(v) = kv.get("max_cache_size") {
-        cfg.cache.max_size = lenient(v.parse().ok(), 10000, diagnostics, || {
+    if let Some(v) = settings.get("max_cache_size") {
+        let value = v.unquote().raw();
+        cfg.cache.max_size = lenient(value.parse().ok(), 10000, diagnostics, || {
             ConfigDiagnostic {
-                setting: "dns.max_cache_size".to_string(),
-                value: v.to_string(),
-                message: "honk could not parse this value as an unsigned decimal integer in range; using fallback 10000"
-                    .to_string(),
-            }
+            setting: "dns.max_cache_size".to_string(),
+            value: value.to_string(),
+            message: "honk could not parse this value as an unsigned decimal integer in range; using fallback 10000"
+                .to_string(),
+        }
         });
     }
 

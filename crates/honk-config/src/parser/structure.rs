@@ -126,6 +126,127 @@ pub fn scan(
     }
     Ok(scanner.roots)
 }
+fn scan_dns_root(
+    source: &Source<'static>,
+    lines: &[Line<'_>],
+    mut position: (usize, usize),
+    diagnostics: &mut ParserDiagnostics<'_>,
+) -> Result<(Block, usize), ConfigError> {
+    let root_start = lines[position.0].start + position.1;
+    let root_line = position.0 + 1;
+    let mut projected = Vec::new();
+    let mut lexical = Vec::new();
+    let mut items = Vec::new();
+    let mut depth = 0usize;
+    let mut root_end = source.text().len();
+    'lines: while position.0 < lines.len() {
+        let line = &lines[position.0];
+        let start = line.start + position.1;
+        let tokens = source.tokenize_span(
+            source.span(start, line.start + line.text.len()),
+            &mut lexical,
+        );
+        let mut statement_head = true;
+        for (index, token) in tokens.iter().enumerate() {
+            if token.kind.is_trivia() {
+                continue;
+            }
+            let name = source.raw(token.span);
+            let next = tokens[index + 1..]
+                .iter()
+                .find(|token| !token.kind.is_trivia());
+            let legacy_child = depth > 0
+                && statement_head
+                && (matches!(name, "upstream" | "routing" | "fixed_domain_ttl")
+                    && next.is_some_and(|token| {
+                        token.kind == TokenKind::OpenBrace || source.raw(token.span) == "{}"
+                    })
+                    || name.strip_suffix('{').is_some_and(|name| {
+                        matches!(name, "upstream" | "routing" | "fixed_domain_ttl")
+                    }));
+            if legacy_child {
+                // C09-C11 still own these raw subtrees; never rescan scalar text with Scanner.
+                let mut child = Scanner::default();
+                let mut child_position = (position.0, token.span.start - line.start);
+                let mut notices = Vec::new();
+                loop {
+                    if child_position.0 == lines.len() {
+                        return Err(ConfigError::Parse("unclosed DNS child block".into()));
+                    }
+                    child_position = child.process_line(
+                        source.text(),
+                        lines,
+                        child_position,
+                        None,
+                        &mut notices,
+                    )?;
+                    if let Some(block) = child.roots.pop() {
+                        items.push(Item::Block(block));
+                        diagnostics.extend(notices);
+                        position = child_position;
+                        continue 'lines;
+                    }
+                }
+            }
+            projected.push(token.clone());
+            match token.kind {
+                TokenKind::OpenBrace => {
+                    depth += 1;
+                    statement_head = true;
+                }
+                TokenKind::CloseBrace => {
+                    depth = depth.saturating_sub(1);
+                    statement_head = true;
+                    if depth == 0 {
+                        root_end = token.span.end;
+                        break 'lines;
+                    }
+                }
+                _ => statement_head = false,
+            }
+        }
+        position = (position.0 + 1, 0);
+    }
+    lexical.retain(|diagnostic| {
+        projected.iter().any(|token| {
+            matches!(token.kind, TokenKind::Error { opener } if diagnostic.span.as_ref().is_some_and(|span| span.start == opener))
+        })
+    });
+    let document = Arc::new(
+        Document::from_tokens(source.clone(), projected, lexical, diagnostics.output).map_err(
+            |error| {
+                if let Some(index) = diagnostics.output.iter().rposition(|diagnostic| {
+                    diagnostic.terminal && diagnostic.span == error.error.diagnostic.span
+                }) {
+                    diagnostics.output.remove(index);
+                }
+                diagnostics.failure = Some((*error.error.diagnostic).clone());
+                error.error.into_legacy()
+            },
+        )?,
+    );
+    let segments = document
+        .sections()
+        .map(|segment| OwnedSegment {
+            document: document.clone(),
+            range: segment.range(),
+        })
+        .collect();
+    Ok((
+        Block {
+            name: "dns".to_owned(),
+            items,
+            line: root_line,
+            header: source
+                .raw(source.span(root_start, root_start + 3))
+                .to_owned(),
+            closing: String::new(),
+            include_body: None,
+            segments,
+        },
+        root_end,
+    ))
+}
 
 /// Keep unmigrated sections on their bounded old adapter until their owning commit.
 pub(super) fn scan_readers(
@@ -138,7 +259,7 @@ pub(super) fn scan_readers(
     let shared: Arc<str> = Arc::from(input);
     let source = Source::shared(shared, reference.clone());
     let mut lexical = Vec::new();
-    let tokens = source.tokenize(&mut lexical);
+    let mut tokens = source.tokenize(&mut lexical);
     let lines = Line::all(input);
     let mut scanner = Scanner::default();
     let mut position = (0, 0);
@@ -152,12 +273,24 @@ pub(super) fn scan_readers(
                 let name = source.raw(tokens[index].span);
                 let named = matches!(
                     name,
-                    "global" | "experimental" | "node" | "subscription" | "group" | "routing"
+                    "global"
+                        | "experimental"
+                        | "node"
+                        | "subscription"
+                        | "group"
+                        | "routing"
+                        | "dns"
                 );
                 let glued = name.strip_suffix('{').is_some_and(|name| {
                     matches!(
                         name,
-                        "global" | "experimental" | "node" | "subscription" | "group" | "routing"
+                        "global"
+                            | "experimental"
+                            | "node"
+                            | "subscription"
+                            | "group"
+                            | "routing"
+                            | "dns"
                     )
                 });
                 let opener = tokens[index + 1..]
@@ -174,8 +307,26 @@ pub(super) fn scan_readers(
         if migrated {
             migrated_root_seen = true;
             let start = first.unwrap();
-            let mut depth = 0usize;
+            let byte_start = tokens[start].span.start;
+            if source.raw(tokens[start].span) == "dns" {
+                let dns_position = (position.0, byte_start - lines[position.0].start);
+                let (legacy, byte_end) = scan_dns_root(&source, &lines, dns_position, diagnostics)?;
+                scanner.roots.push(legacy);
+                let line = line_for_offset(&lines, byte_end);
+                position = (line, byte_end - lines[line].start);
+                if position.1 >= lines[line].text.len() {
+                    position = (line + 1, 0);
+                }
+                // A legacy child can end inside a lexer token; resume from its actual boundary.
+                let consumed = tokens.partition_point(|token| token.span.start < byte_end);
+                if consumed > 0 && tokens[consumed - 1].span.end > byte_end {
+                    lexical.clear();
+                    tokens = source.tokenize_span(source.span(byte_end, input.len()), &mut lexical);
+                }
+                continue;
+            }
             let mut opened = false;
+            let mut depth = 0usize;
             let mut end = tokens.len();
             for (index, token) in tokens.iter().enumerate().skip(start) {
                 match token.kind {
@@ -193,7 +344,6 @@ pub(super) fn scan_readers(
                     _ => {}
                 }
             }
-            let byte_start = tokens[start].span.start;
             let byte_end = tokens[end - 1].span.end;
             for token in &tokens[start..end] {
                 if token.kind == TokenKind::Comment && source.raw(token.span).contains(['{', '}']) {

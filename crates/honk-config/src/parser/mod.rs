@@ -551,44 +551,6 @@ fn unquote_filter_argument(value: &str) -> &str {
     value
 }
 
-fn parse_kv_pair(line: &str) -> Option<(&str, &str)> {
-    let trimmed = strip_unquoted_comment(line.trim()).trim();
-    let (key, value) = trimmed.split_once(':')?;
-    Some((
-        key.trim(),
-        value.trim().trim_matches('\'').trim_matches('"'),
-    ))
-}
-
-fn parse_kv_pairs<'a>(lines: impl IntoIterator<Item = &'a str>) -> HashMap<String, String> {
-    lines
-        .into_iter()
-        .filter_map(parse_kv_pair)
-        .map(|(key, value)| (key.to_owned(), value.to_owned()))
-        .collect()
-}
-
-fn strip_unquoted_comment(line: &str) -> &str {
-    let mut quote = None;
-    let mut escaped = false;
-    for (index, character) in line.char_indices() {
-        if let Some(delimiter) = quote {
-            if escaped {
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == delimiter {
-                quote = None;
-            }
-        } else if matches!(character, '\'' | '"') {
-            quote = Some(character);
-        } else if character == '#' {
-            return &line[..index];
-        }
-    }
-    line
-}
-
 fn find_unquoted(input: &str, delimiter: &str) -> Option<usize> {
     let bytes = input.as_bytes();
     let mut index = 0;
