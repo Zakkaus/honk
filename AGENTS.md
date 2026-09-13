@@ -74,7 +74,7 @@ Notable absences (referenced by older docs but **not in this tree**): `Makefile`
 - **Logging:** tracing + tracing-subscriber (`env-filter`, `json`); also `log`.
 - **HTTP client:** reqwest 0.13 (rustls, no default features) — subscriptions.
 - **Error handling:** anyhow + thiserror 2.
-- **Misc:** socket2, ipnet, aho-corasick, lru, dashmap, parking_lot, h2 0.4 (urltest probes + DoH), tokio-tungstenite (WS transport), zip (external-UI download only), libsystemd (only `sd_notify`), nix (only `clock_gettime`), aes-gcm/chacha20poly1305/blake3/sha1/sha2/hmac/hkdf/md-5.
+- **Misc:** socket2, ipnet, aho-corasick, lru, dashmap, parking_lot, h2 0.4 (urltest probes + DoH), tokio-tungstenite (WS transport), zip (external-UI download only), libsystemd (only `sd_notify`), nix (POSIX/Linux syscall wrappers), aes-gcm/chacha20poly1305/blake3/sha1/sha2/hmac/hkdf/md-5.
 - **Dev/test:** tempfile, tokio-test, rcgen 0.14, tokio-tungstenite, criterion 0.8 (DNS and UDP benchmarks).
 
 See [design docs](doc/en/design/overview.md).
