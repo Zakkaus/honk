@@ -45,7 +45,7 @@ jobs:
       - run: cargo clippy --all --all-targets -- -D warnings
 
   test:
-    name: cargo test (workspace)
+    name: cargo nextest (workspace)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -60,6 +60,9 @@ jobs:
         with:
           cache-on-failure: true
           save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: nextest
       - name: Install boring-sys build deps (cmake + libclang for bindgen)
         run: |
           sudo grep -lE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/* | xargs -r sudo rm -f || true
@@ -94,7 +97,13 @@ jobs:
           echo "$GEOIP_SHA256  $geo_dir/geoip.dat" | sha256sum -c -
           sudo install -D -m 0644 "$geo_dir/geosite.dat" /etc/dae/geosite.dat
           sudo install -D -m 0644 "$geo_dir/geoip.dat" /etc/dae/geoip.dat
-      - run: cargo test --workspace --no-fail-fast
+      - run: cargo nextest run --workspace --profile ci
+      - name: Upload workspace JUnit
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workspace-junit
+          path: target/nextest/ci/junit.xml
 
   ebpf:
     name: eBPF object + real VM kernel tests
@@ -208,10 +217,19 @@ jobs:
         run: |
           readelf -S crates/honk-ebpf/target/bpfel-unknown-none/release/honk-ebpf | grep -q '\.BTF'
           readelf -S target/honk-ebpf-routing-test/bpfel-unknown-none/release/honk-ebpf | grep -q '\.BTF'
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: nextest
       - name: Run eBPF-feature unit tests
         env:
           CARGO_PROFILE_TEST_DEBUG: 0
-        run: cargo test -p honk-core --features ebpf --lib
+        run: cargo nextest run -p honk-core --features ebpf --lib --profile ci
+      - name: Upload eBPF unit-test JUnit
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ebpf-unit-junit
+          path: target/nextest/ci/junit.xml
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/kernel-floor/*.deb

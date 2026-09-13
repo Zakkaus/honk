@@ -76,9 +76,10 @@ fmt-check:
 test:
     cargo test --all
 
-# Workspace test gate.
+# Workspace CI gate (requires cargo-nextest).
 test-ci:
-    cargo test --workspace --no-fail-fast
+    # Without nextest: cargo test --workspace --no-fail-fast
+    cargo nextest run --workspace --profile ci
 
 # Run core + outbound tests
 test-core:
