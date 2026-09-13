@@ -98,7 +98,7 @@ release binary 已内嵌 eBPF object，不需要单独安装 `honk-ebpf`。运�
 
 - 根目录 `rust-toolchain.toml` 中固定的 Rust stable 版本（`rustfmt`、`clippy`）；
 - `crates/honk-ebpf/rust-toolchain.toml` 中固定的 nightly 版本（`rust-src`、`llvm-tools`）；
-- `bpf-linker 0.10.3`；
+- `.github/ci/pins.env` 中固定的 `bpf-linker` 版本；
 - C/C++ toolchain、CMake、Clang、LLVM、libclang、libbpf headers、binutils、pkg-config、Git；
 - 可访问 crates.io 和 GitHub 的网络。
 
@@ -127,7 +127,8 @@ rustup toolchain install $(grep -oP '^channel\s*=\s*"\K[^"]+' rust-toolchain.tom
   --profile minimal --component rustfmt --component clippy
 rustup toolchain install $(grep -oP '^channel\s*=\s*"\K[^"]+' crates/honk-ebpf/rust-toolchain.toml) \
   --profile minimal --component rust-src --component llvm-tools
-cargo install bpf-linker --version 0.10.3
+source .github/ci/pins.env
+cargo install bpf-linker --version "$BPF_LINKER_VERSION"
 ```
 
 构建当前 `main`：

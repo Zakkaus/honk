@@ -98,7 +98,7 @@ A source build requires:
 
 - the stable Rust version in the root `rust-toolchain.toml` (`rustfmt`, `clippy`);
 - the nightly in `crates/honk-ebpf/rust-toolchain.toml` (`rust-src`, `llvm-tools`);
-- `bpf-linker 0.10.3`;
+- the `bpf-linker` version in `.github/ci/pins.env`;
 - a C/C++ toolchain, CMake, Clang, LLVM, libclang, libbpf headers, binutils, pkg-config, and Git;
 - network access to crates.io and GitHub.
 
@@ -127,7 +127,8 @@ rustup toolchain install $(grep -oP '^channel\s*=\s*"\K[^"]+' rust-toolchain.tom
   --profile minimal --component rustfmt --component clippy
 rustup toolchain install $(grep -oP '^channel\s*=\s*"\K[^"]+' crates/honk-ebpf/rust-toolchain.toml) \
   --profile minimal --component rust-src --component llvm-tools
-cargo install bpf-linker --version 0.10.3
+source .github/ci/pins.env
+cargo install bpf-linker --version "$BPF_LINKER_VERSION"
 ```
 
 Build the current `main` branch:
