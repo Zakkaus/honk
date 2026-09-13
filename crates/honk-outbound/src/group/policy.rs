@@ -144,8 +144,12 @@ impl GroupManager {
         if network == SelectionNetwork::Udp
             && !self.alive_set.as_ref().is_some_and(|alive| {
                 candidates.iter().any(|c| {
-                    alive.has_real_ranking_evidence(c.node.id, ProbeDomain::DataUdp, ipver)
-                        || alive.has_real_ranking_evidence(c.node.id, ProbeDomain::DnsUdp, ipver)
+                    alive
+                        .get_moving_average(c.node.id, ProbeDomain::DataUdp, ipver)
+                        .is_some()
+                        || alive
+                            .get_moving_average(c.node.id, ProbeDomain::DnsUdp, ipver)
+                            .is_some()
                 })
             })
         {
