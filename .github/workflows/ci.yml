@@ -104,9 +104,6 @@ jobs:
     # These tests attach TC/cgroup programs and therefore cannot run in a job container.
     runs-on: ubuntu-24.04
     timeout-minutes: 40
-    env:
-      CARGO_BUILD_JOBS: 1
-      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Read Rust toolchains
@@ -145,6 +142,7 @@ jobs:
               sudo tee /etc/udev/rules.d/99-kvm4all.rules
             sudo udevadm control --reload-rules
             sudo udevadm trigger --name-match=kvm || true
+            sudo chmod 666 /dev/kvm || true
             if test -r /dev/kvm -a -w /dev/kvm; then
               echo "HONK_CI_VNG_DISABLE_KVM=0" >> "$GITHUB_ENV"
               exit 0
@@ -214,62 +212,25 @@ jobs:
           readelf -S crates/honk-ebpf/target/bpfel-unknown-none/release/honk-ebpf | grep -q '\.BTF'
           readelf -S target/honk-ebpf-routing-test/bpfel-unknown-none/release/honk-ebpf | grep -q '\.BTF'
       - name: Run eBPF-feature unit tests
+        env:
+          CARGO_PROFILE_TEST_DEBUG: 0
         run: |
           cargo test -p honk-core --features ebpf --lib -- \
             --skip test_routing_with_config_dae
-      - name: Compile real-kernel test binaries on the host
-        run: |
-          {
-            cargo test -p honk-core --features ebpf --lib --test ebpf_datapath_test --no-run --message-format=json
-            cargo test -p honk-nfqueue --lib --no-run --message-format=json
-          } | jq -sr '
-            def executable($name):
-              [.[] | select(.reason == "compiler-artifact" and .target.name == $name and .executable != null) | .executable]
-              | unique | if length == 1 then .[0] else error("missing or ambiguous test executable: " + $name) end;
-            "HONK_CORE_TEST_BIN=" + (executable("honk_core") | @sh),
-            "HONK_DATAPATH_TEST_BIN=" + (executable("ebpf_datapath_test") | @sh),
-            "HONK_NFQUEUE_TEST_BIN=" + (executable("honk_nfqueue") | @sh)
-          ' > target/kernel-test-bins.env
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/kernel-floor/*.deb
           key: kernel-floor-${{ steps.pins.outputs.kernel }}
-      - name: Fetch verified Linux 6.12 image and modules
-        run: |
-          source .github/ci/pins.env
-          kernel_dir="$RUNNER_TEMP/kernel-floor"
-          image="$KERNEL_FLOOR_IMAGE"
-          modules="$KERNEL_FLOOR_MODULES"
-          mkdir -p "$kernel_dir"
-          if ! test -f "$kernel_dir/$image"; then
-            curl -fsSL --retry 3 --retry-all-errors -o "$kernel_dir/$image" "$KERNEL_FLOOR_BASE/$image"
-          fi
-          if ! test -f "$kernel_dir/$modules"; then
-            curl -fsSL --retry 3 --retry-all-errors -o "$kernel_dir/$modules" "$KERNEL_FLOOR_BASE/$modules"
-          fi
-          echo "$KERNEL_FLOOR_IMAGE_SHA256  $kernel_dir/$image" | sha256sum -c -
-          echo "$KERNEL_FLOOR_MODULES_SHA256  $kernel_dir/$modules" | sha256sum -c -
-          dpkg-deb --extract "$kernel_dir/$image" "$kernel_dir/root"
-          dpkg-deb --extract "$kernel_dir/$modules" "$kernel_dir/root"
-          echo "HONK_CI_KERNEL_IMAGE=$kernel_dir/root/boot/vmlinuz-$KERNEL_FLOOR_RELEASE" >> "$GITHUB_ENV"
       - name: Run all real-kernel gates on Linux 6.12
-        run: |
-          kvm_args=()
-          if test "${HONK_CI_VNG_DISABLE_KVM:-0}" = 1; then
-            kvm_args+=(--disable-kvm)
-          fi
-          vng -r "$HONK_CI_KERNEL_IMAGE" \
-            "${kvm_args[@]}" \
-            --user root \
-            --rwdir "$GITHUB_WORKSPACE" \
-            --cpus 2 \
-            --memory 4G \
-            -- \
-            env \
-              CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" \
-              RUST_BACKTRACE=1 \
-              HONK_ROUTING_TEST_OBJECT="$GITHUB_WORKSPACE/target/honk-ebpf-routing-test/bpfel-unknown-none/release/honk-ebpf" \
-              bash "$GITHUB_WORKSPACE/.github/ci/ebpf-vm-tests.sh"
+        env:
+          CARGO_PROFILE_TEST_DEBUG: 0
+        run: .github/ci/run-vm-gate.sh floor
+      - name: Upload guest output
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vm-tests-floor
+          path: target/vm-tests/floor
 
   review-bot:
     name: mechanical PR review
