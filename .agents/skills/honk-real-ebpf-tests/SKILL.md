@@ -14,17 +14,17 @@ If this path could not run, put this exact sentence in the PR's Verified section
 Use `just test-routing`. Without `just`, run its `Justfile` commands below from the checkout root. The subshell keeps that working directory; `$PWD` replaces `{{justfile_directory()}}`.
 
 ```bash
-(cd crates/honk-ebpf && CARGO_TARGET_DIR=target/routing-test env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS cargo +nightly build --release -Zbuild-std=core --target bpfel-unknown-none --features routing-test)
-HONK_ROUTING_TEST_OBJECT="$PWD/crates/honk-ebpf/target/routing-test/bpfel-unknown-none/release/honk-ebpf" CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 cargo +stable test -p honk-core --features ebpf --lib ebpf::real::routing::tests -- --ignored --test-threads=1
+(cd crates/honk-ebpf && CARGO_TARGET_DIR=target/routing-test env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS cargo build --release -Zbuild-std=core --target bpfel-unknown-none --features routing-test)
+HONK_ROUTING_TEST_OBJECT="$PWD/crates/honk-ebpf/target/routing-test/bpfel-unknown-none/release/honk-ebpf" CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 cargo test -p honk-core --features ebpf --lib ebpf::real::routing::tests -- --ignored --test-threads=1
 ```
 
 Use `just test-netns`, which includes `test-routing`. Without `just`, run the block above, then these remaining `Justfile` commands:
 
 ```bash
-CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 cargo +stable test -p honk-nfqueue --lib nfqueue_service_isolated_netns_kernel_contract -- --ignored --test-threads=1
-CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 cargo +stable test -p honk-core --features ebpf --lib netns -- --ignored --test-threads=1
-CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 cargo +stable test -p honk-core --features ebpf --lib ebpf::real::tests -- --ignored --test-threads=1
-CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 cargo +stable test -p honk-core --features ebpf --test ebpf_datapath_test -- --ignored --test-threads=1
+CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 cargo test -p honk-nfqueue --lib nfqueue_service_isolated_netns_kernel_contract -- --ignored --test-threads=1
+CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 cargo test -p honk-core --features ebpf --lib netns -- --ignored --test-threads=1
+CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 cargo test -p honk-core --features ebpf --lib ebpf::real::tests -- --ignored --test-threads=1
+CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 cargo test -p honk-core --features ebpf --test ebpf_datapath_test -- --ignored --test-threads=1
 ```
 
 The routing object path above is a build output, not a checked-in file.
@@ -40,8 +40,8 @@ If this path could not run, put this exact sentence in Verified: "eBPF VM tests:
 4. Build the three test executables on the host with the workflow's commands, from the checkout root:
 
    ```bash
-   cargo +stable test -p honk-core --features ebpf --lib --test ebpf_datapath_test --no-run --message-format=json
-   cargo +stable test -p honk-nfqueue --lib --no-run --message-format=json
+   cargo test -p honk-core --features ebpf --lib --test ebpf_datapath_test --no-run --message-format=json
+   cargo test -p honk-nfqueue --lib --no-run --message-format=json
    ```
 
    Pipe their combined JSON output through the `jq -sr` block in "Compile real-kernel test binaries on the host". It writes the generated `target/kernel-test-bins.env` file with shell-quoted `HONK_CORE_TEST_BIN`, `HONK_DATAPATH_TEST_BIN` and `HONK_NFQUEUE_TEST_BIN`. Use that block's unique-executable checks rather than choosing a binary by filename glob.

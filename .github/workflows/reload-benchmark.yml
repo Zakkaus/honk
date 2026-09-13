@@ -34,7 +34,12 @@ jobs:
         with:
           path: baseline
           ref: ${{ github.event.pull_request.base.sha || 'main' }}
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Read candidate Rust toolchain
+        id: toolchain
+        run: echo "stable=$(grep -oP '^channel\s*=\s*\"\K[^\"]+' candidate/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.stable }}
       - name: Install build dependencies and geo assets
         run: |
           sudo apt-get update
@@ -47,6 +52,8 @@ jobs:
       - name: Install the candidate harness into main
         run: |
           cp candidate/crates/honk-core/benches/reload.rs baseline/crates/honk-core/benches/reload.rs
+          # Compare both revisions with the candidate's compiler.
+          cp candidate/rust-toolchain.toml baseline/rust-toolchain.toml
           python3 - <<'PY'
           from pathlib import Path
           import re

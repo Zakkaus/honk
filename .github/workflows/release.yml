@@ -22,7 +22,12 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Read Rust toolchain
+        id: toolchain
+        run: echo "stable=$(grep -oP '^channel\s*=\s*\"\K[^\"]+' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.stable }}
       - name: Install boring-sys build deps (cmake + libclang for bindgen)
         run: |
           sudo apt-get update
@@ -73,15 +78,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Read Rust toolchains
+        id: toolchain
+        run: |
+          echo "stable=$(grep -oP '^channel\s*=\s*\"\K[^\"]+' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+          echo "ebpf=$(grep -oP '^channel\s*=\s*\"\K[^\"]+' crates/honk-ebpf/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust stable (with target)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: ${{ steps.toolchain.outputs.stable }}
           target: ${{ matrix.target }}
 
       - name: Install Rust nightly (for the eBPF object)
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: nightly
+          toolchain: ${{ steps.toolchain.outputs.ebpf }}
           components: rust-src, llvm-tools
 
       - name: Install system dependencies
@@ -102,7 +114,7 @@ jobs:
       - name: Build eBPF object
         run: |
           cd crates/honk-ebpf
-          cargo +nightly build --release -Zbuild-std=core --target bpfel-unknown-none
+          cargo build --release -Zbuild-std=core --target bpfel-unknown-none
 
       # aya refuses objects without BTF ("no BTF parsed for object") — fail
       # the build here instead of at runtime on a gateway.
@@ -131,13 +143,11 @@ jobs:
             echo "FEATURES=--features ebpf" >> "$GITHUB_ENV"
           fi
 
-      # NB: the nightly step above makes nightly the DEFAULT toolchain, and
-      # rust-toolchain's `target` input installs the std only for stable —
-      # build with +stable explicitly or cross targets fail with
-      # "can't find crate for `core`".
+      # The root rust-toolchain.toml selects the host compiler whose cross
+      # targets were installed above; the eBPF crate has its own nightly pin.
       - name: Build honk-core (native gnu)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo +stable build --release -p honk-core $FEATURES --target ${{ matrix.target }}
+        run: cargo build --release -p honk-core $FEATURES --target ${{ matrix.target }}
 
       - name: Build honk-core (cross via zig wrappers)
         if: matrix.target != 'x86_64-unknown-linux-gnu'
@@ -161,7 +171,7 @@ jobs:
           # boring-sys generates its bindings with bindgen at build time —
           # point it at zig's target headers, not the host's.
           export BINDGEN_EXTRA_CLANG_ARGS="$(ci/zig-bindgen-env "$ZIGCC_TARGET")"
-          cargo +stable build --release -p honk-core $FEATURES --target "$T"
+          cargo build --release -p honk-core $FEATURES --target "$T"
 
       - name: Package artifact
         run: |

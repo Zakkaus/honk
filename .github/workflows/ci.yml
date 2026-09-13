@@ -23,8 +23,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Read Rust toolchain
+        id: toolchain
+        run: echo "stable=$(grep -oP '^channel\s*=\s*\"\K[^\"]+' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: ${{ steps.toolchain.outputs.stable }}
           components: rustfmt, clippy
       - name: Install boring-sys build deps (cmake + libclang for bindgen)
         run: |
@@ -42,7 +46,12 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Read Rust toolchain
+        id: toolchain
+        run: echo "stable=$(grep -oP '^channel\s*=\s*\"\K[^\"]+' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.stable }}
       - name: Install boring-sys build deps (cmake + libclang for bindgen)
         run: |
           sudo grep -lE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/* | xargs -r sudo rm -f || true
@@ -73,10 +82,17 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: dtolnay/rust-toolchain@master
+      - name: Read Rust toolchains
+        id: toolchain
+        run: |
+          echo "stable=$(grep -oP '^channel\s*=\s*\"\K[^\"]+' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+          echo "ebpf=$(grep -oP '^channel\s*=\s*\"\K[^\"]+' crates/honk-ebpf/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: nightly
+          toolchain: ${{ steps.toolchain.outputs.stable }}
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.ebpf }}
           components: rust-src, llvm-tools
       - name: Install build and VM dependencies
         run: |
@@ -127,12 +143,12 @@ jobs:
       - name: Build eBPF object
         run: |
           cd crates/honk-ebpf
-          cargo +nightly build --release -Zbuild-std=core --target bpfel-unknown-none
+          cargo build --release -Zbuild-std=core --target bpfel-unknown-none
       - name: Build routing-test eBPF object separately
         run: |
           cd crates/honk-ebpf
           CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/honk-ebpf-routing-test" \
-            cargo +nightly build --release --features routing-test \
+            cargo build --release --features routing-test \
               -Zbuild-std=core --target bpfel-unknown-none
       # aya refuses objects without BTF ("no BTF parsed for object") — fail
       # here instead of at runtime on a gateway.
@@ -142,13 +158,13 @@ jobs:
           readelf -S target/honk-ebpf-routing-test/bpfel-unknown-none/release/honk-ebpf | grep -q '\.BTF'
       - name: Run eBPF-feature unit tests
         run: |
-          cargo +stable test -p honk-core --features ebpf --lib -- \
+          cargo test -p honk-core --features ebpf --lib -- \
             --skip test_routing_with_config_dae
       - name: Compile real-kernel test binaries on the host
         run: |
           {
-            cargo +stable test -p honk-core --features ebpf --lib --test ebpf_datapath_test --no-run --message-format=json
-            cargo +stable test -p honk-nfqueue --lib --no-run --message-format=json
+            cargo test -p honk-core --features ebpf --lib --test ebpf_datapath_test --no-run --message-format=json
+            cargo test -p honk-nfqueue --lib --no-run --message-format=json
           } | jq -sr '
             def executable($name):
               [.[] | select(.reason == "compiler-artifact" and .target.name == $name and .executable != null) | .executable]

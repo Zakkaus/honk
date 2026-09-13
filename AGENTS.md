@@ -90,7 +90,7 @@ cargo build --release -p honk-core    # engine (default features: clash-api, moc
 cargo test --all                      # full suite (see current validation guidance below)
 ```
 
-Real-eBPF and standalone eBPF builds: `.agents/rules/real-ebpf.md`. CI and releases: `.agents/rules/release.md`.
+The root `rust-toolchain.toml` pins the host compiler; `crates/honk-ebpf/rust-toolchain.toml` pins the eBPF compiler and components. Real-eBPF and standalone eBPF builds: `.agents/rules/real-ebpf.md`. CI and releases consume the same files: `.agents/rules/release.md`.
 
 ### Justfile (preferred for day-to-day dev)
 
