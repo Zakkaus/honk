@@ -15,9 +15,15 @@ struct Location {
 }
 
 #[derive(Clone)]
+struct FilterLocation {
+    location: Location,
+    has_error: bool,
+}
+
+#[derive(Clone)]
 struct GroupLocation {
     location: Location,
-    filters: Vec<Location>,
+    filters: Vec<FilterLocation>,
 }
 
 /// Attempt-local source coordinates; paths are constructed only when emitting diagnostics.
@@ -152,7 +158,17 @@ impl<'a> ParserDiagnostics<'a> {
             .last_mut()
             .expect("group context")
             .filters
-            .push(Self::text_location(text));
+            .push(FilterLocation {
+                location: Self::text_location(text),
+                has_error: text.has_error(),
+            });
+    }
+
+    pub fn filter_has_error(&self, index: usize) -> bool {
+        self.group
+            .and_then(|group| self.groups.get(group - 1))
+            .and_then(|group| group.filters.get(index - 1))
+            .is_some_and(|filter| filter.has_error)
     }
 
     pub fn subscription_text(&mut self, text: Text<'_, '_>, index: usize) {
@@ -212,7 +228,7 @@ impl<'a> ParserDiagnostics<'a> {
                         .get(index - 1)
                         .and_then(|group| group.filters.get(ordinal - 1))
                     {
-                        location = filter.clone();
+                        location = filter.location.clone();
                     }
                     diagnostic.entry_index = Some(ordinal);
                 }

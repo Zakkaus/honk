@@ -254,57 +254,70 @@ impl<'d, 'a> Text<'d, 'a> {
     }
 }
 
-/// Compact empty blocks are a frozen compatibility form, not brace tokens in values.
 pub(super) fn block_header<'d, 'a>(segment: &Segment<'d, 'a>) -> Option<Text<'d, 'a>> {
-    let header = Text::segment(segment).trim();
-    if segment.body().is_some() {
-        return Some(header);
-    }
-    let last = segment.tokens().last()?;
-    (last.kind == TokenKind::Word
-        && header.source.raw(last.span) == "{}"
-        && last.span.start > header.span.start)
-        .then(|| header.sub(0, last.span.start - header.span.start).trim())
+    segment.is_block().then(|| Text::segment(segment).trim())
 }
 
 pub(super) fn child_statements<'d, 'a>(
     segment: &Segment<'d, 'a>,
     diagnostics: &mut ParserDiagnostics<'_>,
+    syntax: super::cursor::BodySyntax,
 ) -> Vec<Text<'d, 'a>> {
     let mut output = Vec::new();
-    if let Some(body) = segment.body() {
-        for child in body {
-            if let Some(header) = block_header(&child) {
-                header.notice(
+    if let Some(mut body) = segment.body_with(syntax) {
+        append_statements(&mut body, diagnostics, &mut output);
+    }
+    output
+}
+
+fn append_statements<'d, 'a>(
+    body: &mut super::cursor::Dispenser<'d, 'a>,
+    diagnostics: &mut ParserDiagnostics<'_>,
+    output: &mut Vec<Text<'d, 'a>>,
+) {
+    for child in body {
+        if let Some(header) = block_header(&child) {
+            header.notice(
+                diagnostics,
+                Severity::Warning,
+                "unknown-block",
+                "unknown nested block ignored; move settings to their documented level",
+            );
+        } else {
+            let text = Text::segment(&child);
+            if child.is_ignored() {
+                text.notice(
                     diagnostics,
                     Severity::Warning,
-                    "unknown-block",
-                    "unknown nested block ignored; move settings to their documented level",
+                    "unsupported-comment",
+                    "use `#` on each intended comment line",
                 );
             } else {
-                let text = Text::segment(&child);
-                if text.raw().starts_with("/*") {
-                    text.notice(
-                        diagnostics,
-                        Severity::Warning,
-                        "unsupported-comment",
-                        "use `#` on each intended comment line",
-                    );
-                } else {
-                    output.push(text);
-                }
+                output.push(text);
             }
         }
     }
-    output
 }
 
 pub(super) fn statements<'d, 'a>(
     section: &[Segment<'d, 'a>],
     diagnostics: &mut ParserDiagnostics<'_>,
+    syntax: super::cursor::BodySyntax,
 ) -> Vec<Text<'d, 'a>> {
-    section
-        .iter()
-        .flat_map(|segment| child_statements(segment, diagnostics))
-        .collect()
+    let mut output = Vec::new();
+    let mut source = None;
+    let mut parentheses = 0;
+    for segment in section {
+        let current_source = segment.header_span().source;
+        if source != Some(current_source) {
+            source = Some(current_source);
+            parentheses = 0;
+        }
+        if let Some(mut body) = segment.body_with(syntax) {
+            body.parentheses = parentheses;
+            append_statements(&mut body, diagnostics, &mut output);
+            parentheses = body.parentheses;
+        }
+    }
+    output
 }

@@ -421,3 +421,67 @@ fn include_adjacent_quotes_stop_at_bare_path_bytes() {
     assert_eq!(config.global.tproxy_port, 32123);
     assert_eq!(config.global.log_level, "debug");
 }
+
+#[test]
+fn empty_included_files_contribute_no_sections() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = dir.path().join("config.dae");
+    write(&dir.path().join("empty.dae"), "");
+    write(&dir.path().join("comment.dae"), "# optional fragment { }\n");
+    write(
+        &entry,
+        "include { empty.dae comment.dae }\nglobal { tproxy_port: 34567 }",
+    );
+    let mut diagnostics = Vec::new();
+    let config =
+        Config::from_file_with_detailed_diagnostics(entry.to_str().unwrap(), &mut diagnostics)
+            .unwrap();
+    assert_eq!(config.global.tproxy_port, 34567);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn fragment_format_recognition_stays_at_the_entry_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = dir.path().join("config.dae");
+    let fragment = dir.path().join("fragment.dae");
+    write(&fragment, "future_statement\n");
+    write(
+        &entry,
+        "include { fragment.dae }\nglobal { tproxy_port: 34567 }",
+    );
+    let mut diagnostics = Vec::new();
+    let config =
+        Config::from_file_with_detailed_diagnostics(entry.to_str().unwrap(), &mut diagnostics)
+            .unwrap();
+    assert_eq!(config.global.tproxy_port, 34567);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        ["unknown-statement"]
+    );
+    let standalone = honk_config::parser::parse_dae_config_with_detailed_diagnostics(
+        "future_statement",
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert_eq!(standalone.diagnostic.code, "not-dae-config");
+
+    write(&fragment, "global {\n");
+    let error =
+        Config::from_file_with_detailed_diagnostics(entry.to_str().unwrap(), &mut Vec::new())
+            .unwrap_err();
+    assert_eq!(error.category, honk_config::error::ErrorCategory::Include);
+    assert_eq!(error.diagnostic.code, "unclosed-block");
+
+    write(&entry, "include { fragment.dae {} }");
+    write(&fragment, "global {}");
+    assert_eq!(
+        Config::from_file_with_detailed_diagnostics(entry.to_str().unwrap(), &mut Vec::new())
+            .unwrap_err()
+            .category,
+        honk_config::error::ErrorCategory::Include,
+    );
+}

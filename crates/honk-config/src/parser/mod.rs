@@ -240,10 +240,11 @@ impl IncludeLoader {
             }
             let source_text = lexer::Source::shared(input, source.clone());
             let document =
-                Document::parse_attempt(source_text, diagnostics.output).map_err(|error| {
-                    self.saw_include |= error.saw_include;
-                    ParseFailure::Detailed(error.error)
-                })?;
+                Document::parse_attempt(source_text, diagnostics.output, self.stack.len() == 1)
+                    .map_err(|error| {
+                        self.saw_include |= error.saw_include;
+                        ParseFailure::Detailed(error.error)
+                    })?;
             let mut patterns = Vec::new();
             for segment in document
                 .sections()
@@ -380,7 +381,7 @@ fn parse_include_body(
         return Ok(patterns);
     };
     for entry in body {
-        if entry.body().is_some() {
+        if entry.is_block() {
             return Err(crate::ConfigError::Include(format!(
                 "include section in '{}' accepts only file patterns",
                 source.display()
@@ -460,8 +461,9 @@ pub fn parse_dae_config_with_detailed_diagnostics(
     let source = DiagnosticSources::new(None).root();
     let mut sink = ParserDiagnostics::new(diagnostics, source.clone());
     let result: Result<Config, ParseFailure> = (|| {
-        let document = Document::parse_attempt(lexer::Source::new(input, source), sink.output)
-            .map_err(|error| ParseFailure::Detailed(error.error))?;
+        let document =
+            Document::parse_attempt(lexer::Source::new(input, source), sink.output, true)
+                .map_err(|error| ParseFailure::Detailed(error.error))?;
         for segment in document
             .sections()
             .filter(|segment| segment.header() == "include")

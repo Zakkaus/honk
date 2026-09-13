@@ -39,6 +39,8 @@ include {
 
 `include` entries may be bare or quoted and support `*`, `?`, and `[]` glob patterns. Patterns run in declaration order; each pattern's matches load in lexical order. Unmatched patterns, directories, and files without the `.dae` extension are skipped.
 
+Empty or comment-only included `.dae` files contribute no sections; the dae entry-document block requirement does not apply to these fragments.
+
 Only top-level `include` accepts an opener on a later line, with a `legacy-include-opener` warning; prefer `include {` on one line. Include comments follow the token rule: `path.dae # note` includes `path.dae`, but `path.dae#note` is a literal glob and emits `legacy-include-hash`. Quote literal hashes to avoid the migration warning. String parsing checks include structure but never opens included files; includes do not splice fragments into an open block.
 
 Every relative include, including one in a nested included file, resolves against the directory containing the entry config passed to `--config`. The loader canonicalizes the entry directory and every match; an absolute path or symlink target outside that directory is rejected. Loading the same canonical file twice, directly or through a cycle, is also rejected.

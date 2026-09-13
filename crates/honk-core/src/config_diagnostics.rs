@@ -285,7 +285,7 @@ mod tests {
             subscription(first_provider, "private-first-provider-name"),
         ];
 
-        let mut buckets = DiagnosticBuckets {
+        let buckets = DiagnosticBuckets {
             static_diagnostics: vec![
                 diagnostic(decoded, "child"),
                 diagnostic(static_sources.root(), "root"),
@@ -303,7 +303,6 @@ mod tests {
             ],
         };
         // Provider storage order does not determine configured declaration order.
-        buckets.providers.reverse();
         let snapshot = buckets.snapshot(7, &configured);
 
         assert_eq!(

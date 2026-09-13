@@ -193,3 +193,49 @@ fn glued_hash_in_a_filter_argument_is_data_and_warns_once() {
         "{diagnostics:#?}"
     );
 }
+
+#[test]
+fn compact_child_blocks_preserve_siblings_and_scalar_data() {
+    let mut diagnostics = Vec::new();
+    let config = parse_dae_config_with_detailed_diagnostics(
+        "global {\n log_file: /tmp/keep {} literal\n}\ngroup { a:b {} a {} b {} }\nsubscription { first: {} wrapper { second: {} third: {} } }",
+        &mut diagnostics,
+    )
+    .unwrap();
+    assert_eq!(config.global.log_file, "/tmp/keep {} literal");
+    assert_eq!(
+        config
+            .groups
+            .iter()
+            .map(|group| group.name.as_str())
+            .collect::<Vec<_>>(),
+        ["a:b", "a", "b"],
+    );
+    assert_eq!(
+        config
+            .subscriptions
+            .iter()
+            .map(|subscription| subscription.name.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second", "third"],
+    );
+}
+
+#[test]
+fn bare_filter_quote_receives_its_own_warning() {
+    let input = "node {\n edge: 'socks5://127.0.0.1:1080'\n}\ngroup {\n proxy {\n filter:'unterminated\n }\n}";
+    let mut diagnostics = Vec::new();
+    let config = parse_dae_config_with_detailed_diagnostics(input, &mut diagnostics).unwrap();
+    assert!(config.groups[0].nodes.is_empty());
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        ["legacy-config-warning"],
+    );
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic.setting.to_string(), "groups[1].filter");
+    assert_eq!(diagnostic.entry_index, Some(1));
+    assert_eq!(&input[diagnostic.span.clone().unwrap()], "'unterminated");
+}

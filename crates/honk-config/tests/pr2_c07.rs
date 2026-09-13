@@ -108,3 +108,38 @@ fn nested_parentheses_do_not_hide_trailing_matcher_text() {
     let source = "routing { domain(regex:(foo)) -> direct }";
     assert!(parse_dae_config_with_detailed_diagnostics(source, &mut Vec::new()).is_err());
 }
+
+#[test]
+fn compact_tokens_inside_matcher_arguments_remain_data() {
+    for source in [
+        "routing { pname(agent {} worker) -> direct }",
+        "routing {\n pname(\n agent {} worker\n ) -> direct\n}",
+        "routing { pname( }\nrouting {\n agent {} worker\n ) -> direct\n}",
+    ] {
+        let mut diagnostics = Vec::new();
+        let config = parse_dae_config_with_detailed_diagnostics(source, &mut diagnostics).unwrap();
+        assert_eq!(
+            config.routing.rules[0].condition.process_name,
+            ["agent {} worker"]
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+}
+
+#[test]
+fn ignored_statements_cannot_change_expression_continuation() {
+    let source = "routing {\n pname(\n /* ) */\n agent {} worker\n ) -> direct\n}";
+    let mut diagnostics = Vec::new();
+    let config = parse_dae_config_with_detailed_diagnostics(source, &mut diagnostics).unwrap();
+    assert_eq!(
+        config.routing.rules[0].condition.process_name,
+        ["agent {} worker"]
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        ["unsupported-comment"],
+    );
+}

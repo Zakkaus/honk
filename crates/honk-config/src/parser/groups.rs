@@ -19,10 +19,11 @@ pub(super) fn parse_group_section(
     let mut groups = Vec::new();
 
     for root in section {
-        let Some(body) = root.body() else {
+        let Some(body) = root.body_with(super::cursor::BodySyntax::Declarations) else {
             continue;
         };
         for segment in body {
+            diagnostics.at_section("group", Text::segment(&segment));
             let Some(group_text) = read::block_header(&segment) else {
                 Text::segment(&segment).notice(
                     diagnostics,
@@ -39,7 +40,9 @@ pub(super) fn parse_group_section(
                 ..Default::default()
             };
             let mut fields: HashMap<&str, Text<'_, '_>> = HashMap::new();
-            for statement in read::child_statements(&segment, diagnostics) {
+            for statement in
+                read::child_statements(&segment, diagnostics, super::cursor::BodySyntax::Statements)
+            {
                 let Some((key, value)) = statement.kv() else {
                     statement.notice(
                         diagnostics,
@@ -216,17 +219,16 @@ pub(super) fn resolve_group_filters_inner(
         let mut has_node_filter = false;
         let mut parsed_filters = Vec::new();
         for (filter_index, filter) in group.filters.iter().enumerate() {
-            let (parsed, lexical_error, subgroup_has_members, message) =
-                parse_runtime_filter(filter);
+            let (parsed, subgroup_has_members, message) = parse_runtime_filter(filter);
             if subgroup_has_members == Some(true) {
                 continue;
             }
             has_node_filter = true;
             if let Some(parsed) = parsed {
                 parsed_filters.push(parsed);
-            } else if !lexical_error
-                && subgroup_has_members.is_none()
+            } else if subgroup_has_members.is_none()
                 && let Some(sink) = diagnostics.as_deref_mut()
+                && !sink.filter_has_error(filter_index + 1)
             {
                 sink.push(ConfigDiagnostic {
                     setting: format!("group.{}.filter", group.name),
@@ -286,16 +288,10 @@ impl GroupFilterTerm {
 
 fn parse_runtime_filter(
     filter: &str,
-) -> (
-    Option<Vec<GroupFilterTerm>>,
-    bool,
-    Option<bool>,
-    &'static str,
-) {
+) -> (Option<Vec<GroupFilterTerm>>, Option<bool>, &'static str) {
     let source_ref = DiagnosticSources::new(None).root();
     let source = Source::new(filter, source_ref);
-    let mut lexical = Vec::new();
-    let tokens = source.tokenize(&mut lexical);
+    let tokens = source.tokenize(&mut Vec::new());
     let end = tokens
         .iter()
         .find(|token| token.kind == TokenKind::Comment)
@@ -307,7 +303,6 @@ fn parse_runtime_filter(
         comment: None,
     };
     let text = text.trim();
-    let lexical_error = text.has_error();
     let subgroup_has_members = standalone_group_reference(text).map(|arguments| {
         arguments.into_iter().any(|argument| {
             argument
@@ -329,7 +324,6 @@ fn parse_runtime_filter(
     };
     (
         parse_group_filter_expression(text),
-        lexical_error,
         subgroup_has_members,
         message,
     )

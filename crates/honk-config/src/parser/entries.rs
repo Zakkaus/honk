@@ -13,7 +13,7 @@ pub(super) fn parse_node_section(
     let mut nodes = Vec::new();
     let mut entry_index = 0;
     for root in section {
-        let Some(body) = root.body() else {
+        let Some(body) = root.body_with(super::cursor::BodySyntax::Entries) else {
             continue;
         };
         for child in body {
@@ -29,6 +29,7 @@ fn visit_node_segment<'d, 'a>(
     nodes: &mut Vec<Node>,
     entry_index: &mut usize,
 ) -> Result<(), super::ParseFailure> {
+    diagnostics.at_section("node", Text::segment(segment));
     if let Some(header) = super::read::block_header(segment) {
         header.notice(
             diagnostics,
@@ -36,7 +37,7 @@ fn visit_node_segment<'d, 'a>(
             "legacy-wrapper",
             "nested node wrapper is retained for compatibility",
         );
-        if let Some(body) = segment.body() {
+        if let Some(body) = segment.body_with(super::cursor::BodySyntax::Entries) {
             for child in body {
                 visit_node_segment(&child, diagnostics, nodes, entry_index)?;
             }
@@ -167,7 +168,7 @@ pub(super) fn parse_subscription_section(
     let mut subscriptions = Vec::new();
     let mut entry_index = 0;
     for root in section {
-        let Some(body) = root.body() else {
+        let Some(body) = root.body_with(super::cursor::BodySyntax::Entries) else {
             continue;
         };
         for child in body {
@@ -183,6 +184,7 @@ fn visit_subscription_segment<'d, 'a>(
     subscriptions: &mut Vec<Subscription>,
     entry_index: &mut usize,
 ) {
+    diagnostics.at_section("subscription", Text::segment(segment));
     if let Some(tag) = block_tag(segment) {
         *entry_index += 1;
         diagnostics.subscription_text(Text::segment(segment).trim(), *entry_index);
@@ -198,25 +200,15 @@ fn visit_subscription_segment<'d, 'a>(
             "nested subscription wrapper is retained for compatibility",
         );
         let mut entry = Text::segment(segment);
-        if let Some(opener) = segment
-            .tokens()
-            .iter()
-            .find(|token| token.kind == super::lexer::TokenKind::OpenBrace)
-            .or_else(|| {
-                segment
-                    .tokens()
-                    .last()
-                    .filter(|token| entry.source.raw(token.span) == "{}")
-            })
-        {
-            entry.span.end = opener.span.start + 1;
+        if let Some(opener) = segment.opening_span() {
+            entry.span.end = opener.start + 1;
         }
         *entry_index += 1;
         diagnostics.entry_text(entry, *entry_index);
         if let Some(subscription) = parse_subscription_entry(entry, diagnostics) {
             subscriptions.push(subscription);
         }
-        if let Some(body) = segment.body() {
+        if let Some(body) = segment.body_with(super::cursor::BodySyntax::Entries) {
             for child in body {
                 visit_subscription_segment(&child, diagnostics, subscriptions, entry_index);
             }
@@ -257,15 +249,11 @@ fn collect_subscription_fields<'d, 'a>(
         return;
     };
     for child in body {
-        let mut text = Text::segment(&child).trim();
-        if child.body().is_some()
-            && let Some(opener) = child
-                .tokens()
-                .iter()
-                .find(|token| token.kind == super::lexer::TokenKind::OpenBrace)
-        {
-            text.span.end = opener.span.end;
+        let mut text = Text::segment(&child);
+        if let Some(opener) = child.opening_span() {
+            text.span.end = opener.end;
         }
+        let text = text.trim();
         if let Some((key, value)) = text.kv() {
             diagnostics.register_field(key.raw(), value);
             let value = value.unquote();

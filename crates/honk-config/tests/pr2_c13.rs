@@ -130,3 +130,74 @@ fn comment_brace_notice_survives_early_failure_inside_an_open_root() {
         assert_eq!(diagnostics.iter().filter(|d| d.terminal).count(), 1);
     }
 }
+
+#[test]
+fn sibling_notices_belong_to_the_enclosing_section() {
+    let input = "node {\n first: 'socks5://127.0.0.1:1080'\n wrapper {\n second: 'socks5://127.0.0.1:1081'\n }\n}\nsubscription {\n first: 'https://example.com/one'\n wrapper {\n second: 'https://example.com/two'\n }\n}\ngroup {\n a { }\n stray\n b { }\n}";
+    let mut diagnostics = Vec::new();
+    parse_dae_config_with_detailed_diagnostics(input, &mut diagnostics).unwrap();
+    let notices = diagnostics
+        .iter()
+        .filter(|diagnostic| matches!(diagnostic.code, "legacy-wrapper" | "unknown-statement"))
+        .map(|diagnostic| {
+            (
+                diagnostic.code,
+                diagnostic.setting.to_string(),
+                diagnostic.entry_index,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notices,
+        [
+            ("legacy-wrapper", "nodes".to_owned(), None),
+            ("legacy-wrapper", "subscriptions".to_owned(), None),
+            ("unknown-statement", "groups".to_owned(), None),
+        ],
+    );
+}
+
+#[test]
+fn compact_blocks_preserve_mixed_section_siblings_and_rule_values() {
+    let input = "dns { upstream {} routing { request { fallback: reject } } }\nexperimental { cache_file {} clash_api { secret: kept } }\nrouting { domain(example.test) -> direct {} literal }";
+    let mut diagnostics = Vec::new();
+    let config = parse_dae_config_with_detailed_diagnostics(input, &mut diagnostics).unwrap();
+    assert_eq!(
+        config.dns.routing.request.fallback,
+        honk_config::dns::DnsRequestAction::Reject
+    );
+    assert_eq!(config.experimental.clash_api.secret, "kept");
+    assert_eq!(
+        config.routing.rules[0].outbound,
+        honk_config::routing::RoutingOutbound::Simple("direct {} literal".to_owned()),
+    );
+}
+
+#[test]
+fn compact_header_does_not_detach_an_indexed_subtree() {
+    let input = "node { edge: 'socks5://127.0.0.1:1080' }\nglobal {\n log_level: warn\n wrapper {} {\n log_level: debug\n }\n}\ngroup { g {\n policy: selector\n wrapper {} {\n policy: score\n filter: name(missing)\n }\n} }";
+    let mut diagnostics = Vec::new();
+    let config = parse_dae_config_with_detailed_diagnostics(input, &mut diagnostics).unwrap();
+    assert_eq!(config.global.log_level, "warn");
+    assert_eq!(
+        config.groups[0].policy,
+        honk_config::group::GroupPolicy::Selector
+    );
+    assert_eq!(config.groups[0].nodes, [config.nodes[0].id]);
+}
+
+#[test]
+fn ignored_statement_suffixes_cannot_install_settings_or_rules() {
+    let input = "global {\n log_level: warn\n /* ignored {} log_level: debug\n}\nrouting {\n /* ignored {} pname(agent) -> direct\n}";
+    let mut diagnostics = Vec::new();
+    let config = parse_dae_config_with_detailed_diagnostics(input, &mut diagnostics).unwrap();
+    assert_eq!(config.global.log_level, "warn");
+    assert!(config.routing.rules.is_empty());
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        ["unsupported-comment", "unsupported-comment"],
+    );
+}

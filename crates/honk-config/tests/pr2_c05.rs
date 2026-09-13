@@ -351,3 +351,85 @@ fn skipped_inline_subscriptions_advance_following_block_warning_ordinals() {
     assert_eq!(diagnostic.setting.to_string(), "subscriptions[2].interval");
     assert_eq!(diagnostic.entry_index, Some(2));
 }
+
+#[test]
+fn compact_tokens_inside_user_agents_remain_data() {
+    let (config, diagnostics) =
+        parse("subscription { paid: 'https://example.com/sub'(agent {} worker) }");
+    assert_eq!(
+        config
+            .subscriptions
+            .iter()
+            .map(|subscription| (
+                subscription.name.as_str(),
+                subscription.url.as_str(),
+                subscription.user_agent.as_deref(),
+            ))
+            .collect::<Vec<_>>(),
+        [("paid", "https://example.com/sub", Some("agent {} worker"))],
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn compact_subscription_field_headers_keep_raw_values() {
+    let input = "subscription {\n paid: {\n url: https://example.com/sub\n ua: agent {}\n interval: 30s {}\n }\n}";
+    let (config, diagnostics) = parse(input);
+    assert_eq!(
+        config.subscriptions[0].user_agent.as_deref(),
+        Some("agent {}")
+    );
+    assert_eq!(config.subscriptions[0].update_interval, 0);
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "legacy-config-warning")
+        .unwrap();
+    assert_eq!(warning.setting.to_string(), "subscriptions[1].interval");
+    assert_eq!(&input[warning.span.clone().unwrap()], "30s {}");
+}
+
+#[test]
+fn populated_bare_entries_keep_interior_compact_tokens() {
+    let (config, _) = parse(
+        "node { socks5://127.0.0.1:1080#edge {} west }\nsubscription { sub: https://example.com/path {} suffix }",
+    );
+    assert_eq!(
+        config
+            .nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>(),
+        ["edge {} west"],
+    );
+    assert_eq!(
+        config
+            .subscriptions
+            .iter()
+            .map(|subscription| (subscription.name.as_str(), subscription.url.as_str(),))
+            .collect::<Vec<_>>(),
+        [("sub", "https://example.com/path {} suffix")],
+    );
+}
+
+#[test]
+fn quoted_entry_hash_tails_cannot_supply_compact_siblings() {
+    let (config, _) = parse(
+        "node { 'socks5://127.0.0.1:1080#edge'# {} socks5://127.0.0.1:1081#other }\nsubscription { 'https://example.com/sub'# {} https://other.invalid/sub }",
+    );
+    assert_eq!(
+        config
+            .nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>(),
+        ["edge"],
+    );
+    assert_eq!(
+        config
+            .subscriptions
+            .iter()
+            .map(|subscription| subscription.url.as_str())
+            .collect::<Vec<_>>(),
+        ["https://example.com/sub"],
+    );
+}

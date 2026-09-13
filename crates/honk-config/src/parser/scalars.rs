@@ -109,7 +109,7 @@ fn raw_fields<'d, 'a>(
     diagnostics: &mut ParserDiagnostics<'_>,
 ) -> HashMap<&'d str, Text<'d, 'a>> {
     let mut raw = HashMap::new();
-    for line in read::statements(section, diagnostics) {
+    for line in read::statements(section, diagnostics, super::cursor::BodySyntax::Statements) {
         let Some((key, value)) = line.kv() else {
             line.notice(
                 diagnostics,
@@ -595,7 +595,7 @@ pub(super) fn parse_experimental_section(
                 }
                 lines
             } else {
-                read::child_statements(&segment, diagnostics)
+                read::child_statements(&segment, diagnostics, super::cursor::BodySyntax::Statements)
             };
             for line in lines {
                 diagnostics.at_text(line);
