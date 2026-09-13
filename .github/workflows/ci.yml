@@ -8,7 +8,10 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ci-{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('ci-{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,6 +20,7 @@ jobs:
   lint:
     name: fmt + clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -35,6 +39,7 @@ jobs:
   test:
     name: cargo test (workspace)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -62,6 +67,7 @@ jobs:
     name: eBPF object + real VM kernel tests
     # These tests attach TC/cgroup programs and therefore cannot run in a job container.
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     env:
       CARGO_BUILD_JOBS: 1
       CARGO_PROFILE_TEST_DEBUG: 0
@@ -188,6 +194,10 @@ jobs:
     name: mechanical PR review
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/github-script@v9
         with:
