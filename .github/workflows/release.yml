@@ -65,10 +65,7 @@ jobs:
           echo "$GEOIP_SHA256  $geo_dir/geoip.dat" | sha256sum -c -
           sudo install -D -m 0644 "$geo_dir/geosite.dat" /etc/dae/geosite.dat
           sudo install -D -m 0644 "$geo_dir/geoip.dat" /etc/dae/geoip.dat
-      # Full suite minus the known pre-existing config_dae_routing failure.
-      - run: |
-          cargo test --workspace --no-fail-fast -- \
-            --skip test_routing_with_config_dae
+      - run: cargo test --workspace --no-fail-fast
 
   build:
     name: build ${{ matrix.target }}${{ matrix.suffix }}

@@ -76,9 +76,9 @@ fmt-check:
 test:
     cargo test --all
 
-# Workspace test gate: full suite minus the known pre-existing routing failure.
+# Workspace test gate.
 test-ci:
-    cargo test --workspace --no-fail-fast -- --skip test_routing_with_config_dae
+    cargo test --workspace --no-fail-fast
 
 # Run core + outbound tests
 test-core:
