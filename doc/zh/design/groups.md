@@ -110,9 +110,9 @@ Selector 在候选展开和健康过滤前绑定具体节点或子组成员；�
 
 只有没有可用测量值的顶层 URLTest 计划可以准备多个 UDP transport。候选按绝对偏移 `0 ms`、`30 ms`、`80 ms` 启动，之后每隔 `80 ms` 启动一个；同时最多有三个准备任务。绝对调度可避免较早的慢任务推迟所有后续启动时间。
 
-第一个成功且仍然合格的候选获胜。honk 在把胜者绑定到 endpoint 前中止并排空所有已启动 loser，重新检查胜者是否合格，然后在 endpoint 发布或发送第一个应用报文前提交协议状态。
+第一个成功且仍然合格的候选获胜。出现胜者或到达 deadline 时，honk 会在 scheduler 返回前中止并排空所有已启动 loser；随后再次检查胜者资格，并在 endpoint 发布或发送第一个应用报文前提交协议状态。只有已观察到的准备 `Err` 会影响流量健康。未启动任务、取消、已变为不合格的成功结果以及成功排空的 loser 都是中性的；排空时发现的已完成错误仍属于已观察错误并会计数。AnyTLS 使用调用者所有的 provisional pool slot，因此 loser 不会发布 session。QUIC 协议构建 detached client，只发布最终胜者；loser client 与其推测任务一起关闭。
 
-只有已观察到的准备 `Err` 会影响流量健康。未启动任务、取消、已变为不合格的成功结果以及成功排空的 loser 都是中性的；排空时发现的已完成错误仍属于已观察错误并会计数。AnyTLS 使用调用者所有的 provisional pool slot，因此 loser 不会发布 session。QUIC 协议构建 detached client，只发布最终胜者；loser client 与其推测任务一起关闭。
+权威单节点计划与冷启动 URLTest 共用一个绝对 transport preparation deadline：`max(10s, 4 × connect_timeout)`。该 deadline 在准备开始前建立，覆盖代理主机名解析、物理拨号准入、协议／控制协商、stagger 等待、满三任务时的容量等待，以及最终胜者的 commit；到期后不再启动新候选。此前的嗅探／路由，以及之后的 reply socket 创建、endpoint driver ready 和报文发送不在此 deadline 内，继续使用各自的生命周期或 I/O 上限。
 
 ## 健康状态与探测
 
