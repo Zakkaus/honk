@@ -25,13 +25,14 @@ reload::transaction: persist callback installed before publication (reload_rebas
 </details>
 
 **Measurements**
-<details><summary>9 metrics, 2 over limit</summary>
+<details><summary>10 metrics, 2 over limit</summary>
 
 | | This PR | `main` | Change | Limit |
 |---|---|---|---|---|
 | `honk-core` peak memory in the smoke | **41 MB** | 20 MB | +21 MB | 24 MB |
+| `honk-core` release binary | 19.5 MB | 19 MB | +0.5 MB | 20.9 MB |
 | Slowest test | **61 s** | 58 s | +3 s | 60 s |
-| `honk-core` CPU in the smoke | 0.05 s | 0.04 s | +0.01 s | 0.05 s |
+| `honk-core` CPU in the smoke | 0.05 s | 0.04 s | +0.01 s | 0.50 s |
 | Reload wall (vs base, same job) | 0.98× | — | — | 1.20× |
 | Reload CPU | 1.01× | — | — | 1.20× |
 | Reload allocations (vs base, same job) | 10 | — | 0 | 1.20× |

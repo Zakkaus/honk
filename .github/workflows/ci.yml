@@ -416,6 +416,7 @@ jobs:
         if: always()
         env:
           CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+          HONK_CORE_BIN: target/release/honk-core
           JOB_STATUS: ${{ job.status }}
           MEASURED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           TOOLCHAIN: ${{ steps.toolchain.outputs.stable }}
@@ -454,6 +455,14 @@ jobs:
               unavailable("dns_smoke", "queries-and-names", "DNS smoke report is unavailable")
               unavailable("smoke_memory", "MiB", "DNS smoke report is unavailable")
               unavailable("smoke_cpu", "seconds", "DNS smoke report is unavailable")
+
+          try:
+              units["binary_size"] = "bytes"
+              values["binary_size"] = {
+                  "value": os.stat(os.environ["HONK_CORE_BIN"]).st_size, "unit": "bytes", "available": True,
+              }
+          except OSError:
+              unavailable("binary_size", "bytes", "release honk-core is unavailable")
 
           try:
               rustc = subprocess.run(

@@ -28,6 +28,7 @@ METRIC_UNITS = {
     "dns_smoke": "queries-and-names",
     "smoke_memory": "MiB",
     "smoke_cpu": "seconds",
+    "binary_size": "bytes",
     "reload_benchmark": "ratios",
     "toolchain": "rustc-cache",
     "vm_environment": "kernel-accelerator",
@@ -413,6 +414,22 @@ def measurement_rows(reports: dict[str, Any], baseline: dict[str, Any]) -> tuple
             old_note = f" (`main` {decimal(old, 1)} MB)" if old is not None else ""
             exceeded.append(f"- **`honk-core` peak memory in the smoke {shown}**, limit {limit_cell}{old_note}")
 
+    # The shipping profile is size-oriented (opt-level s); 110 % of main, no cap.
+    size = metric(smoke, "binary_size")
+    old_size = metric(old_smoke, "binary_size")
+    if size is not None:
+        current = require_integer(size, "binary size") / 1048576
+        old = require_integer(old_size, "baseline binary size") / 1048576 if old_size is not None else None
+        limit = old * 1.1 if old is not None else None
+        over = limit is not None and current > limit
+        shown = f"{decimal(current, 1)} MB"
+        baseline_cell = f"{decimal(old, 1)} MB" if old is not None else "no baseline"
+        change = signed(current - old, "MB", 1) if old is not None else "—"
+        limit_cell = f"{decimal(limit, 1)} MB" if limit is not None else "—"
+        rows.append(["`honk-core` release binary", f"**{shown}**" if over else shown, baseline_cell, change, limit_cell])
+        if over:
+            exceeded.append(f"- **`honk-core` release binary {shown}**, limit {limit_cell} (`main` {decimal(old, 1)} MB)")
+
     slowest = metric(test, "slowest_test")
     old_slowest = metric(old_test, "slowest_test")
     if isinstance(slowest, dict):
@@ -437,13 +454,19 @@ def measurement_rows(reports: dict[str, Any], baseline: dict[str, Any]) -> tuple
     if cpu is not None:
         current = require_number(cpu, "smoke CPU")
         old = require_number(old_cpu, "baseline smoke CPU") if old_cpu is not None else None
-        limit = limit_for(old, None)
+        # Startup plus four queries costs about 0.01 s; the cap catches a spin,
+        # a 120 % rule at that resolution would only catch noise.
+        limit = 0.5
+        over = current > limit
         rows.append([
-            "`honk-core` CPU in the smoke", f"{current:.2f} s",
+            "`honk-core` CPU in the smoke", f"**{current:.2f} s**" if over else f"{current:.2f} s",
             f"{old:.2f} s" if old is not None else "no baseline",
             signed(current - old, "s") if old is not None else "—",
-            f"{limit:.2f} s" if limit is not None else "—",
+            f"{limit:.2f} s",
         ])
+        if over:
+            old_note = f" (`main` {old:.2f} s)" if old is not None else ""
+            exceeded.append(f"- **`honk-core` CPU in the smoke {current:.2f} s**, limit {limit:.2f} s{old_note}")
 
     reload = reports.get("reload")
     reload_value = metric(reload, "reload_benchmark")

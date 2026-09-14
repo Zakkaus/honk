@@ -4,11 +4,12 @@
 - **slowest test 61 s**, limit 60 s (`slow::case`, `main` 50 s)
 
 **Measurements**
-<details><summary>2 metrics, 2 over limit</summary>
+<details><summary>3 metrics, 2 over limit</summary>
 
 | | This PR | `main` | Change | Limit |
 |---|---|---|---|---|
 | `honk-core` peak memory in the smoke | **33 MB** | 20 MB | +13 MB | 24 MB |
+| `honk-core` release binary | 19.5 MB | 19 MB | +0.5 MB | 20.9 MB |
 | Slowest test | **61 s** | 50 s | +11 s | 60 s |
 
 </details>
