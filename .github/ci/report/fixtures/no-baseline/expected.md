@@ -10,9 +10,9 @@
 
 | | This PR | `main` | Change | Limit |
 |---|---|---|---|---|
-| `honk-core` peak memory in the smoke | 80 MB | no baseline | — | 100 MB |
+| `honk-core` peak memory in the smoke | 18 MB | no baseline | — | 32 MB |
 | Slowest test | 50 s | no baseline | — | 60 s |
-| `honk-core` CPU in the smoke | 0.20 s | no baseline | — | — |
+| `honk-core` CPU in the smoke | 0.04 s | no baseline | — | — |
 
 </details>
 <!-- ci-report -->

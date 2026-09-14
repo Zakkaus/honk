@@ -1,6 +1,6 @@
 ⚠️ **CI report** aaaabbbb vs `main` ccccdddd: 2 limits exceeded (eBPF VM not run: `ci:ebpf`; full lanes not run: `ci:full`)
 
-- **`honk-core` peak memory in the smoke 101 MB**, limit 100 MB (`main` 90 MB)
+- **`honk-core` peak memory in the smoke 33 MB**, limit 24 MB (`main` 20 MB)
 - **slowest test 61 s**, limit 60 s (`slow::case`, `main` 50 s)
 
 **Measurements**
@@ -8,7 +8,7 @@
 
 | | This PR | `main` | Change | Limit |
 |---|---|---|---|---|
-| `honk-core` peak memory in the smoke | **101 MB** | 90 MB | +11 MB | 100 MB |
+| `honk-core` peak memory in the smoke | **33 MB** | 20 MB | +13 MB | 24 MB |
 | Slowest test | **61 s** | 50 s | +11 s | 60 s |
 
 </details>
