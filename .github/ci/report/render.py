@@ -165,7 +165,7 @@ def validate_report(raw: Any, source: Path) -> dict[str, Any]:
     require(isinstance(units, dict) and isinstance(values, dict), "units and values must be objects")
     require(set(units) == set(values), "units must name every metric exactly once")
     for name, item in values.items():
-        require(name in METRIC_UNITS, f"unknown metric {name!r}")
+        require(name in METRIC_UNITS, f"unknown metric {name}")
         require(units[name] == METRIC_UNITS[name], f"units.{name} is not canonical")
         require(
             isinstance(item, dict)
@@ -438,7 +438,9 @@ def measurement_rows(reports: dict[str, Any], baseline: dict[str, Any]) -> tuple
         old_seconds = None
         if isinstance(old_slowest, dict):
             old_seconds = require_number(old_slowest.get("seconds"), "baseline slowest test seconds")
-        limit = limit_for(old_seconds, 60.0)
+        # Runner noise moves a ten-second test by several seconds between runs,
+        # so the 120 % rule only applies above 30 s; the cap is nextest's slow mark.
+        limit = min(60.0, max(30.0, old_seconds * 1.2)) if old_seconds is not None else 60.0
         over = limit is not None and seconds > limit
         shown = f"{decimal(seconds, 1)} s"
         baseline_cell = f"{decimal(old_seconds, 1)} s" if old_seconds is not None else "no baseline"
