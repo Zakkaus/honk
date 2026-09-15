@@ -24,3 +24,6 @@ pub mod types;
 pub use config::Config;
 pub use diagnostic::ConfigDiagnostic;
 pub use error::ConfigError;
+
+#[cfg(feature = "conformance")]
+pub use parser::conformance;
