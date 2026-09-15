@@ -7,10 +7,15 @@ repository.workspace = true
 
 [features]
 conformance = []
+fuzz-checks = []
 
 [[test]]
 name = "conformance"
 required-features = ["conformance"]
+
+[[test]]
+name = "fuzz_replay"
+required-features = ["fuzz-checks"]
 
 [[example]]
 name = "project"

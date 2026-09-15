@@ -27,3 +27,6 @@ pub use error::ConfigError;
 
 #[cfg(feature = "conformance")]
 pub use parser::conformance;
+
+#[cfg(feature = "fuzz-checks")]
+pub mod fuzz_checks;
