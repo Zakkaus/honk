@@ -4,7 +4,7 @@ honk 读取 dae 配置语法，形成自己的方言：两者对同一段文本�
 
 ## 词法规则
 
-| 输入 | dae 文法 | honk | Cases |
+| 输入 | dae 文法 | honk | 案例 |
 |---|---|---|---|
 | 裸值内的 `#`，如 `log_file: /tmp/a#b`、`use_host: /tmp/a#b` 或 `group(hk#suffix)` | `#` 是裸字面量内的安全字符 | 紧贴前文的 `#` 是数据，在旧版截断处产生 `legacy-glued-hash` 警告。标量路径保留为 `/tmp/a#b`，子组名称为 `hk#suffix`。需要注释时，请在 `#` 前加空白。 | [dialect-lexical-01-scalar-hash](../../../crates/honk-config/conformance/cases/dialect/dialect-lexical-01-scalar-hash.dae), [dialect-lexical-01-host-hash](../../../crates/honk-config/conformance/cases/dialect/dialect-lexical-01-host-hash.dae), [dialect-lexical-01-group-hash](../../../crates/honk-config/conformance/cases/dialect/dialect-lexical-01-group-hash.dae) |
 | 路由规则里紧贴出站名的 `#`，`domain(x) -> proxy#c` | 一个裸字面量 `proxy#c` | 字面目标为 `proxy#c`，产生 `legacy-glued-hash` 警告，仍须通过通常的目标校验。注释请写成 `-> proxy # comment`。 | [dialect-lexical-02-outbound-hash](../../../crates/honk-config/conformance/cases/dialect/dialect-lexical-02-outbound-hash.dae) |
@@ -20,7 +20,7 @@ honk 读取 dae 配置语法，形成自己的方言：两者对同一段文本�
 
 ## 标量与列表
 
-| 输入 | dae 文法 | honk | Cases |
+| 输入 | dae 文法 | honk | 案例 |
 |---|---|---|---|
 | 带冒号的裸值，`bind: 127.0.0.1:53` | 不是一个字面量，必须加引号 | 接受裸写：值是第一个 `:` 之后的全部文本。 | [dialect-scalars-01-bare-colons](../../../crates/honk-config/conformance/cases/dialect/dialect-scalars-01-bare-colons.dae) |
 | 调用形态的值，`client_subnet: auto(9.9.9.9)` | 函数表达式 | 文本 `auto(9.9.9.9)` 就是值，由该设置自行解析。 | [dialect-scalars-02-call-value](../../../crates/honk-config/conformance/cases/dialect/dialect-scalars-02-call-value.dae) |
@@ -33,7 +33,7 @@ honk 读取 dae 配置语法，形成自己的方言：两者对同一段文本�
 
 ## node 与 subscription 条目
 
-| 输入 | dae 文法 | honk | Cases |
+| 输入 | dae 文法 | honk | 案例 |
 |---|---|---|---|
 | 分享链接或订阅上的标签 | `ID ':' literal`；裸字面量不能含 `:`，所以链接要加引号 | 裸写的开头以第一个 `:` 之前的文本为标签，除非该冒号是 `://` 的开头；加引号的开头只有紧跟在闭引号后的 `:` 才声明标签，未加引号的 User-Agent 或注释后缀里的冒号只是后缀数据。链接可以裸写；标签与链接都可以加引号。仅在 `subscription` 里，整体加引号且内含标签的值（`'paid:https://…'`）会在去引号后再拆分，无标签的条目以 URL 主机名命名；在 `node` 里加引号的值就是整个链接（`'paid:socks5://…'` 是未知协议）。 | [dialect-entries-01-tagged](../../../crates/honk-config/conformance/cases/dialect/dialect-entries-01-tagged.dae), [dialect-entries-01-bare](../../../crates/honk-config/conformance/cases/dialect/dialect-entries-01-bare.dae), [dialect-entries-01-quoted-tag](../../../crates/honk-config/conformance/cases/dialect/dialect-entries-01-quoted-tag.dae), [dialect-entries-01-embedded-subtag](../../../crates/honk-config/conformance/cases/dialect/dialect-entries-01-embedded-subtag.dae), [dialect-entries-01-embedded-nodetag](../../../crates/honk-config/conformance/cases/dialect/dialect-entries-01-embedded-nodetag.dae), [dialect-entries-01-tagless](../../../crates/honk-config/conformance/cases/dialect/dialect-entries-01-tagless.dae) |
 | 条目行的行尾注释 | `#` 作为词法单元开头时是注释 | 前面是空格或制表符的 `#` 结束该行。裸值内紧贴的 `#` 是数据（`…#hk1`、`?filter='hk'#token`、`/tmp/a#b`）。节点或链接的结束引号后，或订阅的一个完整 `(UA)` 后缀后，紧贴的 `#` 以 `legacy-glued-hash` 警告截断条目尾部，但并非词法注释：其后的独立花括号仍改变块结构。需要注释时，请在 `#` 前加空白。其他尾随文本使条目被跳过，并产生 `trailing-entry-text` 或 `legacy-ua-boundary` 诊断。 | [dialect-entries-02-comment](../../../crates/honk-config/conformance/cases/dialect/dialect-entries-02-comment.dae), [dialect-entries-02-glued](../../../crates/honk-config/conformance/cases/dialect/dialect-entries-02-glued.dae), [dialect-entries-02-trailing](../../../crates/honk-config/conformance/cases/dialect/dialect-entries-02-trailing.dae) |
@@ -45,7 +45,7 @@ honk 读取 dae 配置语法，形成自己的方言：两者对同一段文本�
 
 ## 路由
 
-| 输入 | dae 文法 | honk | Cases |
+| 输入 | dae 文法 | honk | 案例 |
 |---|---|---|---|
 | 裸前缀匹配器，`!geosite:cn -> proxy`、`domain:example.com -> proxy` | 不是函数调用，拒绝 | 接受为匹配器（`geosite`、`geoip`、`domain`、`suffix`、`keyword`、`regex`、`full` 前缀）。 | [dialect-routing-01-geosite-prefix](../../../crates/honk-config/conformance/cases/dialect/dialect-routing-01-geosite-prefix.dae), [dialect-routing-01-domain-prefix](../../../crates/honk-config/conformance/cases/dialect/dialect-routing-01-domain-prefix.dae) |
 | 两个箭头，`domain(x) -> proxy->backup` | 拒绝 | 出站为字面文本 `proxy->backup`，产生 `legacy-arrow-target` 警告。保留此兼容写法，仍须通过通常的目标校验。 | [dialect-routing-02-two-arrows](../../../crates/honk-config/conformance/cases/dialect/dialect-routing-02-two-arrows.dae) |
@@ -56,7 +56,7 @@ honk 读取 dae 配置语法，形成自己的方言：两者对同一段文本�
 
 ## DNS
 
-| 输入 | dae 文法 | honk | Cases |
+| 输入 | dae 文法 | honk | 案例 |
 |---|---|---|---|
 | request 或 response 规则里未加引号的 `//` | 不是注释 | `//` 是数据，不是注释。`-> asis // note` 这类行尾斜杠注释文本使规则无效，产生 `legacy-slash-comment` 警告并省略整条规则；引号内的斜杠保持字面含义。请将 DNS 行尾 `//` 注释改为 `#`。 | [dialect-dns-01-slash-comment](../../../crates/honk-config/conformance/cases/dialect/dialect-dns-01-slash-comment.dae), [dialect-dns-01-quoted-slash](../../../crates/honk-config/conformance/cases/dialect/dialect-dns-01-quoted-slash.dae) |
 | `request` 或 `response` 规则里的 `#`，`qname(a#b) -> reject # note` | `a#b` 是字面量，`# note` 是注释 | 只有引号外词法单元开头的 `#` 开始注释，前面可以是空格或制表符。模式保持为 `a#b`，动作为 `reject`；与旧版读取结果不同的写法产生 `legacy-dns-hash`。字面字符 `#` 可紧贴前文；注释须在引号外用空白分隔。 | [dialect-dns-02-hash](../../../crates/honk-config/conformance/cases/dialect/dialect-dns-02-hash.dae) |
@@ -70,14 +70,14 @@ honk 读取 dae 配置语法，形成自己的方言：两者对同一段文本�
 
 ## 组
 
-| 输入 | dae 文法 | honk | Cases |
+| 输入 | dae 文法 | honk | 案例 |
 |---|---|---|---|
 | `group('hk,jp')` | 一个字面量 | 两个子组标签，按 `,` 与 `\|` 拆分。 | [dialect-groups-01-aggregate](../../../crates/honk-config/conformance/cases/dialect/dialect-groups-01-aggregate.dae), [dialect-groups-01-pipe](../../../crates/honk-config/conformance/cases/dialect/dialect-groups-01-pipe.dae) |
 | `filter: group()` | 无参数的调用 | 显式 `group()` 不选择任何节点，并产生 `empty-subgroup` 警告；序列化后再反序列化以及刷新后均保留此行为。需要全部节点时请删除该过滤器。 | [dialect-groups-02-empty](../../../crates/honk-config/conformance/cases/dialect/dialect-groups-02-empty.dae) |
 
 ## 配置段与 include
 
-| 输入 | dae 文法 | honk | Cases |
+| 输入 | dae 文法 | honk | 案例 |
 |---|---|---|---|
 | `experimental` 里的未知内容 | 任意声明 | 未知外层配置项及旧版 `udp_nfqueue` 中不支持的内容（包括嵌套块）都是错误。`clash_api` 与 `cache_file` 中的未知标量键产生 `unknown-key` 警告并被忽略；这项前向兼容规则不放宽 NFQUEUE 校验。 | [dialect-sections-01-outer-key](../../../crates/honk-config/conformance/cases/dialect/dialect-sections-01-outer-key.dae), [dialect-sections-01-nfqueue-block](../../../crates/honk-config/conformance/cases/dialect/dialect-sections-01-nfqueue-block.dae), [dialect-sections-01-child-key](../../../crates/honk-config/conformance/cases/dialect/dialect-sections-01-child-key.dae) |
 | `global`、`dns`、`routing`、组设置或已知实验子块中的未知嵌套块 | 任意表达式 | 在块头产生一次 `unknown-block` 警告，跳过整个已闭合子树，DNS 子块也遵循此规则。子树中的设置和规则不再影响父块；请将已知设置移到文档规定的层级。 | [dialect-sections-02-global-wrapper](../../../crates/honk-config/conformance/cases/dialect/dialect-sections-02-global-wrapper.dae), [dialect-sections-02-dns-wrapper](../../../crates/honk-config/conformance/cases/dialect/dialect-sections-02-dns-wrapper.dae), [dialect-sections-02-routing-wrapper](../../../crates/honk-config/conformance/cases/dialect/dialect-sections-02-routing-wrapper.dae), [dialect-sections-02-group-wrapper](../../../crates/honk-config/conformance/cases/dialect/dialect-sections-02-group-wrapper.dae) |
