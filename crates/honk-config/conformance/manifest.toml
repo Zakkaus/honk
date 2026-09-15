@@ -1,5 +1,17 @@
 note = "Decoded syntax only: literal lists lose boundaries; quote delimiters are removed but escape bytes are retained; routing-rule trailing annotations are not exposed by dae. Typed and loading layers name executable tests. Inputs are public and output is unredacted."
 
+[upstream]
+commit = "5db27a0028d36e7847bd3796497df952337a20e2"
+sources = [
+  { file = "docs/en/README.md", url = "https://raw.githubusercontent.com/daeuniverse/dae/5db27a0028d36e7847bd3796497df952337a20e2/docs/en/README.md", sha256 = "211ad2d3923b694b108f7f3e536b24e186530dcdbbda52aef04ac5999b07c65d" },
+  { file = "docs/en/tutorials/run-on-macos.md", url = "https://raw.githubusercontent.com/daeuniverse/dae/5db27a0028d36e7847bd3796497df952337a20e2/docs/en/tutorials/run-on-macos.md", sha256 = "4de17a1352ce94f4e8358961b9dfc2295475a1e3d3b0e3946f9014b795bf56e9" },
+  { file = "docs/en/configuration/external-dns.md", url = "https://raw.githubusercontent.com/daeuniverse/dae/5db27a0028d36e7847bd3796497df952337a20e2/docs/en/configuration/external-dns.md", sha256 = "7247c1a04818222082d34b1c499c8eb1da6a4167e0d9e82a78beb084bc792775" },
+  { file = "docs/en/configuration/gaming-oriented-routing.md", url = "https://raw.githubusercontent.com/daeuniverse/dae/5db27a0028d36e7847bd3796497df952337a20e2/docs/en/configuration/gaming-oriented-routing.md", sha256 = "8cd63d31a0258b5adb6bc3d10de5d596de5a0f60225747ac914068f701a8ad5d" },
+  { file = "docs/en/configuration/separate-config.md", url = "https://raw.githubusercontent.com/daeuniverse/dae/5db27a0028d36e7847bd3796497df952337a20e2/docs/en/configuration/separate-config.md", sha256 = "e681cc3158f4d547ba7bd3b03eab807e1a8d419e34314b0d76f21ede5a0547ce" },
+  { file = "docs/en/configuration/dns.md", url = "https://raw.githubusercontent.com/daeuniverse/dae/5db27a0028d36e7847bd3796497df952337a20e2/docs/en/configuration/dns.md", sha256 = "840abec898a7c81b4c0e3bbf6ff8debc021df0ffc4fad8f72772898545d96b46" },
+  { file = "example.dae", url = "https://raw.githubusercontent.com/daeuniverse/dae/5db27a0028d36e7847bd3796497df952337a20e2/example.dae", sha256 = "b48bcb1543fe1bf6e620dd049158de2744fb4319a22a3d6e2487da7ae3a80578" }
+]
+
 [[case]]
 id = "dialect-lexical-01-scalar-hash"
 input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-01-scalar-hash.dae"
@@ -8,6 +20,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-glued-hash"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-lexical-01-host-hash"
@@ -17,6 +30,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-glued-hash"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-lexical-01-group-hash"
@@ -26,6 +40,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-glued-hash"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-lexical-02-outbound-hash"
@@ -35,6 +50,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-glued-hash"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-lexical-03-block-comment"
@@ -44,6 +60,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["unsupported-comment"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-lexical-04-annotation"
@@ -53,24 +70,28 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-config-warning"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-lexical-05-apostrophe"
 input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-05-apostrophe.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: '"
 
 [[case]]
 id = "dialect-lexical-05-unterminated"
 input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-05-unterminated.dae"
 layer = "structure"
 honk = "reject"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["unterminated-quote"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-lexical-05-quote-after-colon"
@@ -80,6 +101,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-lexical-06-quoted-brace"
@@ -89,6 +111,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-lexical-06-comment-brace"
@@ -98,24 +121,29 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-comment-brace"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-lexical-06-compact-argument"
 input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-06-compact-argument.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'routing{pname(agent{'"
 
 [[case]]
 id = "dialect-lexical-06-ua-brace"
 input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-06-ua-brace.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{a:'https://example.com/sub'('"
 
 [[case]]
 id = "dialect-lexical-07-glued-opener"
@@ -125,6 +153,8 @@ honk = "reject"
 dae = "accept"
 honk_diagnostics = ["block-delimiter-spacing"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk rejects with block-delimiter-spacing; dae accepts the syntax without honk setting/node admission."
 
 [[case]]
 id = "dialect-lexical-07-compact-empty"
@@ -134,6 +164,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-lexical-07-adjacent-groups"
@@ -143,15 +174,18 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-lexical-08-extra-closer"
 input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-08-extra-closer.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["unmatched-close"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: extraneous input '}' expecting <EOF>"
 
 [[case]]
 id = "dialect-lexical-08-empty"
@@ -161,6 +195,8 @@ honk = "reject"
 dae = "accept"
 honk_diagnostics = ["not-dae-config"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk rejects with not-dae-config; dae accepts the syntax without honk setting/node admission."
 
 [[case]]
 id = "dialect-lexical-08-comment-only"
@@ -170,24 +206,30 @@ honk = "reject"
 dae = "accept"
 honk_diagnostics = ["not-dae-config"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk rejects with not-dae-config; dae accepts the syntax without honk setting/node admission."
 
 [[case]]
 id = "dialect-lexical-09-numeric"
 input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-09-numeric.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'group{123{'"
 
 [[case]]
 id = "dialect-lexical-09-unicode"
 input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-09-unicode.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: line 2:0 token recognition error at: '香'"
 
 [[case]]
 id = "dialect-lexical-09-spaces"
@@ -196,7 +238,8 @@ layer = "structure"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = []
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0].param", dae = { and_functions = [], annotation = [], key = "", val = "Hong" }, honk = { absent = true }, reason = "Group declaration mode retains the complete dynamic header; dae reads Hong as a literal before the Kong section." }, { path = "sections[0].items[0].section", dae = { absent = true }, honk = { items = [{ param = { and_functions = [], annotation = [], key = "policy", val = "selector" } }], name = "Hong Kong" }, reason = "Group declaration mode retains the complete dynamic header; dae reads Hong as a literal before the Kong section." }, { path = "sections[0].items[1]", dae = { section = { items = [{ param = { and_functions = [], annotation = [], key = "policy", val = "selector" } }], name = "Kong" } }, honk = { absent = true }, reason = "Group declaration mode retains the complete dynamic header; dae reads Hong as a literal before the Kong section." }]
 
 [[case]]
 id = "dialect-lexical-10-same-line"
@@ -205,7 +248,8 @@ layer = "structure"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = []
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0].param.val", dae = "debug", honk = "debug log_file: x", reason = "honk scalar statements consume one physical line; dae separates whitespace-delimited declarations." }, { path = "sections[0].items[1]", dae = { param = { and_functions = [], annotation = [], key = "log_file", val = "x" } }, honk = { absent = true }, reason = "honk scalar statements consume one physical line; dae separates whitespace-delimited declarations." }]
 
 [[case]]
 id = "dialect-lexical-11-split-root"
@@ -215,6 +259,8 @@ honk = "reject"
 dae = "accept"
 honk_diagnostics = ["unknown-statement", "unexpected-open-brace"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk rejects with unknown-statement, unexpected-open-brace; dae accepts the syntax without honk setting/node admission."
 
 [[case]]
 id = "dialect-lexical-11-split-include"
@@ -224,15 +270,18 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-include-opener"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-01-bare-colons"
 input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-01-bare-colons.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'dns{bind:127.0.0.1:'"
 
 [[case]]
 id = "dialect-scalars-02-call-value"
@@ -242,6 +291,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-03-list"
@@ -251,6 +301,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-list-quoting"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-03-aggregate"
@@ -260,6 +311,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-quoted-list"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-04-t"
@@ -269,6 +321,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-bool-shorthand"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-04-y"
@@ -278,6 +331,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-bool-shorthand"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-04-f"
@@ -287,6 +341,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-bool-shorthand"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-04-n"
@@ -296,6 +351,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-bool-shorthand"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-04-strict"
@@ -305,6 +361,8 @@ honk = "reject"
 dae = "accept"
 honk_diagnostics = ["invalid-config-value"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk rejects with invalid-config-value; dae accepts the syntax without honk setting/node admission."
 
 [[case]]
 id = "dialect-scalars-05-0x10"
@@ -314,6 +372,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-05-10"
@@ -323,6 +382,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-05-zz"
@@ -332,6 +392,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-config-warning"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-06-1-5s"
@@ -341,6 +402,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-06-never"
@@ -350,15 +412,17 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-config-warning"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-06-seconds"
 input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-06-seconds.dae"
-layer = "typed:test_millisecond_durations_keep_the_default_and_return_diagnostics"
+layer = "typed:test_unparseable_second_durations_use_the_fallback_and_return_diagnostics"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-config-warning"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-07-hash"
@@ -368,6 +432,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["invalid-ttl"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-07-quoted"
@@ -377,6 +442,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-ttl-quoting"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-scalars-07-trailing"
@@ -385,7 +451,8 @@ layer = "typed:fixed_ttl_requires_one_decimal_scalar_after_unquoting"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = ["trailing-value"]
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0].section.items[0].param.val", dae = "60", honk = "60 ignored", reason = "honk retains the scalar remainder for typed TTL rejection; dae emits a TTL declaration and a separate literal." }, { path = "sections[0].items[0].section.items[1]", dae = { param = { and_functions = [], annotation = [], key = "", val = "ignored" } }, honk = { absent = true }, reason = "honk retains the scalar remainder for typed TTL rejection; dae emits a TTL declaration and a separate literal." }]
 
 [[case]]
 id = "dialect-scalars-08-unknown-policy"
@@ -395,6 +462,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-config-warning"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-entries-01-tagged"
@@ -404,24 +472,29 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-entries-01-bare"
 input = "crates/honk-config/conformance/cases/dialect/dialect-entries-01-bare.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'node{a:socks5:'"
 
 [[case]]
 id = "dialect-entries-01-quoted-tag"
 input = "crates/honk-config/conformance/cases/dialect/dialect-entries-01-quoted-tag.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'node{'a':'"
 
 [[case]]
 id = "dialect-entries-01-embedded-subtag"
@@ -431,6 +504,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-embedded-tag"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-entries-01-embedded-nodetag"
@@ -440,6 +514,8 @@ honk = "reject"
 dae = "accept"
 honk_diagnostics = ["unknown-protocol"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk rejects with unknown-protocol; dae accepts the syntax without honk setting/node admission."
 
 [[case]]
 id = "dialect-entries-01-tagless"
@@ -449,6 +525,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-entries-02-comment"
@@ -458,6 +535,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-entries-02-glued"
@@ -466,7 +544,8 @@ layer = "structure"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-glued-hash"]
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0].param.val", dae = "socks5://127.0.0.1:1080", honk = "'socks5://127.0.0.1:1080'#note", reason = "The entry-mode syntax span includes the glued hash tail; the typed node reader truncates it with legacy-glued-hash." }]
 
 [[case]]
 id = "dialect-entries-02-trailing"
@@ -475,43 +554,52 @@ layer = "structure"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = ["trailing-entry-text"]
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0].param.val", dae = "socks5://127.0.0.1:1080", honk = "'socks5://127.0.0.1:1080'junk", reason = "Entry mode keeps trailing bytes in one statement; the typed reader omits the invalid entry rather than declaring a second literal." }, { path = "sections[0].items[1]", dae = { param = { and_functions = [], annotation = [], key = "", val = "junk" } }, honk = { absent = true }, reason = "Entry mode keeps trailing bytes in one statement; the typed reader omits the invalid entry rather than declaring a second literal." }]
 
 [[case]]
 id = "dialect-entries-03-user-agent"
 input = "crates/honk-config/conformance/cases/dialect/dialect-entries-03-user-agent.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{a:'https://example.com/sub'('"
 
 [[case]]
 id = "dialect-entries-03-quoted-agent"
 input = "crates/honk-config/conformance/cases/dialect/dialect-entries-03-quoted-agent.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{a:'https://example.com/sub'('"
 
 [[case]]
 id = "dialect-entries-03-unquoted-hash"
 input = "crates/honk-config/conformance/cases/dialect/dialect-entries-03-unquoted-hash.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["trailing-entry-text"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{a:'https://example.com/sub'('"
 
 [[case]]
 id = "dialect-entries-04-block"
 input = "crates/honk-config/conformance/cases/dialect/dialect-entries-04-block.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{paid:{'"
 
 [[case]]
 id = "dialect-entries-05-spaced-tag"
@@ -521,33 +609,40 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["entry-tag-normalized"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-routing-01-geosite-prefix"
 input = "crates/honk-config/conformance/cases/dialect/dialect-routing-01-geosite-prefix.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'routing{!geosite:'"
 
 [[case]]
 id = "dialect-routing-01-domain-prefix"
 input = "crates/honk-config/conformance/cases/dialect/dialect-routing-01-domain-prefix.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^: no viable alternative at input 'routing{domain:example.com->'"
 
 [[case]]
 id = "dialect-routing-02-two-arrows"
 input = "crates/honk-config/conformance/cases/dialect/dialect-routing-02-two-arrows.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["legacy-arrow-target"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: line 2:19 token recognition error at: '>'"
 
 [[case]]
 id = "dialect-routing-03-spaced-must"
@@ -557,6 +652,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-routing-04-spaced-call"
@@ -566,6 +662,8 @@ honk = "reject"
 dae = "accept"
 honk_diagnostics = ["unknown-traffic-predicate"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk rejects with unknown-traffic-predicate; dae accepts the syntax without honk setting/node admission."
 
 [[case]]
 id = "dialect-routing-05-unknown"
@@ -575,6 +673,8 @@ honk = "reject"
 dae = "accept"
 honk_diagnostics = ["unknown-traffic-predicate"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk rejects with unknown-traffic-predicate; dae accepts the syntax without honk setting/node admission."
 
 [[case]]
 id = "dialect-routing-05-negated"
@@ -584,24 +684,30 @@ honk = "reject"
 dae = "accept"
 honk_diagnostics = ["unknown-traffic-predicate"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk rejects with unknown-traffic-predicate; dae accepts the syntax without honk setting/node admission."
 
 [[case]]
 id = "dialect-routing-06-ipv6"
 input = "crates/honk-config/conformance/cases/dialect/dialect-routing-06-ipv6.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'routing{dip(2001:'"
 
 [[case]]
 id = "dialect-routing-06-mac"
 input = "crates/honk-config/conformance/cases/dialect/dialect-routing-06-mac.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'routing{mac(00:'"
 
 [[case]]
 id = "dialect-dns-01-slash-comment"
@@ -610,7 +716,8 @@ layer = "structure"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-slash-comment"]
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0].section.items[0].section.items[0].rule.outbound.name", dae = "asis", honk = "asis // note", reason = "DNS statement mode keeps slash text on the action line; semantic parsing omits this rule with legacy-slash-comment." }, { path = "sections[0].items[0].section.items[0].section.items[1]", dae = { param = { and_functions = [], annotation = [], key = "", val = "//" } }, honk = { absent = true }, reason = "DNS statement mode keeps slash text on the action line; semantic parsing omits this rule with legacy-slash-comment." }, { path = "sections[0].items[0].section.items[0].section.items[2]", dae = { param = { and_functions = [], annotation = [], key = "", val = "note" } }, honk = { absent = true }, reason = "DNS statement mode keeps slash text on the action line; semantic parsing omits this rule with legacy-slash-comment." }]
 
 [[case]]
 id = "dialect-dns-01-quoted-slash"
@@ -620,6 +727,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-dns-02-hash"
@@ -629,15 +737,18 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-dns-hash"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-dns-03-two-arrows"
 input = "crates/honk-config/conformance/cases/dialect/dialect-dns-03-two-arrows.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["legacy-arrow-target"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: line 4:18 token recognition error at: '>'"
 
 [[case]]
 id = "dialect-dns-03-mixed-action"
@@ -647,6 +758,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-dns-04-split-call"
@@ -655,16 +767,19 @@ layer = "structure"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = ["incomplete-dns-rule", "incomplete-dns-rule"]
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0].section.items[0].section.items[0]", dae = { rule = { and_functions = [{ name = "qname", not = false, params = [{ key = "", val = "a.example" }] }], outbound = { name = "reject", not = false, params = [] } } }, honk = { absent = true }, reason = "DNS uses statements, not traffic expression assembly, and omits both incomplete physical lines." }]
 
 [[case]]
 id = "dialect-dns-05-arrow-detour"
 input = "crates/honk-config/conformance/cases/dialect/dialect-dns-05-arrow-detour.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^: no viable alternative at input 'dns{upstream{u:'udp://1.1.1.1:53'->'"
 
 [[case]]
 id = "dialect-dns-05-key-detour"
@@ -673,25 +788,29 @@ layer = "structure"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = []
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0].section.items[0].param.val", dae = "udp://1.1.1.1:53", honk = "'udp://1.1.1.1:53' outbound: proxy", reason = "The honk upstream descriptor occupies one statement; dae reads outbound as another declaration. Typed detour meaning is outside the projection." }, { path = "sections[0].items[0].section.items[1]", dae = { param = { and_functions = [], annotation = [], key = "outbound", val = "proxy" } }, honk = { absent = true }, reason = "The honk upstream descriptor occupies one statement; dae reads outbound as another declaration. Typed detour meaning is outside the projection." }]
 
 [[case]]
 id = "dialect-dns-06-traffic-junk"
 input = "crates/honk-config/conformance/cases/dialect/dialect-dns-06-traffic-junk.dae"
 layer = "structure"
 honk = "reject"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["trailing-matcher-text"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-dns-06-dns-junk"
 input = "crates/honk-config/conformance/cases/dialect/dialect-dns-06-dns-junk.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["trailing-matcher-text"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^^^: no viable alternative at input 'dns{routing{request{qname(a.example)junk'"
 
 [[case]]
 id = "dialect-dns-07-upstream-comment"
@@ -701,6 +820,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-upstream-comment"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-dns-08-quoted-outbound"
@@ -710,6 +830,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-upstream-separator"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-dns-08-quoted-arrow"
@@ -719,6 +840,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-upstream-separator"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-dns-09-names"
@@ -728,6 +850,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-dns-09-1-28"
@@ -737,6 +860,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-dns-09-typo"
@@ -746,6 +870,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["invalid-qtype"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-dns-09-aggregate"
@@ -755,15 +880,18 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-quoted-list"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-dns-09-empty"
 input = "crates/honk-config/conformance/cases/dialect/dialect-dns-09-empty.dae"
 layer = "typed:invalid_dns_conjunct_omits_whole_rule"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^^^^: empty parameter list is not supported."
 
 [[case]]
 id = "dialect-groups-01-aggregate"
@@ -773,6 +901,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-quoted-list"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-groups-01-pipe"
@@ -782,15 +911,18 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-quoted-list"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-groups-02-empty"
 input = "crates/honk-config/conformance/cases/dialect/dialect-groups-02-empty.dae"
 layer = "typed:quoted_subgroup_lists_and_explicit_empty_contributions_keep_boundaries"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["empty-subgroup"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^^^^: empty parameter list is not supported."
 
 [[case]]
 id = "dialect-sections-01-outer-key"
@@ -800,6 +932,8 @@ honk = "reject"
 dae = "accept"
 honk_diagnostics = ["unknown-experimental-setting"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk rejects with unknown-experimental-setting; dae accepts the syntax without honk setting/node admission."
 
 [[case]]
 id = "dialect-sections-01-nfqueue-block"
@@ -808,7 +942,9 @@ layer = "structure"
 honk = "reject"
 dae = "accept"
 honk_diagnostics = ["unknown-nfqueue-setting"]
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0].section.items[0]", dae = { section = { items = [{ param = { and_functions = [], annotation = [], key = "enabled", val = "true" } }], name = "future" } }, honk = { absent = true }, reason = "honk rejects unsupported NFQUEUE content; the projection does not traverse the rejected nested block." }]
+reason = "honk rejects with unknown-nfqueue-setting; dae accepts the syntax without honk setting/node admission."
 
 [[case]]
 id = "dialect-sections-01-child-key"
@@ -818,6 +954,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["unknown-key"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-sections-02-global-wrapper"
@@ -826,16 +963,19 @@ layer = "typed:unknown_subtrees_cannot_override_settings_or_leak_rules"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = ["unknown-block"]
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0]", dae = { section = { items = [{ param = { and_functions = [], annotation = [], key = "log_file", val = "ignored" } }], name = "future" } }, honk = { absent = true }, reason = "The scalar reader skips the complete unknown nested block." }]
 
 [[case]]
 id = "dialect-sections-02-dns-wrapper"
 input = "crates/honk-config/conformance/cases/dialect/dialect-sections-02-dns-wrapper.dae"
 layer = "typed:unknown_subtrees_cannot_override_settings_or_leak_rules"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["unknown-block"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'dns{future{bind:127.0.0.1:'"
 
 [[case]]
 id = "dialect-sections-02-routing-wrapper"
@@ -844,7 +984,8 @@ layer = "typed:unknown_subtrees_cannot_override_settings_or_leak_rules"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = ["unknown-block"]
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0]", dae = { section = { items = [{ rule = { and_functions = [{ name = "domain", not = false, params = [{ key = "", val = "x" }] }], outbound = { name = "direct", not = false, params = [] } } }], name = "future" } }, honk = { absent = true }, reason = "The traffic reader skips the complete unknown nested block." }]
 
 [[case]]
 id = "dialect-sections-02-group-wrapper"
@@ -853,7 +994,8 @@ layer = "typed:unknown_subtrees_cannot_override_settings_or_leak_rules"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = ["unknown-block"]
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0].section.items[0]", dae = { section = { items = [{ param = { and_functions = [], annotation = [], key = "policy", val = "score" } }], name = "future" } }, honk = { absent = true }, reason = "Group fields skip the complete unknown nested block." }]
 
 [[case]]
 id = "dialect-sections-03-node-wrapper"
@@ -863,6 +1005,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-wrapper"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-sections-03-sub-wrapper"
@@ -872,15 +1015,18 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-wrapper"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-sections-04-root-statement"
 input = "crates/honk-config/conformance/cases/dialect/dialect-sections-04-root-statement.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["unknown-statement"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^^^^^: no viable alternative at input 'ignoredglobal'"
 
 [[case]]
 id = "dialect-sections-04-unknown-key"
@@ -890,6 +1036,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["unknown-key"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-sections-04-unknown-root"
@@ -899,6 +1046,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["unknown-block"]
 compare = "equal"
+unknown_sections = 1
 
 [[case]]
 id = "dialect-sections-04-traffic-statement"
@@ -907,7 +1055,8 @@ layer = "structure"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = ["unknown-statement"]
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0]", dae = { param = { and_functions = [], annotation = [], key = "", val = "ignored" } }, honk = { absent = true }, reason = "The traffic reader omits non-rule statements other than fallback/default." }]
 
 [[case]]
 id = "dialect-sections-05-include"
@@ -917,15 +1066,17 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "dialect-sections-05-adjacent"
 input = "crates/honk-config/conformance/cases/dialect/dialect-sections-05-adjacent.dae"
-layer = "loading:include_loads_nested_globs_and_merges_sections"
+layer = "loading:adjacent_include_quotes_protect_filename_punctuation_without_leaking"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = []
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[0].items[0].param.val", dae = "first.dae", honk = "'first.dae''quoted # name.dae'", reason = "String-mode include indexing retains one physical statement; the file loader splits adjacent quoted paths, checked by the loading suite." }, { path = "sections[0].items[1]", dae = { param = { and_functions = [], annotation = [], key = "", val = "quoted # name.dae" } }, honk = { absent = true }, reason = "String-mode include indexing retains one physical statement; the file loader splits adjacent quoted paths, checked by the loading suite." }]
 
 [[case]]
 id = "dialect-sections-05-hash"
@@ -935,24 +1086,29 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-include-hash"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-example-dae"
 input = "example.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["legacy-quoted-list"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^: no viable alternative at input '->'"
 
 [[case]]
 id = "honk-config-dae"
 input = "config.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["legacy-quoted-list", "legacy-comment-brace", "legacy-comment-brace"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input '('"
 
 [[case]]
 id = "honk-config-min-dae"
@@ -962,33 +1118,39 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-quoted-list"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-dns-k01-ordered-hosts"
 input = "crates/honk-config/tests/fixtures/parser/dns/k01-ordered-hosts.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["legacy-glued-hash"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: '"
 
 [[case]]
 id = "fixture-dns-k05-bare-apostrophe-before-comment"
 input = "crates/honk-config/tests/fixtures/parser/dns/k05-bare-apostrophe-before-comment.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: line 2:0 no viable alternative at input 'dns{use_host:/tmp/don't } # don't'"
 
 [[case]]
 id = "fixture-dns-k05-scalar-quote"
 input = "crates/honk-config/tests/fixtures/parser/dns/k05-scalar-quote.dae"
 layer = "structure"
 honk = "reject"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["unterminated-quote"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-dns-k14-scalar-quote-pair"
@@ -998,24 +1160,29 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-groups-cls-unterminated-quoted-paren-subgroup"
 input = "crates/honk-config/tests/fixtures/parser/groups/cls-unterminated-quoted-paren-subgroup.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["legacy-config-warning"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'group('hk)jp'}'"
 
 [[case]]
 id = "fixture-groups-ctl-unterminated-filter-then-policy"
 input = "crates/honk-config/tests/fixtures/parser/groups/ctl-unterminated-filter-then-policy.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["legacy-config-warning"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^^^^^: no viable alternative at input 'group('hk'policy'"
 
 [[case]]
 id = "fixture-groups-k01-glued-hash-filter"
@@ -1025,6 +1192,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-glued-hash"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-groups-k04-annotation-filter"
@@ -1034,60 +1202,70 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-config-warning"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-groups-k05-argument-recovery"
 input = "crates/honk-config/tests/fixtures/parser/groups/k05-argument-recovery.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["unterminated-quote"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: '"
 
 [[case]]
 id = "fixture-groups-k05-head-failure"
 input = "crates/honk-config/tests/fixtures/parser/groups/k05-head-failure.dae"
 layer = "structure"
 honk = "reject"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["unterminated-quote"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-groups-k05-head-recovery"
 input = "crates/honk-config/tests/fixtures/parser/groups/k05-head-recovery.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["unterminated-quote"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: '"
 
 [[case]]
 id = "fixture-groups-k05-multiline-missing-closer"
 input = "crates/honk-config/tests/fixtures/parser/groups/k05-multiline-missing-closer.dae"
 layer = "structure"
 honk = "reject"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["unterminated-quote"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-groups-k05-same-line-failure"
 input = "crates/honk-config/tests/fixtures/parser/groups/k05-same-line-failure.dae"
 layer = "structure"
 honk = "reject"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["unterminated-quote"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-groups-k06-braced-name"
 input = "crates/honk-config/tests/fixtures/parser/groups/k06-braced-name.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'node{'a } b':'"
 
 [[case]]
 id = "fixture-groups-k36-suffix-junk"
@@ -1096,7 +1274,8 @@ layer = "structure"
 honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-config-warning"]
-compare = "equal"
+unknown_sections = 0
+differences = [{ path = "sections[1].items[0].section.items[0].param.and_functions[0]", dae = { name = "name", not = false, params = [{ key = "", val = "edge" }] }, honk = { absent = true }, reason = "Group fields keep a single statement; semantic filter parsing rejects trailing junk rather than admitting a second literal." }, { path = "sections[1].items[0].section.items[0].param.val", dae = "", honk = "name(edge)junk", reason = "Group fields keep a single statement; semantic filter parsing rejects trailing junk rather than admitting a second literal." }, { path = "sections[1].items[0].section.items[1]", dae = { param = { and_functions = [], annotation = [], key = "", val = "junk" } }, honk = { absent = true }, reason = "Group fields keep a single statement; semantic filter parsing rejects trailing junk rather than admitting a second literal." }]
 
 [[case]]
 id = "fixture-groups-k40-quoted-subgroups"
@@ -1106,15 +1285,18 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-quoted-list"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-groups-k41-empty-subgroup"
 input = "crates/honk-config/tests/fixtures/parser/groups/k41-empty-subgroup.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["empty-subgroup", "empty-subgroup"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^^^^: empty parameter list is not supported."
 
 [[case]]
 id = "fixture-routing-k02-glued-hash-target"
@@ -1124,24 +1306,27 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-glued-hash"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-routing-k05-argument-quote"
 input = "crates/honk-config/tests/fixtures/parser/routing/k05-argument-quote.dae"
 layer = "structure"
 honk = "reject"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["unterminated-quote"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-routing-k05-head-quote"
 input = "crates/honk-config/tests/fixtures/parser/routing/k05-head-quote.dae"
 layer = "structure"
 honk = "reject"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["unterminated-quote"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-routing-k05-quoted-arguments"
@@ -1151,15 +1336,17 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-routing-k36-trailing-matcher-text"
 input = "crates/honk-config/tests/fixtures/parser/routing/k36-trailing-matcher-text.dae"
 layer = "structure"
 honk = "reject"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["trailing-matcher-text"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-scalars-k01-glued-hash"
@@ -1169,24 +1356,28 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-glued-hash"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-scalars-k05-bare-apostrophe"
 input = "crates/honk-config/tests/fixtures/parser/scalars/k05-bare-apostrophe.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: '"
 
 [[case]]
 id = "fixture-scalars-k05-unterminated"
 input = "crates/honk-config/tests/fixtures/parser/scalars/k05-unterminated.dae"
 layer = "structure"
 honk = "reject"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["unterminated-quote"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-scalars-k14-lists"
@@ -1196,15 +1387,18 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-list-quoting", "legacy-quoted-list"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-scalars-k22-c-scalar"
 input = "crates/honk-config/tests/fixtures/parser/scalars/k22-c-scalar.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'global{log_file:/tmp/x'piece'('"
 
 [[case]]
 id = "fixture-scalars-scalar-controls"
@@ -1214,6 +1408,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-bool-shorthand", "legacy-bool-shorthand", "legacy-bool-shorthand", "legacy-bool-shorthand", "legacy-bool-shorthand", "legacy-bool-shorthand"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-subscriptions-cls-sub-quoted-tag-inside"
@@ -1223,6 +1418,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-embedded-tag"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-subscriptions-cls-sub-tagless-quoted"
@@ -1232,42 +1428,51 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-subscriptions-cls-sub-tagless-ua"
 input = "crates/honk-config/tests/fixtures/parser/subscriptions/cls-sub-tagless-ua.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{'https://example.org/sub'('"
 
 [[case]]
 id = "fixture-subscriptions-cls-sub-ua-glued-hash"
 input = "crates/honk-config/tests/fixtures/parser/subscriptions/cls-sub-ua-glued-hash.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["legacy-glued-hash", "legacy-glued-hash"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{sub:'http://sub'('"
 
 [[case]]
 id = "fixture-subscriptions-cls-sub-ua-with-hash"
 input = "crates/honk-config/tests/fixtures/parser/subscriptions/cls-sub-ua-with-hash.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["trailing-entry-text"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{tag:'https://h/p'('"
 
 [[case]]
 id = "fixture-subscriptions-ctl-node-glued-hash-after-quote"
 input = "crates/honk-config/tests/fixtures/parser/subscriptions/ctl-node-glued-hash-after-quote.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["legacy-glued-hash"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'node{'ss://YWVzLTI1Ni1nY206cGFzcw==@1.2.3.4:8388#hk1'ss://YWVzLTI1Ni1nY206cGFzcw==@1.2.3.4:'"
 
 [[case]]
 id = "fixture-subscriptions-ctl-node-nested-wrapper"
@@ -1277,42 +1482,51 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-wrapper"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-subscriptions-ctl-node-spaced-tag"
 input = "crates/honk-config/tests/fixtures/parser/subscriptions/ctl-node-spaced-tag.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["entry-tag-normalized"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'node{edge:'socks5://127.0.0.1:1080''edge west':'"
 
 [[case]]
 id = "fixture-subscriptions-ctl-sub-quoted-spaced-hash"
 input = "crates/honk-config/tests/fixtures/parser/subscriptions/ctl-sub-quoted-spaced-hash.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{'paid # east':'"
 
 [[case]]
 id = "fixture-subscriptions-ctl-sub-spaced-tag"
 input = "crates/honk-config/tests/fixtures/parser/subscriptions/ctl-sub-spaced-tag.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["entry-tag-normalized"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{paid:https:'"
 
 [[case]]
 id = "fixture-subscriptions-ctl-subscription-double-colon-header"
 input = "crates/honk-config/tests/fixtures/parser/subscriptions/ctl-subscription-double-colon-header.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = ["legacy-wrapper"]
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{a:b:'"
 
 [[case]]
 id = "fixture-subscriptions-ctl-subscription-nested-wrapper"
@@ -1322,15 +1536,18 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-wrapper"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "fixture-subscriptions-equiv-subscription-block-nested-close"
 input = "crates/honk-config/tests/fixtures/parser/subscriptions/equiv-subscription-block-nested-close.dae"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{detailed:{'"
 
 [[case]]
 id = "honk-doc-en-configuration-01"
@@ -1341,6 +1558,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-configuration-02"
@@ -1348,9 +1566,11 @@ source = { file = "doc/en/configuration.md", lines = "61-118" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^: no viable alternative at input '->'"
 
 [[case]]
 id = "honk-doc-en-configuration-03"
@@ -1358,9 +1578,11 @@ source = { file = "doc/en/configuration.md", lines = "126-195" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^: no viable alternative at input '->'"
 
 [[case]]
 id = "honk-doc-en-configuration-04"
@@ -1368,9 +1590,11 @@ source = { file = "doc/en/configuration.md", lines = "240-252" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^: no viable alternative at input 'dns{upstream{home:'udp://223.5.5.5:53'->'"
 
 [[case]]
 id = "honk-doc-en-design-nfqueue-01"
@@ -1381,6 +1605,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-how-to-start-01"
@@ -1391,6 +1616,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-how-to-start-02"
@@ -1401,6 +1627,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-how-to-start-03"
@@ -1411,6 +1638,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-how-to-start-04"
@@ -1421,6 +1649,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-reference-dns-01"
@@ -1431,6 +1660,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-reference-dns-02"
@@ -1438,9 +1668,11 @@ source = { file = "doc/en/reference/dns.md", lines = "75-78" }
 wrap = "dns"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^: no viable alternative at input 'dns{upstream{default:'udp://223.5.5.5:53'google_doh:'https://dns.google/dns-query'->'"
 
 [[case]]
 id = "honk-doc-en-reference-dns-03"
@@ -1451,6 +1683,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-reference-dns-04"
@@ -1461,6 +1694,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-reference-dns-05"
@@ -1468,9 +1702,11 @@ source = { file = "doc/en/reference/dns.md", lines = "245-279" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^: no viable alternative at input 'dns{use_host:trueipversion_prefer:4upstream{default:'udp://223.5.5.5:53'cloudflare_dot:'tls://1.1.1.1:853?tls_server_name=cloudflare-dns.com'google_doh:'https://dns.google/dns-query'->'"
 
 [[case]]
 id = "honk-doc-en-reference-experimental-01"
@@ -1481,6 +1717,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-reference-global-01"
@@ -1491,6 +1728,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-quoted-list"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-reference-groups-01"
@@ -1501,6 +1739,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-reference-nodes-01"
@@ -1508,9 +1747,11 @@ source = { file = "doc/en/reference/nodes.md", lines = "12-17" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'node{iris:'socks5://10.10.10.1:2077''hk1':'"
 
 [[case]]
 id = "honk-doc-en-reference-nodes-02"
@@ -1521,6 +1762,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["invalid-node-entry"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-reference-nodes-03"
@@ -1531,6 +1773,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-reference-routing-01"
@@ -1541,6 +1784,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-reference-routing-02"
@@ -1548,9 +1792,11 @@ source = { file = "doc/en/reference/routing.md", lines = "106-106" }
 wrap = "routing"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'routing{dip(192.168.50.1,fd00:50:'"
 
 [[case]]
 id = "honk-doc-en-reference-routing-03"
@@ -1558,9 +1804,11 @@ source = { file = "doc/en/reference/routing.md", lines = "137-158" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'routing{domain(suffix:doubleclick.net)->blockpname(NetworkManager,systemd-resolved)&&l4proto(udp)&&dport(53)->direct(must)dip(geoip:private)->direct(must)sip(10.10.10.24/32,10.10.10.25/32)&&!dport(53)->direct(must)mac(aa:bb:'"
 
 [[case]]
 id = "honk-doc-en-reference-subscription-01"
@@ -1568,9 +1816,11 @@ source = { file = "doc/en/reference/subscription.md", lines = "10-19" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{primary:'https://example.com/sub'compatible:'https://example.net/sub'('"
 
 [[case]]
 id = "honk-doc-zh-configuration-01"
@@ -1581,6 +1831,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-configuration-02"
@@ -1588,9 +1839,11 @@ source = { file = "doc/zh/configuration.md", lines = "61-117" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^: no viable alternative at input '->'"
 
 [[case]]
 id = "honk-doc-zh-configuration-03"
@@ -1598,9 +1851,11 @@ source = { file = "doc/zh/configuration.md", lines = "125-193" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^: no viable alternative at input '->'"
 
 [[case]]
 id = "honk-doc-zh-configuration-04"
@@ -1608,9 +1863,11 @@ source = { file = "doc/zh/configuration.md", lines = "240-252" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^: no viable alternative at input 'dns{upstream{home:'udp://223.5.5.5:53'->'"
 
 [[case]]
 id = "honk-doc-zh-design-nfqueue-01"
@@ -1621,6 +1878,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-how-to-start-01"
@@ -1631,6 +1889,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-how-to-start-02"
@@ -1641,6 +1900,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-how-to-start-03"
@@ -1651,6 +1911,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-how-to-start-04"
@@ -1661,6 +1922,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-reference-dns-01"
@@ -1671,6 +1933,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-reference-dns-02"
@@ -1678,9 +1941,11 @@ source = { file = "doc/zh/reference/dns.md", lines = "75-78" }
 wrap = "dns"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^: no viable alternative at input 'dns{upstream{default:'udp://223.5.5.5:53'google_doh:'https://dns.google/dns-query'->'"
 
 [[case]]
 id = "honk-doc-zh-reference-dns-03"
@@ -1691,6 +1956,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-reference-dns-04"
@@ -1701,6 +1967,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-reference-dns-05"
@@ -1708,9 +1975,11 @@ source = { file = "doc/zh/reference/dns.md", lines = "245-279" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^^: no viable alternative at input 'dns{use_host:trueipversion_prefer:4upstream{default:'udp://223.5.5.5:53'cloudflare_dot:'tls://1.1.1.1:853?tls_server_name=cloudflare-dns.com'google_doh:'https://dns.google/dns-query'->'"
 
 [[case]]
 id = "honk-doc-zh-reference-experimental-01"
@@ -1721,6 +1990,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-reference-global-01"
@@ -1731,6 +2001,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["legacy-quoted-list"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-reference-groups-01"
@@ -1741,6 +2012,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-reference-nodes-01"
@@ -1748,9 +2020,11 @@ source = { file = "doc/zh/reference/nodes.md", lines = "12-17" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'node{iris:'socks5://10.10.10.1:2077''hk1':'"
 
 [[case]]
 id = "honk-doc-zh-reference-nodes-02"
@@ -1761,6 +2035,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = ["invalid-node-entry"]
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-reference-nodes-03"
@@ -1771,6 +2046,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-reference-routing-01"
@@ -1781,6 +2057,7 @@ honk = "accept"
 dae = "accept"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-reference-routing-02"
@@ -1788,9 +2065,11 @@ source = { file = "doc/zh/reference/routing.md", lines = "104-104" }
 wrap = "routing"
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'routing{dip(192.168.50.1,fd00:50:'"
 
 [[case]]
 id = "honk-doc-zh-reference-routing-03"
@@ -1798,9 +2077,11 @@ source = { file = "doc/zh/reference/routing.md", lines = "133-154" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'routing{domain(suffix:doubleclick.net)->blockpname(NetworkManager,systemd-resolved)&&l4proto(udp)&&dport(53)->direct(must)dip(geoip:private)->direct(must)sip(10.10.10.24/32,10.10.10.25/32)&&!dport(53)->direct(must)mac(aa:bb:'"
 
 [[case]]
 id = "honk-doc-zh-reference-subscription-01"
@@ -1808,6 +2089,185 @@ source = { file = "doc/zh/reference/subscription.md", lines = "10-19" }
 wrap = ""
 layer = "structure"
 honk = "accept"
-dae = "accept"
+dae = "reject"
 honk_diagnostics = []
 compare = "equal"
+unknown_sections = 0
+reason = "honk accepts its documented dialect; the pinned dae parser rejects this input: ^: no viable alternative at input 'subscription{primary:'https://example.com/sub'compatible:'https://example.net/sub'('"
+
+[[case]]
+id = "dae-docs-en-README-194-195"
+source = { dae = "docs/en/README.md", lines = "194-195" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "reject"
+honk_diagnostics = ["block-delimiter-spacing"]
+compare = "equal"
+unknown_sections = 0
+reason = "honk rejects with block-delimiter-spacing; dae accepts the syntax without honk setting/node admission."
+
+[[case]]
+id = "dae-docs-en-README-201-255"
+source = { dae = "docs/en/README.md", lines = "201-255" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = []
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-docs-en-tutorials-run-on-macos-105-155"
+source = { dae = "docs/en/tutorials/run-on-macos.md", lines = "105-155" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = []
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-docs-en-configuration-external-dns-26"
+source = { dae = "docs/en/configuration/external-dns.md", lines = "26" }
+wrap = "routing"
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = []
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-docs-en-configuration-external-dns-72-74"
+source = { dae = "docs/en/configuration/external-dns.md", lines = "72-74" }
+wrap = "routing"
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = []
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-docs-en-configuration-external-dns-34-43"
+source = { dae = "docs/en/configuration/external-dns.md", lines = "34-43" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = []
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-docs-en-configuration-external-dns-82-91"
+source = { dae = "docs/en/configuration/external-dns.md", lines = "82-91" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = []
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-docs-en-configuration-gaming-oriented-routing-4-10"
+source = { dae = "docs/en/configuration/gaming-oriented-routing.md", lines = "4-10" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = []
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-docs-en-configuration-separate-config-31-59"
+source = { dae = "docs/en/configuration/separate-config.md", lines = "31-59" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = []
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-docs-en-configuration-separate-config-63-82"
+source = { dae = "docs/en/configuration/separate-config.md", lines = "63-82" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = []
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-docs-en-configuration-separate-config-86-106"
+source = { dae = "docs/en/configuration/separate-config.md", lines = "86-106" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = ["invalid-node-entry", "invalid-node-entry"]
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-docs-en-configuration-separate-config-110-126"
+source = { dae = "docs/en/configuration/separate-config.md", lines = "110-126" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = []
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-docs-en-configuration-dns-69-166"
+source = { dae = "docs/en/configuration/dns.md", lines = "69-166" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = ["legacy-dns-hash"]
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-docs-en-configuration-dns-172-188"
+source = { dae = "docs/en/configuration/dns.md", lines = "172-188" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = []
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-docs-en-configuration-dns-192-216"
+source = { dae = "docs/en/configuration/dns.md", lines = "192-216" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = []
+compare = "equal"
+unknown_sections = 0
+
+[[case]]
+id = "dae-example-dae-1-387"
+source = { dae = "example.dae", lines = "1-387" }
+wrap = ""
+layer = "structure"
+dae = "accept"
+honk = "accept"
+honk_diagnostics = ["unknown-key", "unknown-key", "legacy-quoted-list", "legacy-quoted-list", "invalid-node-entry", "invalid-node-entry", "invalid-node-entry", "invalid-node-entry", "unknown-key", "legacy-config-warning"]
+compare = "equal"
+unknown_sections = 0
