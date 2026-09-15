@@ -1,0 +1,1813 @@
+note = "Decoded syntax only: literal lists lose boundaries; quote delimiters are removed but escape bytes are retained; routing-rule trailing annotations are not exposed by dae. Typed and loading layers name executable tests. Inputs are public and output is unredacted."
+
+[[case]]
+id = "dialect-lexical-01-scalar-hash"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-01-scalar-hash.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-glued-hash"]
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-01-host-hash"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-01-host-hash.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-glued-hash"]
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-01-group-hash"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-01-group-hash.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-glued-hash"]
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-02-outbound-hash"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-02-outbound-hash.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-glued-hash"]
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-03-block-comment"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-03-block-comment.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["unsupported-comment"]
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-04-annotation"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-04-annotation.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-config-warning"]
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-05-apostrophe"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-05-apostrophe.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-05-unterminated"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-05-unterminated.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unterminated-quote"]
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-05-quote-after-colon"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-05-quote-after-colon.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-06-quoted-brace"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-06-quoted-brace.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-06-comment-brace"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-06-comment-brace.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-comment-brace"]
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-06-compact-argument"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-06-compact-argument.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-06-ua-brace"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-06-ua-brace.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-07-glued-opener"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-07-glued-opener.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["block-delimiter-spacing"]
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-07-compact-empty"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-07-compact-empty.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-07-adjacent-groups"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-07-adjacent-groups.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-08-extra-closer"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-08-extra-closer.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["unmatched-close"]
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-08-empty"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-08-empty.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["not-dae-config"]
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-08-comment-only"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-08-comment-only.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["not-dae-config"]
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-09-numeric"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-09-numeric.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-09-unicode"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-09-unicode.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-09-spaces"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-09-spaces.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-10-same-line"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-10-same-line.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-11-split-root"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-11-split-root.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unknown-statement", "unexpected-open-brace"]
+compare = "equal"
+
+[[case]]
+id = "dialect-lexical-11-split-include"
+input = "crates/honk-config/conformance/cases/dialect/dialect-lexical-11-split-include.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-include-opener"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-01-bare-colons"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-01-bare-colons.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-02-call-value"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-02-call-value.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-03-list"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-03-list.dae"
+layer = "typed:lists_unquote_items_and_retain_check_target_aggregate_compatibility"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-list-quoting"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-03-aggregate"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-03-aggregate.dae"
+layer = "typed:lists_unquote_items_and_retain_check_target_aggregate_compatibility"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-quoted-list"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-04-t"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-04-t.dae"
+layer = "typed:shorthand_booleans_keep_false_and_mark_the_migration"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-bool-shorthand"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-04-y"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-04-y.dae"
+layer = "typed:shorthand_booleans_keep_false_and_mark_the_migration"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-bool-shorthand"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-04-f"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-04-f.dae"
+layer = "typed:shorthand_booleans_keep_false_and_mark_the_migration"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-bool-shorthand"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-04-n"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-04-n.dae"
+layer = "typed:shorthand_booleans_keep_false_and_mark_the_migration"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-bool-shorthand"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-04-strict"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-04-strict.dae"
+layer = "typed:shorthand_booleans_keep_false_and_mark_the_migration"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["invalid-config-value"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-05-0x10"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-05-0x10.dae"
+layer = "typed:test_unparseable_so_mark_uses_the_fallback_and_returns_a_diagnostic"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-05-10"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-05-10.dae"
+layer = "typed:test_unparseable_so_mark_uses_the_fallback_and_returns_a_diagnostic"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-05-zz"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-05-zz.dae"
+layer = "typed:test_unparseable_so_mark_uses_the_fallback_and_returns_a_diagnostic"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-config-warning"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-06-1-5s"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-06-1-5s.dae"
+layer = "typed:test_millisecond_durations_keep_the_default_and_return_diagnostics"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-06-never"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-06-never.dae"
+layer = "typed:test_millisecond_durations_keep_the_default_and_return_diagnostics"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-config-warning"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-06-seconds"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-06-seconds.dae"
+layer = "typed:test_millisecond_durations_keep_the_default_and_return_diagnostics"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-config-warning"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-07-hash"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-07-hash.dae"
+layer = "typed:fixed_ttl_requires_one_decimal_scalar_after_unquoting"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["invalid-ttl"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-07-quoted"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-07-quoted.dae"
+layer = "typed:fixed_ttl_requires_one_decimal_scalar_after_unquoting"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-ttl-quoting"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-07-trailing"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-07-trailing.dae"
+layer = "typed:fixed_ttl_requires_one_decimal_scalar_after_unquoting"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["trailing-value"]
+compare = "equal"
+
+[[case]]
+id = "dialect-scalars-08-unknown-policy"
+input = "crates/honk-config/conformance/cases/dialect/dialect-scalars-08-unknown-policy.dae"
+layer = "typed:test_unknown_group_policy_returns_a_diagnostic_without_the_text"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-config-warning"]
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-01-tagged"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-01-tagged.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-01-bare"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-01-bare.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-01-quoted-tag"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-01-quoted-tag.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-01-embedded-subtag"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-01-embedded-subtag.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-embedded-tag"]
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-01-embedded-nodetag"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-01-embedded-nodetag.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unknown-protocol"]
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-01-tagless"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-01-tagless.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-02-comment"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-02-comment.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-02-glued"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-02-glued.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-glued-hash"]
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-02-trailing"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-02-trailing.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["trailing-entry-text"]
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-03-user-agent"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-03-user-agent.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-03-quoted-agent"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-03-quoted-agent.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-03-unquoted-hash"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-03-unquoted-hash.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["trailing-entry-text"]
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-04-block"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-04-block.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-entries-05-spaced-tag"
+input = "crates/honk-config/conformance/cases/dialect/dialect-entries-05-spaced-tag.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["entry-tag-normalized"]
+compare = "equal"
+
+[[case]]
+id = "dialect-routing-01-geosite-prefix"
+input = "crates/honk-config/conformance/cases/dialect/dialect-routing-01-geosite-prefix.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-routing-01-domain-prefix"
+input = "crates/honk-config/conformance/cases/dialect/dialect-routing-01-domain-prefix.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-routing-02-two-arrows"
+input = "crates/honk-config/conformance/cases/dialect/dialect-routing-02-two-arrows.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-arrow-target"]
+compare = "equal"
+
+[[case]]
+id = "dialect-routing-03-spaced-must"
+input = "crates/honk-config/conformance/cases/dialect/dialect-routing-03-spaced-must.dae"
+layer = "typed:spaced_must_is_an_outbound_name"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-routing-04-spaced-call"
+input = "crates/honk-config/conformance/cases/dialect/dialect-routing-04-spaced-call.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unknown-traffic-predicate"]
+compare = "equal"
+
+[[case]]
+id = "dialect-routing-05-unknown"
+input = "crates/honk-config/conformance/cases/dialect/dialect-routing-05-unknown.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unknown-traffic-predicate"]
+compare = "equal"
+
+[[case]]
+id = "dialect-routing-05-negated"
+input = "crates/honk-config/conformance/cases/dialect/dialect-routing-05-negated.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unknown-traffic-predicate"]
+compare = "equal"
+
+[[case]]
+id = "dialect-routing-06-ipv6"
+input = "crates/honk-config/conformance/cases/dialect/dialect-routing-06-ipv6.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-routing-06-mac"
+input = "crates/honk-config/conformance/cases/dialect/dialect-routing-06-mac.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-01-slash-comment"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-01-slash-comment.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-slash-comment"]
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-01-quoted-slash"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-01-quoted-slash.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-02-hash"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-02-hash.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-dns-hash"]
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-03-two-arrows"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-03-two-arrows.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-arrow-target"]
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-03-mixed-action"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-03-mixed-action.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-04-split-call"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-04-split-call.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["incomplete-dns-rule", "incomplete-dns-rule"]
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-05-arrow-detour"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-05-arrow-detour.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-05-key-detour"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-05-key-detour.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-06-traffic-junk"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-06-traffic-junk.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["trailing-matcher-text"]
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-06-dns-junk"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-06-dns-junk.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["trailing-matcher-text"]
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-07-upstream-comment"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-07-upstream-comment.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-upstream-comment"]
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-08-quoted-outbound"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-08-quoted-outbound.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-upstream-separator"]
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-08-quoted-arrow"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-08-quoted-arrow.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-upstream-separator"]
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-09-names"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-09-names.dae"
+layer = "typed:invalid_dns_conjunct_omits_whole_rule"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-09-1-28"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-09-1-28.dae"
+layer = "typed:invalid_dns_conjunct_omits_whole_rule"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-09-typo"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-09-typo.dae"
+layer = "typed:invalid_dns_conjunct_omits_whole_rule"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["invalid-qtype"]
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-09-aggregate"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-09-aggregate.dae"
+layer = "typed:invalid_dns_conjunct_omits_whole_rule"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-quoted-list"]
+compare = "equal"
+
+[[case]]
+id = "dialect-dns-09-empty"
+input = "crates/honk-config/conformance/cases/dialect/dialect-dns-09-empty.dae"
+layer = "typed:invalid_dns_conjunct_omits_whole_rule"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-groups-01-aggregate"
+input = "crates/honk-config/conformance/cases/dialect/dialect-groups-01-aggregate.dae"
+layer = "typed:quoted_subgroup_lists_and_explicit_empty_contributions_keep_boundaries"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-quoted-list"]
+compare = "equal"
+
+[[case]]
+id = "dialect-groups-01-pipe"
+input = "crates/honk-config/conformance/cases/dialect/dialect-groups-01-pipe.dae"
+layer = "typed:quoted_subgroup_lists_and_explicit_empty_contributions_keep_boundaries"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-quoted-list"]
+compare = "equal"
+
+[[case]]
+id = "dialect-groups-02-empty"
+input = "crates/honk-config/conformance/cases/dialect/dialect-groups-02-empty.dae"
+layer = "typed:quoted_subgroup_lists_and_explicit_empty_contributions_keep_boundaries"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["empty-subgroup"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-01-outer-key"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-01-outer-key.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unknown-experimental-setting"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-01-nfqueue-block"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-01-nfqueue-block.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unknown-nfqueue-setting"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-01-child-key"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-01-child-key.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["unknown-key"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-02-global-wrapper"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-02-global-wrapper.dae"
+layer = "typed:unknown_subtrees_cannot_override_settings_or_leak_rules"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["unknown-block"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-02-dns-wrapper"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-02-dns-wrapper.dae"
+layer = "typed:unknown_subtrees_cannot_override_settings_or_leak_rules"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["unknown-block"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-02-routing-wrapper"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-02-routing-wrapper.dae"
+layer = "typed:unknown_subtrees_cannot_override_settings_or_leak_rules"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["unknown-block"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-02-group-wrapper"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-02-group-wrapper.dae"
+layer = "typed:unknown_subtrees_cannot_override_settings_or_leak_rules"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["unknown-block"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-03-node-wrapper"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-03-node-wrapper.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-wrapper"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-03-sub-wrapper"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-03-sub-wrapper.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-wrapper"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-04-root-statement"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-04-root-statement.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["unknown-statement"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-04-unknown-key"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-04-unknown-key.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["unknown-key"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-04-unknown-root"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-04-unknown-root.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["unknown-block"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-04-traffic-statement"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-04-traffic-statement.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["unknown-statement"]
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-05-include"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-05-include.dae"
+layer = "loading:include_loads_nested_globs_and_merges_sections"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-05-adjacent"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-05-adjacent.dae"
+layer = "loading:include_loads_nested_globs_and_merges_sections"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "dialect-sections-05-hash"
+input = "crates/honk-config/conformance/cases/dialect/dialect-sections-05-hash.dae"
+layer = "loading:include_loads_nested_globs_and_merges_sections"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-include-hash"]
+compare = "equal"
+
+[[case]]
+id = "honk-example-dae"
+input = "example.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-quoted-list"]
+compare = "equal"
+
+[[case]]
+id = "honk-config-dae"
+input = "config.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-quoted-list", "legacy-comment-brace", "legacy-comment-brace"]
+compare = "equal"
+
+[[case]]
+id = "honk-config-min-dae"
+input = "config.min.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-quoted-list"]
+compare = "equal"
+
+[[case]]
+id = "fixture-dns-k01-ordered-hosts"
+input = "crates/honk-config/tests/fixtures/parser/dns/k01-ordered-hosts.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-glued-hash"]
+compare = "equal"
+
+[[case]]
+id = "fixture-dns-k05-bare-apostrophe-before-comment"
+input = "crates/honk-config/tests/fixtures/parser/dns/k05-bare-apostrophe-before-comment.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "fixture-dns-k05-scalar-quote"
+input = "crates/honk-config/tests/fixtures/parser/dns/k05-scalar-quote.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unterminated-quote"]
+compare = "equal"
+
+[[case]]
+id = "fixture-dns-k14-scalar-quote-pair"
+input = "crates/honk-config/tests/fixtures/parser/dns/k14-scalar-quote-pair.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "fixture-groups-cls-unterminated-quoted-paren-subgroup"
+input = "crates/honk-config/tests/fixtures/parser/groups/cls-unterminated-quoted-paren-subgroup.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-config-warning"]
+compare = "equal"
+
+[[case]]
+id = "fixture-groups-ctl-unterminated-filter-then-policy"
+input = "crates/honk-config/tests/fixtures/parser/groups/ctl-unterminated-filter-then-policy.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-config-warning"]
+compare = "equal"
+
+[[case]]
+id = "fixture-groups-k01-glued-hash-filter"
+input = "crates/honk-config/tests/fixtures/parser/groups/k01-glued-hash-filter.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-glued-hash"]
+compare = "equal"
+
+[[case]]
+id = "fixture-groups-k04-annotation-filter"
+input = "crates/honk-config/tests/fixtures/parser/groups/k04-annotation-filter.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-config-warning"]
+compare = "equal"
+
+[[case]]
+id = "fixture-groups-k05-argument-recovery"
+input = "crates/honk-config/tests/fixtures/parser/groups/k05-argument-recovery.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["unterminated-quote"]
+compare = "equal"
+
+[[case]]
+id = "fixture-groups-k05-head-failure"
+input = "crates/honk-config/tests/fixtures/parser/groups/k05-head-failure.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unterminated-quote"]
+compare = "equal"
+
+[[case]]
+id = "fixture-groups-k05-head-recovery"
+input = "crates/honk-config/tests/fixtures/parser/groups/k05-head-recovery.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["unterminated-quote"]
+compare = "equal"
+
+[[case]]
+id = "fixture-groups-k05-multiline-missing-closer"
+input = "crates/honk-config/tests/fixtures/parser/groups/k05-multiline-missing-closer.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unterminated-quote"]
+compare = "equal"
+
+[[case]]
+id = "fixture-groups-k05-same-line-failure"
+input = "crates/honk-config/tests/fixtures/parser/groups/k05-same-line-failure.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unterminated-quote"]
+compare = "equal"
+
+[[case]]
+id = "fixture-groups-k06-braced-name"
+input = "crates/honk-config/tests/fixtures/parser/groups/k06-braced-name.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "fixture-groups-k36-suffix-junk"
+input = "crates/honk-config/tests/fixtures/parser/groups/k36-suffix-junk.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-config-warning"]
+compare = "equal"
+
+[[case]]
+id = "fixture-groups-k40-quoted-subgroups"
+input = "crates/honk-config/tests/fixtures/parser/groups/k40-quoted-subgroups.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-quoted-list"]
+compare = "equal"
+
+[[case]]
+id = "fixture-groups-k41-empty-subgroup"
+input = "crates/honk-config/tests/fixtures/parser/groups/k41-empty-subgroup.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["empty-subgroup", "empty-subgroup"]
+compare = "equal"
+
+[[case]]
+id = "fixture-routing-k02-glued-hash-target"
+input = "crates/honk-config/tests/fixtures/parser/routing/k02-glued-hash-target.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-glued-hash"]
+compare = "equal"
+
+[[case]]
+id = "fixture-routing-k05-argument-quote"
+input = "crates/honk-config/tests/fixtures/parser/routing/k05-argument-quote.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unterminated-quote"]
+compare = "equal"
+
+[[case]]
+id = "fixture-routing-k05-head-quote"
+input = "crates/honk-config/tests/fixtures/parser/routing/k05-head-quote.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unterminated-quote"]
+compare = "equal"
+
+[[case]]
+id = "fixture-routing-k05-quoted-arguments"
+input = "crates/honk-config/tests/fixtures/parser/routing/k05-quoted-arguments.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "fixture-routing-k36-trailing-matcher-text"
+input = "crates/honk-config/tests/fixtures/parser/routing/k36-trailing-matcher-text.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["trailing-matcher-text"]
+compare = "equal"
+
+[[case]]
+id = "fixture-scalars-k01-glued-hash"
+input = "crates/honk-config/tests/fixtures/parser/scalars/k01-glued-hash.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-glued-hash"]
+compare = "equal"
+
+[[case]]
+id = "fixture-scalars-k05-bare-apostrophe"
+input = "crates/honk-config/tests/fixtures/parser/scalars/k05-bare-apostrophe.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "fixture-scalars-k05-unterminated"
+input = "crates/honk-config/tests/fixtures/parser/scalars/k05-unterminated.dae"
+layer = "structure"
+honk = "reject"
+dae = "accept"
+honk_diagnostics = ["unterminated-quote"]
+compare = "equal"
+
+[[case]]
+id = "fixture-scalars-k14-lists"
+input = "crates/honk-config/tests/fixtures/parser/scalars/k14-lists.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-list-quoting", "legacy-quoted-list"]
+compare = "equal"
+
+[[case]]
+id = "fixture-scalars-k22-c-scalar"
+input = "crates/honk-config/tests/fixtures/parser/scalars/k22-c-scalar.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "fixture-scalars-scalar-controls"
+input = "crates/honk-config/tests/fixtures/parser/scalars/scalar-controls.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-bool-shorthand", "legacy-bool-shorthand", "legacy-bool-shorthand", "legacy-bool-shorthand", "legacy-bool-shorthand", "legacy-bool-shorthand"]
+compare = "equal"
+
+[[case]]
+id = "fixture-subscriptions-cls-sub-quoted-tag-inside"
+input = "crates/honk-config/tests/fixtures/parser/subscriptions/cls-sub-quoted-tag-inside.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-embedded-tag"]
+compare = "equal"
+
+[[case]]
+id = "fixture-subscriptions-cls-sub-tagless-quoted"
+input = "crates/honk-config/tests/fixtures/parser/subscriptions/cls-sub-tagless-quoted.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "fixture-subscriptions-cls-sub-tagless-ua"
+input = "crates/honk-config/tests/fixtures/parser/subscriptions/cls-sub-tagless-ua.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "fixture-subscriptions-cls-sub-ua-glued-hash"
+input = "crates/honk-config/tests/fixtures/parser/subscriptions/cls-sub-ua-glued-hash.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-glued-hash", "legacy-glued-hash"]
+compare = "equal"
+
+[[case]]
+id = "fixture-subscriptions-cls-sub-ua-with-hash"
+input = "crates/honk-config/tests/fixtures/parser/subscriptions/cls-sub-ua-with-hash.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["trailing-entry-text"]
+compare = "equal"
+
+[[case]]
+id = "fixture-subscriptions-ctl-node-glued-hash-after-quote"
+input = "crates/honk-config/tests/fixtures/parser/subscriptions/ctl-node-glued-hash-after-quote.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-glued-hash"]
+compare = "equal"
+
+[[case]]
+id = "fixture-subscriptions-ctl-node-nested-wrapper"
+input = "crates/honk-config/tests/fixtures/parser/subscriptions/ctl-node-nested-wrapper.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-wrapper"]
+compare = "equal"
+
+[[case]]
+id = "fixture-subscriptions-ctl-node-spaced-tag"
+input = "crates/honk-config/tests/fixtures/parser/subscriptions/ctl-node-spaced-tag.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["entry-tag-normalized"]
+compare = "equal"
+
+[[case]]
+id = "fixture-subscriptions-ctl-sub-quoted-spaced-hash"
+input = "crates/honk-config/tests/fixtures/parser/subscriptions/ctl-sub-quoted-spaced-hash.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "fixture-subscriptions-ctl-sub-spaced-tag"
+input = "crates/honk-config/tests/fixtures/parser/subscriptions/ctl-sub-spaced-tag.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["entry-tag-normalized"]
+compare = "equal"
+
+[[case]]
+id = "fixture-subscriptions-ctl-subscription-double-colon-header"
+input = "crates/honk-config/tests/fixtures/parser/subscriptions/ctl-subscription-double-colon-header.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-wrapper"]
+compare = "equal"
+
+[[case]]
+id = "fixture-subscriptions-ctl-subscription-nested-wrapper"
+input = "crates/honk-config/tests/fixtures/parser/subscriptions/ctl-subscription-nested-wrapper.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-wrapper"]
+compare = "equal"
+
+[[case]]
+id = "fixture-subscriptions-equiv-subscription-block-nested-close"
+input = "crates/honk-config/tests/fixtures/parser/subscriptions/equiv-subscription-block-nested-close.dae"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-configuration-01"
+source = { file = "doc/en/configuration.md", lines = "34-37" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-configuration-02"
+source = { file = "doc/en/configuration.md", lines = "61-118" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-configuration-03"
+source = { file = "doc/en/configuration.md", lines = "126-195" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-configuration-04"
+source = { file = "doc/en/configuration.md", lines = "240-252" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-design-nfqueue-01"
+source = { file = "doc/en/design/nfqueue.md", lines = "10-12" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-how-to-start-01"
+source = { file = "doc/en/how-to-start.md", lines = "157-168" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-how-to-start-02"
+source = { file = "doc/en/how-to-start.md", lines = "189-202" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-how-to-start-03"
+source = { file = "doc/en/how-to-start.md", lines = "208-208" }
+wrap = "global"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-how-to-start-04"
+source = { file = "doc/en/how-to-start.md", lines = "310-319" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-dns-01"
+source = { file = "doc/en/reference/dns.md", lines = "50-53" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-dns-02"
+source = { file = "doc/en/reference/dns.md", lines = "75-78" }
+wrap = "dns"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-dns-03"
+source = { file = "doc/en/reference/dns.md", lines = "100-100" }
+wrap = "dns.upstream"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-dns-04"
+source = { file = "doc/en/reference/dns.md", lines = "234-237" }
+wrap = "dns"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-dns-05"
+source = { file = "doc/en/reference/dns.md", lines = "245-279" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-experimental-01"
+source = { file = "doc/en/reference/experimental.md", lines = "69-85" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-global-01"
+source = { file = "doc/en/reference/global.md", lines = "122-145" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-quoted-list"]
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-groups-01"
+source = { file = "doc/en/reference/groups.md", lines = "10-26" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-nodes-01"
+source = { file = "doc/en/reference/nodes.md", lines = "12-17" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-nodes-02"
+source = { file = "doc/en/reference/nodes.md", lines = "168-171" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["invalid-node-entry"]
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-nodes-03"
+source = { file = "doc/en/reference/nodes.md", lines = "217-219" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-routing-01"
+source = { file = "doc/en/reference/routing.md", lines = "23-29" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-routing-02"
+source = { file = "doc/en/reference/routing.md", lines = "106-106" }
+wrap = "routing"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-routing-03"
+source = { file = "doc/en/reference/routing.md", lines = "137-158" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-en-reference-subscription-01"
+source = { file = "doc/en/reference/subscription.md", lines = "10-19" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-configuration-01"
+source = { file = "doc/zh/configuration.md", lines = "34-37" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-configuration-02"
+source = { file = "doc/zh/configuration.md", lines = "61-117" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-configuration-03"
+source = { file = "doc/zh/configuration.md", lines = "125-193" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-configuration-04"
+source = { file = "doc/zh/configuration.md", lines = "240-252" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-design-nfqueue-01"
+source = { file = "doc/zh/design/nfqueue.md", lines = "10-12" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-how-to-start-01"
+source = { file = "doc/zh/how-to-start.md", lines = "157-168" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-how-to-start-02"
+source = { file = "doc/zh/how-to-start.md", lines = "189-202" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-how-to-start-03"
+source = { file = "doc/zh/how-to-start.md", lines = "208-208" }
+wrap = "global"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-how-to-start-04"
+source = { file = "doc/zh/how-to-start.md", lines = "310-319" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-dns-01"
+source = { file = "doc/zh/reference/dns.md", lines = "50-53" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-dns-02"
+source = { file = "doc/zh/reference/dns.md", lines = "75-78" }
+wrap = "dns"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-dns-03"
+source = { file = "doc/zh/reference/dns.md", lines = "100-100" }
+wrap = "dns.upstream"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-dns-04"
+source = { file = "doc/zh/reference/dns.md", lines = "234-237" }
+wrap = "dns"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-dns-05"
+source = { file = "doc/zh/reference/dns.md", lines = "245-279" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-experimental-01"
+source = { file = "doc/zh/reference/experimental.md", lines = "69-85" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-global-01"
+source = { file = "doc/zh/reference/global.md", lines = "122-145" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["legacy-quoted-list"]
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-groups-01"
+source = { file = "doc/zh/reference/groups.md", lines = "10-26" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-nodes-01"
+source = { file = "doc/zh/reference/nodes.md", lines = "12-17" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-nodes-02"
+source = { file = "doc/zh/reference/nodes.md", lines = "168-171" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = ["invalid-node-entry"]
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-nodes-03"
+source = { file = "doc/zh/reference/nodes.md", lines = "217-219" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-routing-01"
+source = { file = "doc/zh/reference/routing.md", lines = "23-29" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-routing-02"
+source = { file = "doc/zh/reference/routing.md", lines = "104-104" }
+wrap = "routing"
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-routing-03"
+source = { file = "doc/zh/reference/routing.md", lines = "133-154" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
+
+[[case]]
+id = "honk-doc-zh-reference-subscription-01"
+source = { file = "doc/zh/reference/subscription.md", lines = "10-19" }
+wrap = ""
+layer = "structure"
+honk = "accept"
+dae = "accept"
+honk_diagnostics = []
+compare = "equal"
