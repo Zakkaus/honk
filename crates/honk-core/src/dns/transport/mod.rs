@@ -18,7 +18,6 @@ mod doh3;
 mod doh_message;
 mod doq;
 mod dot;
-mod failure;
 mod framing;
 mod idle_pool;
 mod lifecycle;

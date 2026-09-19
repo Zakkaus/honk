@@ -1,5 +1,12 @@
 use super::super::endpoint::DnsEndpoint;
-use super::failure::DeterministicResponse;
+
+/// A response the peer sent that cannot be a DNS answer to this query.
+#[derive(Debug, thiserror::Error)]
+#[error("{transport} {reason}")]
+pub(super) struct DeterministicResponse {
+    pub(super) transport: &'static str,
+    pub(super) reason: String,
+}
 
 /// `host[:port]` authority string (brackets bare IPv6, elides default 443).
 fn authority(host: &str, port: u16) -> String {
@@ -45,10 +52,8 @@ pub(super) fn build_doh_request(
         .map_err(|e| anyhow::anyhow!("{label} request build: {e}"))
 }
 
-/// Shared DoH/DoH3 response validation: 2xx status, minimum DNS header size,
-/// then restore the original query ID.
-/// The status verdict, before the body is read: a 5xx may pass on a fresh
-/// session, so it stays a plain error; a 4xx is the peer's settled answer.
+/// Judge status before reading the body: 5xx retains the query retry, while
+/// other non-success responses do not justify rebuilding the session.
 pub(super) fn check_doh_status(
     label: &'static str,
     status: http::StatusCode,

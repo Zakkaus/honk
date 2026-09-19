@@ -1,6 +1,12 @@
 use std::future::Future;
 
-use super::failure::FailureClass;
+fn should_retry(error: &anyhow::Error) -> bool {
+    !honk_outbound::proxy::is_packet_rejection(error)
+        && !error.chain().any(|cause| {
+            cause.is::<super::doh_message::DeterministicResponse>()
+                || cause.is::<super::body::DnsMessageTooLarge>()
+        })
+}
 
 pub(super) async fn exchange_with_retry<Once, Fut, Reset, ResetFut>(
     label: &'static str,
@@ -12,18 +18,16 @@ pub(super) async fn exchange_with_retry<Once, Fut, Reset, ResetFut>(
 where
     Once: Fn(Option<honk_outbound::group::ScoreReporter>) -> Fut,
     Fut: Future<Output = anyhow::Result<Vec<u8>>>,
-    Reset: FnOnce() -> ResetFut,
+    Reset: FnOnce(&anyhow::Error) -> ResetFut,
     ResetFut: Future<Output = ()>,
 {
     let reporter = feedback.map(honk_outbound::group::ScoreFeedback::start);
     let result = match once(reporter.clone()).await {
         Ok(response) => Ok(response),
-        Err(first) if super::failure::classify(&first) != FailureClass::SessionSuspect => {
-            Err(first)
-        }
+        Err(first) if !should_retry(&first) => Err(first),
         Err(first) => {
             record_reset(label);
-            reset().await;
+            reset(&first).await;
             once(reporter.clone()).await.map_err(|error| {
                 let detail = error.to_string();
                 error.context(format!(
@@ -105,7 +109,7 @@ mod tests {
                 }
                 Ok(vec![1, 2, 3])
             },
-            || async {
+            |_| async {
                 resets.fetch_add(1, Ordering::SeqCst);
             },
             None,
@@ -195,7 +199,7 @@ mod tests {
                     reporter.rx(1);
                     Ok(response.clone())
                 },
-                || async {},
+                |_| async {},
                 Some(&feedback),
             )
             .await
@@ -222,7 +226,7 @@ mod tests {
                 call_count.fetch_add(1, Ordering::SeqCst);
                 async {
                     Err::<Vec<u8>, _>(
-                        crate::dns::transport::failure::DeterministicResponse {
+                        crate::dns::transport::doh_message::DeterministicResponse {
                             transport: "DoH",
                             reason: "HTTP status 400".into(),
                         }
@@ -230,7 +234,7 @@ mod tests {
                     )
                 }
             },
-            move || {
+            move |_| {
                 reset_count.fetch_add(1, Ordering::SeqCst);
                 async {}
             },
@@ -239,7 +243,11 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert_eq!(error.to_string(), "DoH HTTP status 400");
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.is::<super::super::doh_message::DeterministicResponse>())
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(resets.load(Ordering::SeqCst), 0);
     }
@@ -258,7 +266,7 @@ mod tests {
                 call_count.fetch_add(1, Ordering::SeqCst);
                 async { Err::<Vec<u8>, _>(honk_outbound::proxy::PacketRejection::Policy.into()) }
             },
-            move || {
+            move |_| {
                 reset_count.fetch_add(1, Ordering::SeqCst);
                 async {}
             },
