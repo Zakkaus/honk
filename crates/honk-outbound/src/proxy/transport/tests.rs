@@ -120,6 +120,10 @@ async fn grpc_queued_write_owns_caller_bytes_and_zero_write_errors() {
         control_pending: false,
         stream_eof: false,
         end_stream_sent: false,
+        data_seen: false,
+        header_block: Vec::new(),
+        header_end_stream: false,
+        failure: None,
     };
 
     let mut owned = b"owned".to_vec();
@@ -170,6 +174,10 @@ async fn grpc_queued_write_owns_caller_bytes_and_zero_write_errors() {
         control_pending: false,
         stream_eof: false,
         end_stream_sent: false,
+        data_seen: false,
+        header_block: Vec::new(),
+        header_end_stream: false,
+        failure: None,
     };
     let error = tokio::time::timeout(std::time::Duration::from_millis(20), zero.flush())
         .await
@@ -196,6 +204,10 @@ async fn grpc_partial_control_writes_reclaim_consumed_storage() {
         control_pending: false,
         stream_eof: false,
         end_stream_sent: false,
+        data_seen: false,
+        header_block: Vec::new(),
+        header_end_stream: false,
+        failure: None,
     };
     assert_eq!(stream.write(b"seed").await.unwrap(), 4);
     let mut expected = vec![0, 0, 11, H2_DATA, 0, 0, 0, 0, 1, 0, 0, 0, 0, 6, 0x0a, 4];
@@ -259,6 +271,10 @@ async fn test_grpc_stream_tolerates_short_reads_and_writes() {
         control_pending: false,
         stream_eof: false,
         end_stream_sent: false,
+        data_seen: false,
+        header_block: Vec::new(),
+        header_end_stream: false,
+        failure: None,
     };
 
     // Read: the frame arrives one byte at a time but must decode whole.
@@ -561,6 +577,10 @@ async fn test_grpc_transport_small_send_window_and_end_stream() {
         control_pending: false,
         stream_eof: false,
         end_stream_sent: false,
+        data_seen: false,
+        header_block: Vec::new(),
+        header_end_stream: false,
+        failure: None,
     };
 
     // Shrink the open stream's send window to zero.
@@ -672,6 +692,10 @@ async fn test_grpc_transport_window_refresh() {
         control_pending: false,
         stream_eof: false,
         end_stream_sent: false,
+        data_seen: false,
+        header_block: Vec::new(),
+        header_end_stream: false,
+        failure: None,
     };
     let data_len = H2_WINDOW_REFRESH + 100;
     let mut wire = Vec::new();
@@ -701,4 +725,307 @@ async fn read_h2_header(stream: &mut tokio::net::TcpStream) -> (u32, u8, u32) {
     let ty = hdr[3];
     let sid = u32::from_be_bytes([hdr[5] & 0x7F, hdr[6], hdr[7], hdr[8]]);
     (len, ty, sid)
+}
+
+/// A gRPC stream over a scripted inner transport: the frames in `wire`
+/// arrive one byte at a time, the way the short-read regression test does.
+fn scripted_grpc(wire: Vec<u8>) -> GrpcStream {
+    GrpcStream {
+        inner: Box::new(DribbleStream {
+            reader: wire.into(),
+            written: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        }),
+        stream_id: 1,
+        read_buf: Vec::new(),
+        undecoded: Vec::new(),
+        msg_buf: Vec::new(),
+        write_queue: VecDeque::new(),
+        send_stream_window: H2_DEFAULT_WINDOW,
+        send_conn_window: H2_DEFAULT_WINDOW,
+        peer_initial_window: H2_DEFAULT_WINDOW,
+        peer_max_frame: H2_DEFAULT_MAX_FRAME,
+        recv_unacked: 0,
+        control_pending: false,
+        stream_eof: false,
+        end_stream_sent: false,
+        data_seen: false,
+        header_block: Vec::new(),
+        header_end_stream: false,
+        failure: None,
+    }
+}
+
+fn h2_frame(frame_type: u8, flags: u8, stream_id: u32, payload: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(9 + payload.len());
+    push_frame_header(
+        &mut frame,
+        payload.len() as u32,
+        frame_type,
+        flags,
+        stream_id,
+    );
+    frame.extend_from_slice(payload);
+    frame
+}
+
+/// One gRPC DATA frame carrying `content` in the gun envelope.
+fn grpc_data_frame(content: &[u8]) -> Vec<u8> {
+    let mut payload = vec![
+        0,
+        0,
+        0,
+        0,
+        (content.len() + 2) as u8,
+        0x0a,
+        content.len() as u8,
+    ];
+    payload.extend_from_slice(content);
+    h2_frame(H2_DATA, 0, 1, &payload)
+}
+
+/// An HPACK literal field (no indexing) with plain-text name and value.
+fn hpack_literal(name: &str, value: &str) -> Vec<u8> {
+    let mut field = vec![0x00, name.len() as u8];
+    field.extend_from_slice(name.as_bytes());
+    field.push(value.len() as u8);
+    field.extend_from_slice(value.as_bytes());
+    field
+}
+
+async fn read_all(stream: &mut GrpcStream) -> std::io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    tokio::io::AsyncReadExt::read_to_end(stream, &mut out)
+        .await
+        .map(|_| out)
+}
+
+#[tokio::test]
+async fn grpc_trailers_only_response_is_a_refusal() {
+    // `:status 200` (static index 8) then `grpc-status: 14`, END_STREAM, no DATA.
+    let mut block = vec![0x88];
+    block.extend(hpack_literal("grpc-status", "14"));
+    let wire = h2_frame(
+        H2_HEADERS,
+        H2_FLAG_END_HEADERS | H2_FLAG_END_STREAM,
+        1,
+        &block,
+    );
+    let error = read_all(&mut scripted_grpc(wire)).await.unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
+    assert!(error.to_string().contains("grpc-status 14"), "{error}");
+}
+
+#[tokio::test]
+async fn grpc_http_error_status_is_a_refusal() {
+    // `:status 404` (static index 13) with a body the client must not take as data.
+    let mut wire = h2_frame(H2_HEADERS, H2_FLAG_END_HEADERS, 1, &[0x8d]);
+    wire.extend(h2_frame(
+        H2_DATA,
+        H2_FLAG_END_STREAM,
+        1,
+        b"<html>not found</html>",
+    ));
+    let error = read_all(&mut scripted_grpc(wire)).await.unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
+    assert!(error.to_string().contains("HTTP 404"), "{error}");
+}
+
+#[tokio::test]
+async fn grpc_reset_and_goaway_are_errors() {
+    let reset = h2_frame(H2_RST_STREAM, 0, 1, &7u32.to_be_bytes());
+    let error = read_all(&mut scripted_grpc(reset)).await.unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+    assert!(error.to_string().contains("error code 7"), "{error}");
+
+    let mut goaway = 1u32.to_be_bytes().to_vec();
+    goaway.extend_from_slice(&11u32.to_be_bytes());
+    let error = read_all(&mut scripted_grpc(h2_frame(H2_GOAWAY, 0, 0, &goaway)))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionAborted);
+    assert!(error.to_string().contains("error code 11"), "{error}");
+}
+
+#[tokio::test]
+async fn grpc_served_stream_with_ok_trailers_reads_to_eof() {
+    let mut wire = h2_frame(H2_HEADERS, H2_FLAG_END_HEADERS, 1, &[0x88]);
+    wire.extend(grpc_data_frame(b"pong"));
+    // Padded trailers, the header block split over a CONTINUATION frame.
+    let trailers = hpack_literal("grpc-status", "0");
+    let (head, tail) = trailers.split_at(4);
+    let mut padded = vec![2];
+    padded.extend_from_slice(head);
+    padded.extend_from_slice(&[0, 0]);
+    wire.extend(h2_frame(
+        H2_HEADERS,
+        H2_FLAG_END_STREAM | H2_FLAG_PADDED,
+        1,
+        &padded,
+    ));
+    wire.extend(h2_frame(H2_CONTINUATION, H2_FLAG_END_HEADERS, 1, tail));
+    assert_eq!(read_all(&mut scripted_grpc(wire)).await.unwrap(), b"pong");
+}
+
+#[tokio::test]
+async fn grpc_failed_trailers_after_data_are_an_error() {
+    let mut wire = h2_frame(H2_HEADERS, H2_FLAG_END_HEADERS, 1, &[0x88]);
+    wire.extend(grpc_data_frame(b"partial"));
+    let block = hpack_literal("grpc-status", "13");
+    wire.extend(h2_frame(
+        H2_HEADERS,
+        H2_FLAG_END_HEADERS | H2_FLAG_END_STREAM,
+        1,
+        &block,
+    ));
+    let mut stream = scripted_grpc(wire);
+    let mut first = [0u8; 7];
+    tokio::io::AsyncReadExt::read_exact(&mut stream, &mut first)
+        .await
+        .unwrap();
+    assert_eq!(&first, b"partial");
+    let error = read_all(&mut stream).await.unwrap_err();
+    assert!(error.to_string().contains("grpc-status 13"), "{error}");
+}
+
+#[tokio::test]
+async fn grpc_graceful_goaway_lets_the_admitted_stream_finish() {
+    // GOAWAY(last_stream_id = 1, NO_ERROR) then the response completes.
+    let mut goaway = 1u32.to_be_bytes().to_vec();
+    goaway.extend_from_slice(&0u32.to_be_bytes());
+    let mut wire = h2_frame(H2_GOAWAY, 0, 0, &goaway);
+    wire.extend(h2_frame(H2_HEADERS, H2_FLAG_END_HEADERS, 1, &[0x88]));
+    wire.extend(grpc_data_frame(b"late"));
+    wire.extend(h2_frame(
+        H2_HEADERS,
+        H2_FLAG_END_HEADERS | H2_FLAG_END_STREAM,
+        1,
+        &hpack_literal("grpc-status", "0"),
+    ));
+    assert_eq!(read_all(&mut scripted_grpc(wire)).await.unwrap(), b"late");
+    // GOAWAY that excludes our stream is a failure even with NO_ERROR.
+    let mut excluded = 0u32.to_be_bytes().to_vec();
+    excluded.extend_from_slice(&0u32.to_be_bytes());
+    let error = read_all(&mut scripted_grpc(h2_frame(H2_GOAWAY, 0, 0, &excluded)))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionAborted);
+}
+
+#[tokio::test]
+async fn grpc_split_trailers_only_refusal_is_an_error() {
+    // END_STREAM travels on the HEADERS frame; the verdict waits for CONTINUATION.
+    let block = hpack_literal("grpc-status", "14");
+    let (head, tail) = block.split_at(5);
+    let mut wire = h2_frame(H2_HEADERS, H2_FLAG_END_STREAM, 1, head);
+    wire.extend(h2_frame(H2_CONTINUATION, H2_FLAG_END_HEADERS, 1, tail));
+    let error = read_all(&mut scripted_grpc(wire)).await.unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
+    assert!(error.to_string().contains("grpc-status 14"), "{error}");
+}
+
+/// A trailer the encoder wrote with a Huffman name and a dynamic-table reference.
+#[tokio::test]
+async fn grpc_huffman_and_dynamic_table_trailers_are_read() {
+    let mut wire = h2_frame(H2_HEADERS, H2_FLAG_END_HEADERS, 1, &[0x88]);
+    wire.extend(grpc_data_frame(b"partial"));
+    // Literal with incremental indexing: Huffman "grpc-status" (RFC 7541 appendix B) = "13", then
+    // an indexed reference to that new dynamic entry (index 62) in a second block.
+    let mut block = vec![
+        0x40, 0x88, 0x9a, 0xca, 0xc8, 0xb2, 0x12, 0x34, 0xda, 0x8f, 0x02, b'1', b'3',
+    ];
+    wire.extend(h2_frame(H2_HEADERS, H2_FLAG_END_HEADERS, 1, &block));
+    block = vec![0x80 | 62];
+    wire.extend(h2_frame(
+        H2_HEADERS,
+        H2_FLAG_END_HEADERS | H2_FLAG_END_STREAM,
+        1,
+        &block,
+    ));
+    let mut stream = scripted_grpc(wire);
+    let mut first = [0u8; 7];
+    tokio::io::AsyncReadExt::read_exact(&mut stream, &mut first)
+        .await
+        .unwrap();
+    let error = read_all(&mut stream).await.unwrap_err();
+    assert!(error.to_string().contains("grpc-status 13"), "{error}");
+}
+
+/// Against a real h2 server, whose HPACK encoder uses Huffman strings and the
+/// dynamic table: a stream that fails after data is an error, not EOF.
+#[tokio::test]
+async fn grpc_failed_trailers_from_h2_server_are_an_error() {
+    let mut node = transport_node(443);
+    node.transport_mut().unwrap().grpc_service = Some("svc".into());
+    let (client, server) = tokio::io::duplex(4096);
+    let serve = async {
+        let mut connection = h2::server::handshake(server).await.unwrap();
+        let (_, mut respond) = connection.accept().await.expect("request").unwrap();
+        let response = http::Response::builder()
+            .status(200)
+            .header("content-type", "application/grpc")
+            .body(())
+            .unwrap();
+        let mut body = respond.send_response(response, false).unwrap();
+        let mut message = vec![0, 0, 0, 0, 6, 0x0a, 0x04];
+        message.extend_from_slice(b"pong");
+        body.send_data(bytes::Bytes::from(message), false).unwrap();
+        let mut trailers = http::HeaderMap::new();
+        trailers.insert("grpc-status", "13".parse().unwrap());
+        trailers.insert("grpc-message", "internal".parse().unwrap());
+        body.send_trailers(trailers).unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while connection.accept().await.is_some() {}
+        })
+        .await;
+    };
+    let read = async {
+        let mut stream = wrap_grpc(&node, Box::new(client)).await.unwrap();
+        let mut first = [0u8; 4];
+        tokio::io::AsyncReadExt::read_exact(&mut stream, &mut first)
+            .await
+            .unwrap();
+        assert_eq!(&first, b"pong");
+        let mut rest = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut rest).await
+    };
+    let (result, _) = tokio::join!(read, serve);
+    let error = result.expect_err("non-zero grpc-status trailers are a failure");
+    assert!(error.to_string().contains("grpc-status 13"), "{error}");
+}
+
+/// Against a real h2 server, whose HPACK encoder may use Huffman strings and
+/// the dynamic table: a refused stream is still an error, never a clean EOF.
+#[tokio::test]
+async fn grpc_refusal_from_h2_server_is_an_error() {
+    let mut node = transport_node(443);
+    node.transport_mut().unwrap().grpc_service = Some("svc".into());
+    let (client, server) = tokio::io::duplex(4096);
+    let refuse = async {
+        let mut connection = h2::server::handshake(server).await.unwrap();
+        let (_, mut respond) = connection.accept().await.expect("request").unwrap();
+        let response = http::Response::builder()
+            .status(200)
+            .header("content-type", "application/grpc")
+            .header("grpc-status", "14")
+            .body(())
+            .unwrap();
+        respond.send_response(response, true).unwrap();
+        // Keep the connection alive until the client has read the refusal.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while connection.accept().await.is_some() {}
+        })
+        .await;
+    };
+    let read = async {
+        let mut stream = wrap_grpc(&node, Box::new(client)).await.unwrap();
+        let mut out = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut out).await
+    };
+    let (result, _) = tokio::join!(read, refuse);
+    let error = result.expect_err("a trailers-only gRPC response is a refusal");
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionRefused,
+        "{error}"
+    );
 }

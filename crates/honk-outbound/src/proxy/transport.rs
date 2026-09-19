@@ -332,6 +332,13 @@ struct GrpcStream {
     stream_eof: bool,
     /// poll_shutdown already queued the END_STREAM marker.
     end_stream_sent: bool,
+    /// DATA arrived on our stream, so later HEADERS are trailers, not a refusal.
+    data_seen: bool,
+    /// Header block fragments until END_HEADERS, and whether that block ends the stream.
+    header_block: Vec<u8>,
+    header_end_stream: bool,
+    /// The peer's refusal or reset, reported by every poll instead of EOF.
+    failure: Option<(std::io::ErrorKind, String)>,
 }
 
 impl std::fmt::Debug for GrpcStream {
@@ -344,12 +351,17 @@ impl std::fmt::Debug for GrpcStream {
 
 const H2_DATA: u8 = 0x0;
 const H2_HEADERS: u8 = 0x1;
+const H2_RST_STREAM: u8 = 0x3;
 const H2_SETTINGS: u8 = 0x4;
+const H2_GOAWAY: u8 = 0x7;
 const H2_WINDOW_UPDATE: u8 = 0x8;
+const H2_CONTINUATION: u8 = 0x9;
 
 const H2_FLAG_END_STREAM: u8 = 0x01;
 const H2_FLAG_ACK: u8 = 0x01;
 const H2_FLAG_END_HEADERS: u8 = 0x04;
+const H2_FLAG_PADDED: u8 = 0x08;
+const H2_FLAG_PRIORITY: u8 = 0x20;
 
 const H2_DEFAULT_WINDOW: i64 = 65535;
 /// RFC 7540 caps a flow-control window at 2^31 - 1.
@@ -401,6 +413,10 @@ impl GrpcStream {
             control_pending: false,
             stream_eof: false,
             end_stream_sent: false,
+            data_seen: false,
+            header_block: Vec::new(),
+            header_end_stream: false,
+            failure: None,
         };
         s.send_preface().await?;
         s.send_settings().await?;
@@ -513,6 +529,9 @@ impl AsyncRead for GrpcStream {
             if !self.read_buf.is_empty() {
                 continue;
             }
+            if let Some(error) = self.failure_error() {
+                return Poll::Ready(Err(error));
+            }
             if self.stream_eof {
                 return Poll::Ready(Ok(()));
             }
@@ -544,6 +563,235 @@ impl AsyncRead for GrpcStream {
             }
         }
     }
+}
+
+/// A HEADERS payload without padding and priority fields (RFC 7540 §6.2).
+fn header_fragment(payload: &[u8], flags: u8) -> &[u8] {
+    let unpadded = strip_padding(payload, flags);
+    if flags & H2_FLAG_PRIORITY != 0 {
+        unpadded.get(5..).unwrap_or(&[])
+    } else {
+        unpadded
+    }
+}
+
+/// A payload without its padding (RFC 7540 §6.1).
+fn strip_padding(payload: &[u8], flags: u8) -> &[u8] {
+    if flags & H2_FLAG_PADDED == 0 {
+        return payload;
+    }
+    match payload.split_first() {
+        Some((&pad, rest)) if rest.len() >= pad as usize => &rest[..rest.len() - pad as usize],
+        _ => &[],
+    }
+}
+
+/// The `:status` and `grpc-status` fields of one HPACK header block. The
+/// walk keeps the dynamic table the block builds (RFC 7541 §2.3.2, §4) so a
+/// reference to an earlier field resolves; every other field is read for its
+/// length only. A malformed block yields what was read before it.
+#[derive(Default)]
+struct HeaderVerdict {
+    status: Option<u16>,
+    grpc_status: Option<u32>,
+}
+
+/// The static table (RFC 7541 appendix A): names, and the `:status` values.
+/// Names are kept whole because dynamic-table eviction is sized by them.
+const HPACK_STATIC_NAMES: [&str; 61] = [
+    ":authority",
+    ":method",
+    ":method",
+    ":path",
+    ":path",
+    ":scheme",
+    ":scheme",
+    ":status",
+    ":status",
+    ":status",
+    ":status",
+    ":status",
+    ":status",
+    ":status",
+    "accept-charset",
+    "accept-encoding",
+    "accept-language",
+    "accept-ranges",
+    "accept",
+    "access-control-allow-origin",
+    "age",
+    "allow",
+    "authorization",
+    "cache-control",
+    "content-disposition",
+    "content-encoding",
+    "content-language",
+    "content-length",
+    "content-location",
+    "content-range",
+    "content-type",
+    "cookie",
+    "date",
+    "etag",
+    "expect",
+    "expires",
+    "from",
+    "host",
+    "if-match",
+    "if-modified-since",
+    "if-none-match",
+    "if-range",
+    "if-unmodified-since",
+    "last-modified",
+    "link",
+    "location",
+    "max-forwards",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "range",
+    "referer",
+    "refresh",
+    "retry-after",
+    "server",
+    "set-cookie",
+    "strict-transport-security",
+    "transfer-encoding",
+    "user-agent",
+    "vary",
+    "via",
+    "www-authenticate",
+];
+const HPACK_STATIC_STATUS: [&str; 7] = ["200", "204", "206", "304", "400", "404", "500"];
+const HPACK_STATIC_LEN: usize = HPACK_STATIC_NAMES.len();
+
+fn hpack_static(index: usize) -> Option<(&'static str, &'static str)> {
+    let name = HPACK_STATIC_NAMES.get(index.checked_sub(1)?)?;
+    let value = match index {
+        2 => "GET",
+        3 => "POST",
+        4 => "/",
+        5 => "/index.html",
+        6 => "http",
+        7 => "https",
+        8..=14 => HPACK_STATIC_STATUS[index - 8],
+        16 => "gzip, deflate",
+        _ => "",
+    };
+    Some((name, value))
+}
+const HPACK_ENTRY_OVERHEAD: usize = 32;
+
+fn read_header_verdict(block: &[u8]) -> HeaderVerdict {
+    let mut verdict = HeaderVerdict::default();
+    let mut dynamic: std::collections::VecDeque<(String, String)> = Default::default();
+    let mut dynamic_size = 0usize;
+    let mut dynamic_max = 4096usize;
+    let lookup = |dynamic: &std::collections::VecDeque<(String, String)>, index: usize| {
+        if index == 0 {
+            None
+        } else if index <= HPACK_STATIC_LEN {
+            hpack_static(index).map(|(name, value)| (name.to_owned(), value.to_owned()))
+        } else {
+            dynamic.get(index - HPACK_STATIC_LEN - 1).cloned()
+        }
+    };
+    let mut at = 0;
+    while at < block.len() {
+        let first = block[at];
+        let (prefix, indexed, add) = if first & 0x80 != 0 {
+            (7, true, false)
+        } else if first & 0x40 != 0 {
+            (6, false, true)
+        } else if first & 0x20 != 0 {
+            let Some((size, used)) = hpack_int(&block[at..], 5) else {
+                break;
+            };
+            at += used;
+            dynamic_max = size;
+            while dynamic_size > dynamic_max {
+                if let Some((name, value)) = dynamic.pop_back() {
+                    dynamic_size -= name.len() + value.len() + HPACK_ENTRY_OVERHEAD;
+                }
+            }
+            continue;
+        } else {
+            (4, false, false)
+        };
+        let Some((index, used)) = hpack_int(&block[at..], prefix) else {
+            break;
+        };
+        at += used;
+        let (name, value) = if indexed {
+            let Some(field) = lookup(&dynamic, index) else {
+                break;
+            };
+            field
+        } else {
+            let name = if index == 0 {
+                let Some((text, used)) = hpack_string(&block[at..]) else {
+                    break;
+                };
+                at += used;
+                text
+            } else {
+                let Some((name, _)) = lookup(&dynamic, index) else {
+                    break;
+                };
+                name
+            };
+            let Some((value, used)) = hpack_string(&block[at..]) else {
+                break;
+            };
+            at += used;
+            (name, value)
+        };
+        match name.as_str() {
+            ":status" => verdict.status = value.parse().ok(),
+            "grpc-status" => verdict.grpc_status = value.parse().ok(),
+            _ => {}
+        }
+        if add {
+            dynamic_size += name.len() + value.len() + HPACK_ENTRY_OVERHEAD;
+            dynamic.push_front((name, value));
+            while dynamic_size > dynamic_max {
+                if let Some((name, value)) = dynamic.pop_back() {
+                    dynamic_size -= name.len() + value.len() + HPACK_ENTRY_OVERHEAD;
+                }
+            }
+        }
+    }
+    verdict
+}
+
+/// An HPACK integer with an `n`-bit prefix: value and bytes used.
+fn hpack_int(bytes: &[u8], prefix_bits: u32) -> Option<(usize, usize)> {
+    let max = (1usize << prefix_bits) - 1;
+    let mut value = (*bytes.first()? as usize) & max;
+    if value < max {
+        return Some((value, 1));
+    }
+    let mut shift = 0;
+    for (i, &b) in bytes.iter().enumerate().skip(1).take(10) {
+        value = value.checked_add(((b & 0x7f) as usize) << shift)?;
+        if b & 0x80 == 0 {
+            return Some((value, i + 1));
+        }
+        shift += 7;
+    }
+    None
+}
+
+/// An HPACK string, plain or Huffman-coded: its text and the bytes used.
+fn hpack_string(bytes: &[u8]) -> Option<(String, usize)> {
+    let huffman = *bytes.first()? & 0x80 != 0;
+    let (len, used) = hpack_int(bytes, 7)?;
+    let raw = bytes.get(used..used + len)?;
+    let text = if huffman {
+        huffman::decode(raw)?
+    } else {
+        raw.to_vec()
+    };
+    Some((String::from_utf8_lossy(&text).into_owned(), used + len))
 }
 
 /// Append the 9-byte HTTP/2 frame header to `out`.
@@ -600,7 +848,44 @@ impl GrpcStream {
                 if self.recv_unacked >= H2_WINDOW_REFRESH {
                     self.queue_window_updates();
                 }
-                self.msg_buf.extend_from_slice(&payload);
+                if stream_id == self.stream_id {
+                    self.data_seen = true;
+                    self.msg_buf
+                        .extend_from_slice(strip_padding(&payload, flags));
+                }
+            }
+            H2_HEADERS if stream_id == self.stream_id => {
+                self.header_block
+                    .extend_from_slice(header_fragment(&payload, flags));
+                self.header_end_stream = flags & H2_FLAG_END_STREAM != 0;
+                if flags & H2_FLAG_END_HEADERS != 0 {
+                    self.judge_headers();
+                }
+            }
+            H2_CONTINUATION if stream_id == self.stream_id => {
+                self.header_block.extend_from_slice(&payload);
+                if flags & H2_FLAG_END_HEADERS != 0 {
+                    self.judge_headers();
+                }
+            }
+            H2_RST_STREAM if stream_id == self.stream_id && payload.len() == 4 => {
+                let code = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                self.fail(
+                    std::io::ErrorKind::ConnectionReset,
+                    format!("grpc: stream reset by peer (error code {code})"),
+                );
+            }
+            H2_GOAWAY if stream_id == 0 && payload.len() >= 8 => {
+                let last =
+                    u32::from_be_bytes([payload[0] & 0x7F, payload[1], payload[2], payload[3]]);
+                let code = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+                // A graceful GOAWAY that still admits our stream lets it finish.
+                if code != 0 || last < self.stream_id {
+                    self.fail(
+                        std::io::ErrorKind::ConnectionAborted,
+                        format!("grpc: connection closed by peer (error code {code})"),
+                    );
+                }
             }
             H2_SETTINGS if stream_id == 0 && flags & H2_FLAG_ACK == 0 => {
                 self.apply_peer_settings(&payload);
@@ -625,10 +910,61 @@ impl GrpcStream {
             }
             _ => {}
         }
-        if stream_id == self.stream_id && flags & H2_FLAG_END_STREAM != 0 {
+        // END_STREAM on a HEADERS frame takes effect once its block is complete and judged.
+        if stream_id == self.stream_id
+            && flags & H2_FLAG_END_STREAM != 0
+            && frame_type != H2_HEADERS
+        {
             self.stream_eof = true;
         }
         true
+    }
+
+    fn fail(&mut self, kind: std::io::ErrorKind, message: String) {
+        if self.failure.is_none() {
+            self.failure = Some((kind, message));
+        }
+    }
+
+    fn failure_error(&self) -> Option<std::io::Error> {
+        self.failure
+            .as_ref()
+            .map(|(kind, message)| std::io::Error::new(*kind, message.clone()))
+    }
+
+    /// A non-200 `:status`, a trailers-only response (END_STREAM before any
+    /// DATA, how a gRPC peer declines) or a non-zero `grpc-status` is a
+    /// failure; a block that cannot be read falls back to the END_STREAM shape.
+    fn judge_headers(&mut self) {
+        let block = std::mem::take(&mut self.header_block);
+        let end_stream = std::mem::take(&mut self.header_end_stream);
+        if end_stream {
+            self.stream_eof = true;
+        }
+        let HeaderVerdict {
+            status,
+            grpc_status,
+        } = read_header_verdict(&block);
+        if let Some(status) = status.filter(|s| *s != 200) {
+            self.fail(
+                std::io::ErrorKind::ConnectionRefused,
+                format!("grpc: peer answered HTTP {status}"),
+            );
+        } else if end_stream && !self.data_seen {
+            let detail = match grpc_status {
+                Some(code) => format!("grpc-status {code}"),
+                None => "trailers-only response".to_owned(),
+            };
+            self.fail(
+                std::io::ErrorKind::ConnectionRefused,
+                format!("grpc: stream refused by peer ({detail})"),
+            );
+        } else if let Some(code) = grpc_status.filter(|c| *c != 0) {
+            self.fail(
+                std::io::ErrorKind::Other,
+                format!("grpc: stream ended with grpc-status {code}"),
+            );
+        }
     }
 
     /// Apply the server's SETTINGS: INITIAL_WINDOW_SIZE adjusts the live
@@ -672,6 +1008,9 @@ impl GrpcStream {
     fn poll_send_window(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         while self.send_stream_window.min(self.send_conn_window) <= GRPC_MESSAGE_OVERHEAD_MIN as i64
         {
+            if let Some(error) = self.failure_error() {
+                return Poll::Ready(Err(error));
+            }
             if self.try_parse_frame() {
                 continue;
             }
@@ -801,6 +1140,9 @@ impl AsyncWrite for GrpcStream {
                 "grpc: stream write side is closed",
             )));
         }
+        if let Some(error) = self.failure_error() {
+            return Poll::Ready(Err(error));
+        }
         match self.drain_write_queue(cx) {
             Poll::Ready(Ok(())) => {}
             Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
@@ -863,5 +1205,6 @@ impl AsyncWrite for GrpcStream {
     }
 }
 
+mod huffman;
 #[cfg(test)]
 mod tests;
