@@ -290,6 +290,8 @@ Cold and pooled-bare Trojan streams use that same complete transport stack.
 TLS batching returns bytes already read before surfacing a later I/O error on
 the next non-empty read; it never converts that error into EOF.
 
+`transport_quality` owns advisory per-runtime carrier pressure. Common TCP/TLS/REALITY and AnyTLS use a physical-I/O adapter; Shadowsocks borrows its existing socket half. Linux `TCP_INFO` is read at most once per active second, checking each field against the returned ABI length; missing fields/errors remain unknown and never alter I/O. Vision Direct and ready-pool descriptor probing retain the socket path. Hy2/TUIC/Juicity reuse their existing one-second physical QUIC monitor, excluding pre-confirmation/pre-publication history and reseeding on peer changes. Logical mux children do not each report the same carrier event. No extra descriptor or per-TCP sampling task is retained; quiescent TCP has no new event-driven observation. See [Score pressure semantics](./groups.md#score-scoring-and-lifecycle).
+
 `proxy/transport/grpc.rs` implements gRPC gun framing over the existing `h2`
 client. HTTP/2 framing, HPACK/Huffman, continuation assembly and dynamic-table
 state belong to `h2`, with a 64 KiB response-header limit and the default 4 KiB
