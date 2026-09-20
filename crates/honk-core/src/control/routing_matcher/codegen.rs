@@ -456,19 +456,7 @@ fn emit_condition(
 ) -> anyhow::Result<()> {
     let on_true = if condition.not { fail } else { pass };
     let on_false = if condition.not { pass } else { fail };
-    match &condition.predicate {
-        KernelPredicate::DestinationIp(id) => {
-            emit_fact_bit_lazy(asm, FactKind::Destination, *id, on_true, on_false, fds)?
-        }
-        KernelPredicate::SourceIp(id) => {
-            emit_fact_bit_lazy(asm, FactKind::Source, *id, on_true, on_false, fds)?
-        }
-        KernelPredicate::Mac(id) => {
-            emit_fact_bit_lazy(asm, FactKind::Mac, *id, on_true, on_false, fds)?
-        }
-        _ => emit_predicate(asm, &condition.predicate, on_true, on_false)?,
-    }
-    Ok(())
+    emit_predicate(asm, &condition.predicate, on_true, on_false, fds)
 }
 
 /// Test one bit of a lazily resolved category. The READY bit is set only
@@ -503,19 +491,20 @@ fn emit_predicate(
     predicate: &KernelPredicate,
     on_true: Label,
     on_false: Label,
+    fds: &RoutingMapFds,
 ) -> anyhow::Result<()> {
     match predicate {
         KernelPredicate::Domain(id) => {
             emit_fact_bit(asm, FactKind::Domain, *id, on_true, on_false)?;
         }
         KernelPredicate::DestinationIp(id) => {
-            emit_fact_bit(asm, FactKind::Destination, *id, on_true, on_false)?;
+            emit_fact_bit_lazy(asm, FactKind::Destination, *id, on_true, on_false, fds)?;
         }
         KernelPredicate::SourceIp(id) => {
-            emit_fact_bit(asm, FactKind::Source, *id, on_true, on_false)?;
+            emit_fact_bit_lazy(asm, FactKind::Source, *id, on_true, on_false, fds)?;
         }
         KernelPredicate::Mac(id) => {
-            emit_fact_bit(asm, FactKind::Mac, *id, on_true, on_false)?;
+            emit_fact_bit_lazy(asm, FactKind::Mac, *id, on_true, on_false, fds)?;
         }
         KernelPredicate::DestinationPort(ranges) => {
             emit_port_ranges(asm, ranges, INPUT_DST_PORT, on_true, on_false)?;
@@ -809,12 +798,20 @@ mod tests {
         insn.code as u32 & 0x07 == BPF_LDX && insn.code as u32 & 0xe0 == BPF_MEM
     }
 
+    /// Index a jump lands on (`off` is relative to the next instruction).
+    fn jump_target(insns: &[bpf_insn], index: usize) -> usize {
+        (index as isize + 1 + insns[index].off as isize) as usize
+    }
+
     /// The #280 shape: two `sip && dip && dport` rules ahead of a long
     /// process-name chain, later `mac`, `sip`, `dip` and `domain` rules.
-    /// Every category is looked up once, on every path, at the entry of the
-    /// first rule that uses it (domain in the prologue).
+    /// Domain is still looked up in the prologue; Destination/Source/MAC
+    /// now emit one READY-guarded call site per predicate use, so the
+    /// static call count exceeds the old once-per-category total.
+    /// These assertions check emitted lookup sites, not runtime query
+    /// counts.
     #[test]
-    fn each_fact_category_is_resolved_exactly_once() {
+    fn each_lazy_fact_use_emits_a_guarded_call_site() {
         let names = json!([
             "dnsmasq",
             "systemd-resolved",
@@ -847,15 +844,12 @@ mod tests {
         ];
         let bytecode = emit(&rules);
         let calls = lookups(&bytecode);
-        // One guarded call site per fact use: domain in the prologue, and
-        // one per Destination/Source/MAC predicate across the rules. A
-        // later rule still resolves a category an earlier rule skipped, so
-        // the static count exceeds the old once-per-category total; the
-        // READY guard keeps each category to one runtime lookup.
+        // Domain in the prologue plus one guarded call site per
+        // Destination/Source/MAC predicate use across the rules.
         assert_eq!(
             calls.len(),
             9,
-            "domain in prologue + per-use lazy lookups: {calls:?}"
+            "domain in prologue + per-use lazy lookup sites: {calls:?}"
         );
         let rule0 = rule_start(&bytecode, 0);
         let rule1 = rule_start(&bytecode, 1);
@@ -968,12 +962,10 @@ mod tests {
         }
     }
 
-    /// A category used by a later rule is resolved at that use, inside the
-    /// rule's own conditions — not at the rule entry before a port
-    /// short-circuit. The port compare precedes the lazy lookup, and a
-    /// matching port still resolves the category once via its READY guard.
+    /// Port failure jumps beyond the first MAC lookup; each MAC lookup
+    /// site has a READY guard targeting its stack-bit test.
     #[test]
-    fn a_fact_is_resolved_at_its_first_reached_use_after_ports() {
+    fn port_failure_skips_lazy_fact_call_and_mac_calls_are_guarded() {
         let rules = [
             rule(json!({"process_name": ["dnsmasq"]}), "direct"),
             rule(json!({"port": ["53"]}), "direct"),
@@ -1002,6 +994,49 @@ mod tests {
             "port read at {port_compare}, calls {calls:?} vs rule 3 at {rule3}"
         );
         assert!(rule3 < calls[1], "rule 3 lookup {calls:?} after {rule3}");
+
+        let insns = &bytecode.insns;
+        // A failed port compare jumps over the whole lazy block to fail.
+        assert!(
+            (port_compare..calls[0]).any(|index| {
+                let insn = &insns[index];
+                insn.code as u32 == BPF_JMP | BPF_JA && jump_target(insns, index) > calls[0]
+            }),
+            "no failed-port jump past the lazy lookup at {calls:?}"
+        );
+        // Every lazy call site is guarded by mov R0,R8; and R0,bit;
+        // jne R0,0 -> the stack bit test, so an already-resolved category
+        // skips its whole lookup block.
+        for &call in &calls {
+            let guard = (0..call)
+                .rev()
+                .find(|&index| {
+                    let insn = &insns[index];
+                    insn.code as u32 == BPF_ALU64 | BPF_MOV | BPF_X
+                        && insn.dst_reg() == R0
+                        && insn.src_reg() == READY
+                })
+                .expect("READY reload before lazy call");
+            let (and, jne) = (&insns[guard + 1], &insns[guard + 2]);
+            assert!(
+                and.code as u32 == BPF_ALU64 | BPF_AND | BPF_K
+                    && and.dst_reg() == R0
+                    && and.imm == 1 << (FactKind::Mac as u8 - 1),
+                "READY bit test before call at {call}"
+            );
+            assert!(
+                jne.code as u32 == BPF_JMP | BPF_JNE | BPF_K
+                    && jne.dst_reg() == R0
+                    && jne.imm == 0
+                    && jump_target(insns, guard + 2) > call,
+                "READY jump does not skip the lookup at {call}"
+            );
+            let bit_test = &insns[jump_target(insns, guard + 2)];
+            assert!(
+                is_load(bit_test) && bit_test.src_reg() == R10,
+                "READY jump lands off the stack bit test at {call}"
+            );
+        }
     }
 
     #[test]
