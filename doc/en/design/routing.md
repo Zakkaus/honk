@@ -164,23 +164,36 @@ matching ancestor predicate bits, so longest-prefix lookup preserves ordered
 rule semantics. Facts use the complete `DomainRouting` bitmap within their own
 generation; a staged prefix cannot shadow facts from another generation.
 
-Within one invocation, a destination IP, source IP, or MAC category used by two
-or more conditions is looked up lazily at its first reached condition. Aligned
-stack slots retain the pointer (including NULL) and a separate readiness flag;
-each condition still tests its own positive bit before applying negation.
-Unused and single-use categories have no cache state. Early returns do not
-look up unreached categories, but repeated categories pay stack initialization.
-No fact pointer survives the invocation or crosses a generation. The entry
-domain lookup remains unchanged because it also determines `domain_final`.
+Facts are values, not pointers. Each category (domain, destination IP, source
+IP, MAC) is resolved at most once per invocation: the lookup copies the 32-byte
+`DomainRouting` bitmap out of the map value into a fixed stack area for that
+category, or fills the area with zeros when the input has no such fact or the
+map has no entry. Every fact use is dominated by that resolution and no map
+pointer is read after it; each condition tests its bit directly in the area (a
+zero bitmap fails every positive bit, which is what a missing entry meant),
+then applies negation. The domain is resolved in the prologue because a hit
+also sets `domain_final`; the other categories are resolved at the entry of the
+first rule that uses them, before any of that rule's conditions can branch, so
+flows decided by earlier rules skip the lookup. The areas are invocation-local;
+nothing in them crosses a generation.
 
-Emission tracks three-bit definite/possible readiness masks. Every failed
-condition is a predecessor of the next rule: definite readiness intersects at
-that join, while possible readiness unions. A known first use omits the ready
-check, a definitely ready use only reloads its pointer, and an uncertain use
-keeps the runtime guard. NULL and missing-input results count as computed;
-negation does not change that state. Cache initialization remains unchanged.
-IPv4/IPv6 key construction and map selection join at one lookup call; only
-IPv4 key padding is zeroed, without clearing bytes immediately overwritten.
+The verifier is why. A pointer's type depends on the lookup outcome, and the
+verifier never merges a NULL with a map pointer, so a fact pointer kept live
+across later rules multiplied the states walked through everything emitted
+after it; two `sip && dip && dport` rules ahead of fifteen process-name rules
+pushed a policy over the 1,000,000-instruction budget (#280: 159,837
+instructions processed without them, over 1,000,000 with, on Linux 6.12).
+Copied bitmaps are scalars, and a recorded imprecise scalar state can subsume
+the others when the rest of the state is compatible. Branch layout is part of
+that: the verifier explores the fall-through of an unresolved conditional
+first, so the copy from a map value sits on the fall-through at every split
+(including the IPv4/IPv6 dispatch) and the zero fill on the jump target; a
+zero fill recorded first becomes precise once a bit test on it is predictable
+and cannot subsume the later unknown values. Measured on the same kernel, the
+issue's policy now verifies in about 53,000 processed instructions with or
+without the two rules. IPv4/IPv6 key construction and map selection still join
+at one lookup call; only IPv4 key padding is zeroed, without clearing bytes
+immediately overwritten.
 
 Fact preparation keeps hash-first duplicate coalescing, sorts only unique keys,
 and applies ancestor inheritance in the original vector before compacting its

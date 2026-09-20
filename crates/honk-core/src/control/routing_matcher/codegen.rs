@@ -24,13 +24,16 @@ const R4: u8 = 4;
 const R5: u8 = 5;
 const R6: u8 = 6;
 const R7: u8 = 7;
-const R8: u8 = 8;
 const R10: u8 = 10;
-const STACK_DOMAIN_KEY: i16 = -96;
 const MAP_LOOKUP_ELEM: i32 = 1;
 const BPF_INSTRUCTION_CAPACITY: usize = 1_000_000;
 const PSEUDO_MAP_FD: u8 = 1;
-const STACK_KEY: i16 = -64;
+/// Bytes of one `DomainRouting` bitmap, copied out of a map value.
+const FACT_BYTES: i16 = (ROUTING_FACT_CAPACITY / 8) as i16;
+/// LPM/MAC lookup key: 20 bytes written, 32 reserved.
+const STACK_KEY: i16 = -(4 * FACT_BYTES) - 32;
+/// Domain lookup key: the 16-byte destination address.
+const STACK_DOMAIN_KEY: i16 = STACK_KEY - 16;
 const INPUT_SRC_IP: i16 = std::mem::offset_of!(RoutingInput, src_ip) as i16;
 const INPUT_DST_IP: i16 = std::mem::offset_of!(RoutingInput, dst_ip) as i16;
 const INPUT_MAC: i16 = std::mem::offset_of!(RoutingInput, mac) as i16;
@@ -48,8 +51,12 @@ const MUST: i16 = std::mem::offset_of!(RoutingDecision, must) as i16;
 const DOMAIN_FINAL: i16 = std::mem::offset_of!(RoutingDecision, domain_final) as i16;
 const RULE_ID: i16 = std::mem::offset_of!(RoutingDecision, rule_id) as i16;
 
+/// One lookup category. Each owns a 32-byte stack area holding its
+/// `DomainRouting` bitmap once resolved: domain at [-32, -1], destination at
+/// [-64, -33], source at [-96, -65], MAC at [-128, -97].
 #[derive(Clone, Copy)]
 enum FactKind {
+    Domain,
     Destination,
     Source,
     Mac,
@@ -58,47 +65,47 @@ enum FactKind {
 impl FactKind {
     fn of(predicate: &KernelPredicate) -> Option<Self> {
         match predicate {
+            KernelPredicate::Domain(_) => Some(Self::Domain),
             KernelPredicate::DestinationIp(_) => Some(Self::Destination),
             KernelPredicate::SourceIp(_) => Some(Self::Source),
             KernelPredicate::Mac(_) => Some(Self::Mac),
             _ => None,
         }
     }
-}
 
-#[derive(Clone, Copy)]
-struct FactCache {
-    pointer: i16,
-    ready: i16,
-}
-
-struct FactCaches {
-    slots: [Option<FactCache>; 3],
-    must_ready: u8,
-    may_ready: u8,
-}
-
-fn fact_caches(plan: &RoutingPushPlan) -> FactCaches {
-    let mut uses = [0u8; 3];
-    for condition in plan.rules.iter().flat_map(|rule| &rule.conditions) {
-        if let Some(kind) = FactKind::of(&condition.predicate) {
-            let count = &mut uses[kind as usize];
-            *count = (*count + 1).min(2);
-        }
+    fn area(self) -> i16 {
+        -(self as i16 + 1) * FACT_BYTES
     }
-    // Separate DW slots preserve ready constants on 6.12; packed W flags
-    // lose precision and exhaust the verifier budget on mixed 256-bit policies.
-    // Pairs occupy [-32, -1] and [-80, -65], outside both key buffers.
-    FactCaches {
-        slots: std::array::from_fn(|index| {
-            let pointer = [-16, -32, -80][index];
-            (uses[index] == 2).then_some(FactCache {
-                pointer,
-                ready: pointer + 8,
-            })
-        }),
-        must_ready: 0,
-        may_ready: 0,
+}
+
+/// Which categories have been resolved into their stack areas.
+///
+/// Facts are values, not pointers: every fact use is dominated by one
+/// resolution of its category that initializes all 32 bytes of the area
+/// (the bitmap, or zeros when there is no entry), and no map pointer is
+/// read afterwards. The verifier cannot merge a NULL with a map pointer,
+/// so a pointer kept live across later rules multiplied the states walked
+/// through everything after it; with plain scalars in the area an
+/// imprecise recorded state can subsume the others, which on Linux 6.12
+/// brought the #280 policy from over 1,000,000 processed instructions to
+/// about 53,000. The domain is resolved in the prologue because it also
+/// decides `domain_final`; the other categories at the entry of the first
+/// rule that uses them, so flows decided earlier skip the lookup.
+struct FactAreas {
+    resolved: u8,
+}
+
+impl FactAreas {
+    fn new() -> Self {
+        Self { resolved: 0 }
+    }
+
+    fn is_resolved(&self, kind: FactKind) -> bool {
+        self.resolved & (1u8 << kind as u8) != 0
+    }
+
+    fn mark_resolved(&mut self, kind: FactKind) {
+        self.resolved |= 1u8 << kind as u8;
     }
 }
 
@@ -252,10 +259,6 @@ impl Assembler {
         self.emit(BPF_ST | BPF_W | BPF_MEM, dst, 0, off, imm)?;
         Ok(())
     }
-    fn st_dw_imm(&mut self, dst: u8, off: i16, imm: i32) -> anyhow::Result<()> {
-        self.emit(BPF_ST | BPF_DW | BPF_MEM, dst, 0, off, imm)?;
-        Ok(())
-    }
     fn call(&mut self, helper: i32) -> anyhow::Result<()> {
         self.emit(BPF_JMP | BPF_CALL, 0, 0, 0, helper)?;
         Ok(())
@@ -304,23 +307,11 @@ pub fn emit_routing_program(
     )?;
     asm.st_imm(R7, RULE_ID, u32::MAX as i32)?;
 
-    let mut caches = fact_caches(plan);
-    for cache in caches.slots.iter().flatten() {
-        asm.st_dw_imm(R10, cache.pointer, 0)?;
-        asm.st_dw_imm(R10, cache.ready, 0)?;
-    }
+    let mut areas = FactAreas::new();
 
     if plan.has_domain_rules {
-        write_domain_key_from_input(&mut asm)?;
-        load_map_fd(&mut asm, fds.domain)?;
-        asm.mov_reg(R2, R10)?;
-        asm.add_imm(R2, STACK_DOMAIN_KEY as i32)?;
-        asm.call(MAP_LOOKUP_ELEM)?;
-        asm.mov_reg(R8, R0)?;
-        let domain_absent = asm.label();
-        asm.jump(BPF_JEQ, R8, 0, domain_absent)?;
-        asm.st_imm(R7, DOMAIN_FINAL, 1)?;
-        asm.bind(domain_absent);
+        emit_fact_lookup(&mut asm, FactKind::Domain, &fds)?;
+        areas.mark_resolved(FactKind::Domain);
     }
 
     for rule in &plan.rules {
@@ -333,26 +324,26 @@ pub fn emit_routing_program(
             continue;
         }
         asm.source(rule.id + 1, rule.source.as_str());
+        // Resolve, once and on every path, each category this rule is the
+        // first to use, before any of its conditions can branch.
+        for condition in &rule.conditions {
+            if let Some(kind) = FactKind::of(&condition.predicate)
+                && !areas.is_resolved(kind)
+            {
+                emit_fact_lookup(&mut asm, kind, &fds)?;
+                areas.mark_resolved(kind);
+            }
+        }
         let fail = asm.label();
-        let mut failure_ready: Option<(u8, u8)> = None;
+        let mut conditional = false;
         for condition in rule
             .conditions
             .iter()
             .filter(|condition| !predicate_is_empty(&condition.predicate))
         {
             let pass = asm.label();
-            emit_condition(&mut asm, condition, pass, fail, &fds, &caches)?;
-            if let Some(kind) = FactKind::of(&condition.predicate) {
-                let bit = 1u8 << kind as u8;
-                caches.must_ready |= bit;
-                caches.may_ready |= bit;
-            }
-            // Every failed condition can enter the next rule, including a
-            // short circuit before this rule's first fact lookup.
-            failure_ready = Some(match failure_ready {
-                None => (caches.must_ready, caches.may_ready),
-                Some((must, may)) => (must & caches.must_ready, may | caches.may_ready),
-            });
+            emit_condition(&mut asm, condition, pass, fail)?;
+            conditional = true;
             asm.bind(pass);
         }
         asm.st_imm(R7, OUTBOUND, rule.outbound as i32)?;
@@ -361,11 +352,10 @@ pub fn emit_routing_program(
         asm.st_imm(R7, RULE_ID, rule.id as i32)?;
         asm.mov_imm(R0, 0)?;
         asm.exit()?;
-        if failure_ready.is_none() {
+        if !conditional {
             return asm.finish();
         }
         asm.bind(fail);
-        (caches.must_ready, caches.may_ready) = failure_ready.unwrap_or_default();
     }
 
     asm.source(0, "fallback");
@@ -491,13 +481,11 @@ fn emit_condition(
     condition: &KernelCondition,
     pass: Label,
     fail: Label,
-    fds: &RoutingMapFds,
-    caches: &FactCaches,
 ) -> anyhow::Result<()> {
     if condition.not {
-        emit_predicate(asm, &condition.predicate, fail, pass, fds, caches)
+        emit_predicate(asm, &condition.predicate, fail, pass)
     } else {
-        emit_predicate(asm, &condition.predicate, pass, fail, fds, caches)
+        emit_predicate(asm, &condition.predicate, pass, fail)
     }
 }
 
@@ -506,29 +494,19 @@ fn emit_predicate(
     predicate: &KernelPredicate,
     on_true: Label,
     on_false: Label,
-    fds: &RoutingMapFds,
-    caches: &FactCaches,
 ) -> anyhow::Result<()> {
     match predicate {
         KernelPredicate::Domain(id) => {
-            emit_bitmap_bit(asm, R8, *id, on_true, on_false)?;
+            emit_fact_bit(asm, FactKind::Domain, *id, on_true, on_false)?;
         }
         KernelPredicate::DestinationIp(id) => {
-            emit_fact_bit(
-                asm,
-                FactKind::Destination,
-                *id,
-                caches,
-                on_true,
-                on_false,
-                fds,
-            )?;
+            emit_fact_bit(asm, FactKind::Destination, *id, on_true, on_false)?;
         }
         KernelPredicate::SourceIp(id) => {
-            emit_fact_bit(asm, FactKind::Source, *id, caches, on_true, on_false, fds)?;
+            emit_fact_bit(asm, FactKind::Source, *id, on_true, on_false)?;
         }
         KernelPredicate::Mac(id) => {
-            emit_fact_bit(asm, FactKind::Mac, *id, caches, on_true, on_false, fds)?;
+            emit_fact_bit(asm, FactKind::Mac, *id, on_true, on_false)?;
         }
         KernelPredicate::DestinationPort(ranges) => {
             emit_port_ranges(asm, ranges, INPUT_DST_PORT, on_true, on_false)?;
@@ -631,56 +609,34 @@ fn emit_process_names(
     Ok(())
 }
 
-fn emit_bitmap_bit(
+/// Test one bit of a resolved category. The area holds the bitmap or zeros,
+/// so a missing entry fails every bit test without a pointer check.
+fn emit_fact_bit(
     asm: &mut Assembler,
-    pointer: u8,
+    kind: FactKind,
     id: u32,
     on_true: Label,
     on_false: Label,
 ) -> anyhow::Result<()> {
-    asm.jump(BPF_JEQ, pointer, 0, on_false)?;
-    asm.ldx_w(R2, pointer, (id / 32 * 4) as i16)?;
+    asm.ldx_w(R2, R10, kind.area() + (id / 32 * 4) as i16)?;
     asm.and_imm(R2, (1u32 << (id % 32)) as i32)?;
     asm.jump(BPF_JNE, R2, 0, on_true)?;
     asm.ja(on_false)?;
     Ok(())
 }
 
-fn emit_fact_bit(
-    asm: &mut Assembler,
-    kind: FactKind,
-    id: u32,
-    caches: &FactCaches,
-    on_true: Label,
-    on_false: Label,
-    fds: &RoutingMapFds,
-) -> anyhow::Result<()> {
-    if let Some(cache) = caches.slots[kind as usize] {
-        let bit = 1u8 << kind as u8;
-        if caches.must_ready & bit != 0 {
-            asm.ldx_dw(R0, R10, cache.pointer)?;
-        } else {
-            let branch = (caches.may_ready & bit != 0).then(|| (asm.label(), asm.label()));
-            if let Some((reuse, _)) = branch {
-                asm.ldx_dw(R0, R10, cache.ready)?;
-                asm.jump(BPF_JNE, R0, 0, reuse)?;
-            }
-            emit_fact_lookup(asm, kind, fds)?;
-            asm.stx_dw(R10, R0, cache.pointer)?;
-            asm.st_dw_imm(R10, cache.ready, 1)?;
-            if let Some((reuse, ready)) = branch {
-                asm.ja(ready)?;
-                asm.bind(reuse);
-                asm.ldx_dw(R0, R10, cache.pointer)?;
-                asm.bind(ready);
-            }
-        }
-    } else {
-        emit_fact_lookup(asm, kind, fds)?;
-    }
-    emit_bitmap_bit(asm, R0, id, on_true, on_false)
-}
-
+/// Look the category up and copy its bitmap into the stack area; zero the
+/// area when the input has no such fact or the map has no entry. R0 to R5
+/// are clobbered; no pointer into the map value survives.
+///
+/// Branch layout matters to the verifier: at an unresolved conditional it
+/// explores the fall-through first, so a copy from a map value (unknown
+/// scalars) sits on the fall-through at every split and the zero fill on
+/// the jump target. A recorded imprecise scalar can subsume the zero-fill
+/// path; a zero fill recorded first becomes precise once a bit test on it
+/// is predictable, and a precise zero cannot subsume an unknown. Measured
+/// on Linux 6.12 with the IPv4/IPv6 dispatch the other way round the #280
+/// policy cost four times as much.
 fn emit_fact_lookup(
     asm: &mut Assembler,
     kind: FactKind,
@@ -689,7 +645,15 @@ fn emit_fact_lookup(
     let absent = asm.label();
     let lookup = asm.label();
     let done = asm.label();
+    let key = match kind {
+        FactKind::Domain => STACK_DOMAIN_KEY,
+        _ => STACK_KEY,
+    };
     match kind {
+        FactKind::Domain => {
+            write_domain_key_from_input(asm)?;
+            load_map_fd(asm, fds.domain)?;
+        }
         FactKind::Mac => {
             asm.ldx_w(R0, R6, INPUT_MAC_PRESENT)?;
             asm.jump(BPF_JEQ, R0, 0, absent)?;
@@ -701,28 +665,36 @@ fn emit_fact_lookup(
                 FactKind::Destination => (fds.destination_v4, fds.destination_v6, INPUT_DST_IP),
                 _ => (fds.source_v4, fds.source_v6, INPUT_SRC_IP),
             };
-            let v4 = asm.label();
             let v6 = asm.label();
             asm.ldx_w(R0, R6, INPUT_VERSION)?;
-            asm.jump(BPF_JEQ, R0, 1, v4)?;
-            asm.jump(BPF_JEQ, R0, 2, v6)?;
-            asm.ja(absent)?;
-            asm.bind(v4);
+            asm.jump(BPF_JNE, R0, 1, v6)?;
             write_key_from_input(asm, input_offset + 12, 32)?;
             load_map_fd(asm, v4_fd)?;
             asm.ja(lookup)?;
             asm.bind(v6);
+            asm.jump(BPF_JNE, R0, 2, absent)?;
             write_key_from_input(asm, input_offset, 128)?;
             load_map_fd(asm, v6_fd)?;
         }
     }
     asm.bind(lookup);
     asm.mov_reg(R2, R10)?;
-    asm.add_imm(R2, STACK_KEY as i32)?;
+    asm.add_imm(R2, key as i32)?;
     asm.call(MAP_LOOKUP_ELEM)?;
+    asm.jump(BPF_JEQ, R0, 0, absent)?;
+    if matches!(kind, FactKind::Domain) {
+        asm.st_imm(R7, DOMAIN_FINAL, 1)?;
+    }
+    for word in 0..FACT_BYTES / 8 {
+        asm.ldx_dw(R1, R0, word * 8)?;
+        asm.stx_dw(R10, R1, kind.area() + word * 8)?;
+    }
     asm.ja(done)?;
     asm.bind(absent);
-    asm.mov_imm(R0, 0)?;
+    asm.mov_imm(R1, 0)?;
+    for word in 0..FACT_BYTES / 8 {
+        asm.stx_dw(R10, R1, kind.area() + word * 8)?;
+    }
     asm.bind(done);
     Ok(())
 }
@@ -746,10 +718,9 @@ fn write_key_from_input(
 }
 
 fn write_domain_key_from_input(asm: &mut Assembler) -> anyhow::Result<()> {
-    asm.mov_reg(R2, R6)?;
-    asm.ldx_dw(R3, R2, INPUT_DST_IP)?;
+    asm.ldx_dw(R3, R6, INPUT_DST_IP)?;
     asm.stx_dw(R10, R3, STACK_DOMAIN_KEY)?;
-    asm.ldx_dw(R3, R2, INPUT_DST_IP + 8)?;
+    asm.ldx_dw(R3, R6, INPUT_DST_IP + 8)?;
     asm.stx_dw(R10, R3, STACK_DOMAIN_KEY + 8)?;
     Ok(())
 }
@@ -763,6 +734,264 @@ fn load_map_fd(asm: &mut Assembler, fd: i32) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routing::Router;
+    use aya_obj::generated::BPF_ALU;
+    use honk_config::routing::{RoutingCondition, RoutingOutbound, RoutingRule};
+    use honk_config::types::DialMode;
+    use serde_json::json;
+
+    fn rule(condition: serde_json::Value, outbound: &str) -> RoutingRule {
+        RoutingRule {
+            name: String::new(),
+            condition: serde_json::from_value::<RoutingCondition>(condition).unwrap(),
+            outbound: RoutingOutbound::Simple(outbound.into()),
+            priority: 0,
+            must: false,
+            mark: 0,
+        }
+    }
+
+    fn emit(rules: &[RoutingRule]) -> RoutingBytecode {
+        let ids =
+            std::collections::HashMap::from([("direct".to_string(), 0u8), ("proxy".into(), 1)]);
+        let router = Router::new(rules, "direct").unwrap();
+        let plan = RoutingPushPlan::compile(&router, &ids, "direct", DialMode::Ip).unwrap();
+        let fds = RoutingMapFds {
+            destination_v4: 11,
+            destination_v6: 12,
+            source_v4: 13,
+            source_v6: 14,
+            mac: 15,
+            domain: 16,
+        };
+        emit_routing_program(&plan, fds).unwrap()
+    }
+
+    /// Instruction indexes of `map_lookup_elem` calls.
+    fn lookups(bytecode: &RoutingBytecode) -> Vec<usize> {
+        bytecode
+            .insns
+            .iter()
+            .enumerate()
+            .filter(|(_, insn)| {
+                insn.code as u32 == BPF_JMP | BPF_CALL
+                    && insn.src_reg() == 0
+                    && insn.imm == MAP_LOOKUP_ELEM
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// First instruction of the rule with this id (source lines carry id + 1).
+    fn rule_start(bytecode: &RoutingBytecode, id: u32) -> usize {
+        bytecode
+            .lines
+            .iter()
+            .find(|line| line.line == id + 1)
+            .map(|line| line.insn_offset as usize)
+            .expect("rule source line")
+    }
+
+    fn is_null_check(insn: &bpf_insn) -> bool {
+        insn.code as u32 == BPF_JMP | BPF_JEQ | BPF_K && insn.dst_reg() == R0 && insn.imm == 0
+    }
+
+    fn is_load(insn: &bpf_insn) -> bool {
+        insn.code as u32 & 0x07 == BPF_LDX && insn.code as u32 & 0xe0 == BPF_MEM
+    }
+
+    /// The #280 shape: two `sip && dip && dport` rules ahead of a long
+    /// process-name chain, later `mac`, `sip`, `dip` and `domain` rules.
+    /// Every category is looked up once, on every path, at the entry of the
+    /// first rule that uses it (domain in the prologue).
+    #[test]
+    fn each_fact_category_is_resolved_exactly_once() {
+        let names = json!([
+            "dnsmasq",
+            "systemd-resolved",
+            "mosdns",
+            "NetworkManager",
+            "qbittorrent",
+            "iris-meta",
+            "sing-box",
+            "mihomo"
+        ]);
+        let rules = [
+            rule(
+                json!({"source_ip": ["198.18.81.2/32"], "ip": ["198.18.80.2/32"], "port": ["15201", "18081", "15203"]}),
+                "proxy",
+            ),
+            rule(
+                json!({"source_ip": ["198.18.81.2/32"], "ip": ["198.18.80.2/32"], "port": ["15202"]}),
+                "direct",
+            ),
+            rule(json!({"process_name": names, "port": ["53"]}), "direct"),
+            rule(json!({"process_name": names}), "direct"),
+            rule(
+                json!({"mac": ["00:a0:98:24:5e:83", "ba:da:2e:00:76:a0"]}),
+                "direct",
+            ),
+            rule(json!({"source_ip": ["10.10.10.24/32"]}), "direct"),
+            rule(json!({"ip": ["10.0.0.0/8", "192.168.0.0/16"]}), "direct"),
+            rule(json!({"domain_suffix": ["example.com"]}), "proxy"),
+            rule(json!({"ip": ["1.1.1.0/24"]}), "proxy"),
+        ];
+        let bytecode = emit(&rules);
+        let calls = lookups(&bytecode);
+        assert_eq!(
+            calls.len(),
+            4,
+            "domain, destination, source and MAC: {calls:?}"
+        );
+        let rule0 = rule_start(&bytecode, 0);
+        let rule1 = rule_start(&bytecode, 1);
+        let rule4 = rule_start(&bytecode, 4);
+        let rule5 = rule_start(&bytecode, 5);
+        assert!(calls[0] < rule0, "domain {calls:?} vs rule 0 at {rule0}");
+        assert!(
+            rule0 < calls[1] && calls[2] < rule1,
+            "{calls:?} vs rule 0..1 at {rule0}..{rule1}"
+        );
+        assert!(
+            rule4 < calls[3] && calls[3] < rule5,
+            "MAC {calls:?} vs rule 4 at {rule4}..{rule5}"
+        );
+    }
+
+    /// A lookup result is consumed by its copy and nothing else: right after
+    /// the NULL check, four DW loads through R0 each store into the
+    /// category's area, nothing else reads R0 until it is overwritten, and
+    /// every other load goes through the input pointer or the stack.
+    /// Structural: the kernel suite proves what the copied values mean.
+    #[test]
+    fn a_lookup_result_is_copied_into_its_area_and_not_kept() {
+        let rules = [
+            rule(
+                json!({"source_ip": ["198.18.81.2/32"], "ip": ["198.18.80.2/32"], "port": ["15201"]}),
+                "proxy",
+            ),
+            rule(
+                json!({"process_name": ["dnsmasq", "qemu-system-x86"]}),
+                "direct",
+            ),
+            rule(json!({"mac": ["00:a0:98:24:5e:83"]}), "direct"),
+            rule(json!({"domain_suffix": ["example.com"]}), "proxy"),
+            rule(
+                json!({"not": {"mac": ["ba:da:2e:00:76:a0"]}, "ip": ["10.0.0.0/8"], "dscp": ["0"]}),
+                "direct",
+            ),
+            rule(json!({"source_ip": ["10.10.10.24/32"]}), "direct"),
+            rule(json!({"domain_suffix": ["example.org"]}), "direct"),
+        ];
+        let bytecode = emit(&rules);
+        let insns = &bytecode.insns;
+        let calls = lookups(&bytecode);
+        assert_eq!(calls.len(), 4, "{calls:?}");
+        let words = (FACT_BYTES / 8) as usize;
+        let mut copy_loads = Vec::new();
+        for &call in &calls {
+            assert!(is_null_check(&insns[call + 1]), "lookup at {call}");
+            let mut index = call + 2;
+            if insns[index].code as u32 == BPF_ST | BPF_W | BPF_MEM {
+                index += 1; // domain_final
+            }
+            for word in 0..words {
+                let (load, store) = (&insns[index], &insns[index + 1]);
+                assert!(
+                    is_load(load)
+                        && load.code as u32 & 0x18 == BPF_DW
+                        && load.src_reg() == R0
+                        && load.off == (word * 8) as i16,
+                    "copy load {word} after lookup at {call}"
+                );
+                assert!(
+                    store.code as u32 == BPF_STX | BPF_DW | BPF_MEM
+                        && store.dst_reg() == R10
+                        && store.src_reg() == load.dst_reg()
+                        && (store.off + FACT_BYTES * 4) % FACT_BYTES == (word * 8) as i16,
+                    "copy store {word} after lookup at {call}"
+                );
+                copy_loads.push(index);
+                index += 2;
+            }
+        }
+        // Linear scan: from a helper call until the next write to R0, the
+        // only reads of R0 are the NULL check and the copy loads. The
+        // emitted code is straight-line there, so this is conservative.
+        let mut r0_is_result = false;
+        for (index, insn) in insns.iter().enumerate() {
+            let code = insn.code as u32;
+            let (class, op, from_register) = (code & 0x07, code & 0xf0, code & 0x08 == BPF_X);
+            if class == BPF_JMP && op == BPF_CALL {
+                r0_is_result = true;
+                continue;
+            }
+            let reads_r0 = match class {
+                BPF_LDX | BPF_STX => insn.src_reg() == R0,
+                BPF_ALU64 | BPF_ALU => {
+                    (op != BPF_MOV && insn.dst_reg() == R0)
+                        || (from_register && insn.src_reg() == R0)
+                }
+                BPF_JMP => {
+                    op == BPF_EXIT
+                        || (op != BPF_JA
+                            && (insn.dst_reg() == R0 || (from_register && insn.src_reg() == R0)))
+                }
+                _ => false,
+            };
+            if r0_is_result && reads_r0 {
+                assert!(
+                    (calls.contains(&(index - 1)) && is_null_check(insn))
+                        || copy_loads.contains(&index),
+                    "lookup result read at {index}"
+                );
+            }
+            if matches!(class, BPF_LDX | BPF_ALU64 | BPF_ALU) && insn.dst_reg() == R0 {
+                r0_is_result = false;
+            }
+            if is_load(insn) {
+                match insn.src_reg() {
+                    R6 | R10 => {}
+                    R0 => assert!(copy_loads.contains(&index), "load through R0 at {index}"),
+                    base => panic!("load through R{base} at {index}"),
+                }
+            }
+        }
+    }
+
+    /// A category first used by a later rule is resolved at that rule's
+    /// entry: after the previous rule's action (flows decided earlier skip
+    /// the lookup) and before the rule's own predicates, even one that
+    /// would short-circuit ahead of the fact. Conditions are emitted in
+    /// canonical order, port before MAC, so the port compare comes first
+    /// and a lookup at the first reached condition would follow it.
+    #[test]
+    fn a_fact_is_resolved_at_the_entry_of_its_first_use_rule() {
+        let rules = [
+            rule(json!({"process_name": ["dnsmasq"]}), "direct"),
+            rule(json!({"port": ["53"]}), "direct"),
+            rule(
+                json!({"port": ["443"], "mac": ["00:a0:98:24:5e:83"]}),
+                "proxy",
+            ),
+            rule(json!({"mac": ["ba:da:2e:00:76:a0"]}), "direct"),
+        ];
+        let bytecode = emit(&rules);
+        let calls = lookups(&bytecode);
+        let rule2 = rule_start(&bytecode, 2);
+        let rule3 = rule_start(&bytecode, 3);
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        let port_compare = (rule2..rule3)
+            .find(|index| {
+                let insn = &bytecode.insns[*index];
+                is_load(insn) && insn.src_reg() == R6 && insn.off == INPUT_DST_PORT
+            })
+            .expect("rule 2 reads the destination port");
+        assert!(
+            rule2 < calls[0] && calls[0] < port_compare,
+            "{calls:?} vs rule 2 at {rule2}, port read at {port_compare}"
+        );
+    }
 
     #[test]
     fn assembler_stops_at_instruction_capacity_without_publishing_fixup() {
