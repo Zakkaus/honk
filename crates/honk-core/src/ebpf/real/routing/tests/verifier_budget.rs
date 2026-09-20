@@ -4,198 +4,57 @@
 //!
 //! With facts kept as map pointers the verifier could not merge the paths
 //! through the process-name chains and this policy exceeded the
-//! 1,000,000-instruction budget on Linux 6.12; with facts copied out as
-//! bitmap values the issue's own policy verifies in about 53,000.
+//! 1,000,000-instruction budget on Linux 6.12. This test checks publication
+//! and complete decisions, not a particular processed-instruction count.
 
-use super::{assert_route, decision, domain_entry, input, object, outbound_ids, rule};
+use super::{assert_route, decision, domain_entry, input, object, outbound_ids};
 use crate::control::routing_matcher::RoutingPushPlan;
 use crate::ebpf::EbpfBackend;
 use crate::ebpf::real::RealEbpfBackend;
 use crate::routing::{Router, golden};
-use honk_config::routing::{RoutingCondition, RoutingNotCondition, RoutingRule};
 use honk_config::types::DialMode;
 use honk_ebpf_common::DaeParam;
-
-fn process(names: &[&str]) -> RoutingCondition {
-    RoutingCondition {
-        process_name: names.iter().map(|name| name.to_string()).collect(),
-        ..Default::default()
-    }
-}
-
-fn issue_280_rules() -> Vec<RoutingRule> {
-    let benchmark = |port: &str| RoutingCondition {
-        source_ip: vec!["198.18.81.2/32".into()],
-        ip: vec!["198.18.80.2/32".into()],
-        port: vec![port.into()],
-        ..Default::default()
-    };
-    let mut rules = vec![
-        rule("bench-1", benchmark("15201"), "proxy", 0, true),
-        rule("bench-2", benchmark("15202"), "proxy", 0, true),
-        rule(
-            "dns-daemons",
-            RoutingCondition {
-                protocol: vec!["udp".into()],
-                port: vec!["53".into()],
-                ..process(&["dnsmasq", "systemd-resolved"])
-            },
-            "block",
-            0,
-            true,
-        ),
-    ];
-    for names in [
-        &["mosdns", "honk-subsribe", "honk-tool"][..],
-        &["NetworkManager"],
-        &["systemd-networkd"],
-        &["systemd-resolved"],
-        &["dhcpcd"],
-    ] {
-        rules.push(rule(names[0], process(names), "block", 0, true));
-    }
-    rules.push(rule(
-        "lan-macs",
-        RoutingCondition {
-            mac: vec![
-                "02:00:00:00:00:01".into(),
-                "02:00:00:00:00:02".into(),
-                "02:00:00:00:00:03".into(),
-                "02:00:00:00:00:04".into(),
-            ],
-            ..Default::default()
-        },
-        "block",
-        0,
-        true,
-    ));
-    rules.push(rule(
-        "one-mac",
-        RoutingCondition {
-            mac: vec!["02:00:00:00:00:05".into()],
-            ..Default::default()
-        },
-        "block",
-        0,
-        true,
-    ));
-    rules.push(rule(
-        "dscp",
-        RoutingCondition {
-            dscp: vec!["4".into()],
-            ..Default::default()
-        },
-        "block",
-        0,
-        true,
-    ));
-    for name in [
-        "qbittorrent",
-        "iris",
-        "iris-meta",
-        "sing-box",
-        "mihomo",
-        "frpc",
-        "einat",
-        "qemu-system-x86",
-        "pacman",
-    ] {
-        rules.push(rule(name, process(&[name]), "block", 0, true));
-    }
-    rules.extend([
-        rule(
-            "one-more-mac",
-            RoutingCondition {
-                mac: vec!["02:00:00:00:00:06".into()],
-                ..Default::default()
-            },
-            "block",
-            0,
-            true,
-        ),
-        rule(
-            "printer",
-            RoutingCondition {
-                source_ip: vec!["198.51.100.24/32".into()],
-                not: RoutingNotCondition {
-                    port: vec!["53".into()],
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            "block",
-            0,
-            true,
-        ),
-        rule(
-            "private",
-            RoutingCondition {
-                ip: vec!["10.0.0.0/8".into(), "192.168.0.0/16".into()],
-                ..Default::default()
-            },
-            "block",
-            0,
-            true,
-        ),
-        rule(
-            "domain-direct",
-            RoutingCondition {
-                domain_suffix: vec!["example.net".into(), "example.org".into()],
-                ..Default::default()
-            },
-            "block",
-            0,
-            false,
-        ),
-        rule(
-            "one-port",
-            RoutingCondition {
-                port: vec!["14588".into()],
-                ..Default::default()
-            },
-            "block",
-            0,
-            true,
-        ),
-        rule(
-            "region",
-            RoutingCondition {
-                ip: vec!["203.0.113.0/24".into()],
-                ..Default::default()
-            },
-            "proxy",
-            0,
-            false,
-        ),
-        rule(
-            "domain-proxy",
-            RoutingCondition {
-                domain_suffix: vec!["example.com".into()],
-                ..Default::default()
-            },
-            "proxy",
-            0,
-            false,
-        ),
-        rule(
-            "web",
-            RoutingCondition {
-                port: vec!["22".into(), "80".into(), "443".into(), "8080".into()],
-                ..Default::default()
-            },
-            "proxy",
-            0,
-            false,
-        ),
-    ]);
-    rules
-}
 
 #[test]
 #[ignore = "requires root, Linux 6.12+, and HONK_ROUTING_TEST_OBJECT"]
 fn facts_ahead_of_long_process_chains_stay_within_the_verifier_budget() {
-    let rules = issue_280_rules();
-    let router = Router::new(&rules, "direct").unwrap();
+    let config = honk_config::parser::parse_dae_config(
+        r#"
+        routing {
+            sip(198.18.81.2/32) && dip(198.18.80.2/32) && dport(15201) -> proxy(must)
+            sip(198.18.81.2/32) && dip(198.18.80.2/32) && dport(15202) -> proxy(must)
+            pname(dnsmasq, systemd-resolved) && l4proto(udp) && dport(53) -> block(must)
+            pname(mosdns, honk-subsribe, honk-tool) -> block(must)
+            pname(NetworkManager) -> block(must)
+            pname(systemd-networkd) -> block(must)
+            pname(systemd-resolved) -> block(must)
+            pname(dhcpcd) -> block(must)
+            mac(02:00:00:00:00:01, 02:00:00:00:00:02, 02:00:00:00:00:03, 02:00:00:00:00:04) -> block(must)
+            mac(02:00:00:00:00:05) -> block(must)
+            dscp(4) -> block(must)
+            pname(qbittorrent) -> block(must)
+            pname(iris) -> block(must)
+            pname(iris-meta) -> block(must)
+            pname(sing-box) -> block(must)
+            pname(mihomo) -> block(must)
+            pname(frpc) -> block(must)
+            pname(einat) -> block(must)
+            pname(qemu-system-x86) -> block(must)
+            pname(pacman) -> block(must)
+            mac(02:00:00:00:00:06) -> block(must)
+            sip(198.51.100.24/32) && !dport(53) -> block(must)
+            dip(10.0.0.0/8, 192.168.0.0/16) -> block(must)
+            domain(suffix: example.net, suffix: example.org) -> block
+            dport(14588) -> block(must)
+            dip(203.0.113.0/24) -> proxy
+            domain(suffix: example.com) -> proxy
+            dport(22, 80, 443, 8080) -> proxy
+            fallback: direct
+        }
+        "#,
+    )
+    .unwrap();
+    let router = Router::new(&config.routing.rules, "direct").unwrap();
     let plan =
         RoutingPushPlan::compile(&router, &outbound_ids(), "direct", DialMode::Domain).unwrap();
 
