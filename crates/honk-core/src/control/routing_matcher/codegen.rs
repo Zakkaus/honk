@@ -8,8 +8,8 @@ use super::{KernelCondition, KernelPredicate, RoutingPushPlan};
 use anyhow::{Context, ensure};
 use aya_obj::generated::{
     BPF_ALU64, BPF_AND, BPF_B, BPF_CALL, BPF_DW, BPF_EXIT, BPF_IMM, BPF_JA, BPF_JEQ, BPF_JGE,
-    BPF_JGT, BPF_JMP, BPF_JNE, BPF_K, BPF_LD, BPF_LDX, BPF_MEM, BPF_MOV, BPF_ST, BPF_STX, BPF_W,
-    BPF_X, bpf_insn,
+    BPF_JGT, BPF_JMP, BPF_JNE, BPF_K, BPF_LD, BPF_LDX, BPF_MEM, BPF_MOV, BPF_OR, BPF_ST, BPF_STX,
+    BPF_W, BPF_X, bpf_insn,
 };
 use honk_ebpf_common::{
     ROUTING_FACT_CAPACITY, ROUTING_FEATURE_DOMAIN, ROUTING_FEATURE_DOMAIN_REROUTE,
@@ -24,6 +24,7 @@ const R4: u8 = 4;
 const R5: u8 = 5;
 const R6: u8 = 6;
 const R7: u8 = 7;
+const R8: u8 = 8;
 const R10: u8 = 10;
 const MAP_LOOKUP_ELEM: i32 = 1;
 const BPF_INSTRUCTION_CAPACITY: usize = 1_000_000;
@@ -63,49 +64,8 @@ enum FactKind {
 }
 
 impl FactKind {
-    fn of(predicate: &KernelPredicate) -> Option<Self> {
-        match predicate {
-            KernelPredicate::Domain(_) => Some(Self::Domain),
-            KernelPredicate::DestinationIp(_) => Some(Self::Destination),
-            KernelPredicate::SourceIp(_) => Some(Self::Source),
-            KernelPredicate::Mac(_) => Some(Self::Mac),
-            _ => None,
-        }
-    }
-
     fn area(self) -> i16 {
         -(self as i16 + 1) * FACT_BYTES
-    }
-}
-
-/// Which categories have been resolved into their stack areas.
-///
-/// Facts are values, not pointers: every fact use is dominated by one
-/// resolution of its category that initializes all 32 bytes of the area
-/// (the bitmap, or zeros when there is no entry), and no map pointer is
-/// read afterwards. The verifier cannot merge a NULL with a map pointer,
-/// so a pointer kept live across later rules multiplied the states walked
-/// through everything after it; with plain scalars in the area an
-/// imprecise recorded state can subsume the others, which on Linux 6.12
-/// brought the #280 policy from over 1,000,000 processed instructions to
-/// about 53,000. The domain is resolved in the prologue because it also
-/// decides `domain_final`; the other categories at the entry of the first
-/// rule that uses them, so flows decided earlier skip the lookup.
-struct FactAreas {
-    resolved: u8,
-}
-
-impl FactAreas {
-    fn new() -> Self {
-        Self { resolved: 0 }
-    }
-
-    fn is_resolved(&self, kind: FactKind) -> bool {
-        self.resolved & (1u8 << kind as u8) != 0
-    }
-
-    fn mark_resolved(&mut self, kind: FactKind) {
-        self.resolved |= 1u8 << kind as u8;
     }
 }
 
@@ -235,6 +195,10 @@ impl Assembler {
         self.emit(BPF_ALU64 | BPF_AND | BPF_K, dst, 0, 0, imm)?;
         Ok(())
     }
+    fn or_imm(&mut self, dst: u8, imm: i32) -> anyhow::Result<()> {
+        self.emit(BPF_ALU64 | BPF_OR | BPF_K, dst, 0, 0, imm)?;
+        Ok(())
+    }
     fn ldx_w(&mut self, dst: u8, src: u8, off: i16) -> anyhow::Result<()> {
         self.emit(BPF_LDX | BPF_W | BPF_MEM, dst, src, off, 0)?;
         Ok(())
@@ -268,6 +232,12 @@ impl Assembler {
         Ok(())
     }
 }
+
+/// Per-invocation resolved bits for the lazily evaluated categories
+/// (Destination/Source/MAC). Kept in R8, which callee-saves across the
+/// lookup helper; it says this call already resolved the category, not
+/// that the emitter merely emitted a lookup somewhere.
+const READY: u8 = R8;
 
 /// Emit a complete RoutingInput -> RoutingDecision function body.
 pub fn emit_routing_program(
@@ -306,12 +276,10 @@ pub fn emit_routing_program(
         (!plan.has_domain_rules || plan.features & ROUTING_FEATURE_DOMAIN_REROUTE == 0) as i32,
     )?;
     asm.st_imm(R7, RULE_ID, u32::MAX as i32)?;
-
-    let mut areas = FactAreas::new();
+    asm.mov_imm(READY, 0)?;
 
     if plan.has_domain_rules {
         emit_fact_lookup(&mut asm, FactKind::Domain, &fds)?;
-        areas.mark_resolved(FactKind::Domain);
     }
 
     for rule in &plan.rules {
@@ -324,25 +292,28 @@ pub fn emit_routing_program(
             continue;
         }
         asm.source(rule.id + 1, rule.source.as_str());
-        // Resolve, once and on every path, each category this rule is the
-        // first to use, before any of its conditions can branch.
-        for condition in &rule.conditions {
-            if let Some(kind) = FactKind::of(&condition.predicate)
-                && !areas.is_resolved(kind)
-            {
-                emit_fact_lookup(&mut asm, kind, &fds)?;
-                areas.mark_resolved(kind);
-            }
-        }
         let fail = asm.label();
         let mut conditional = false;
+        let port_first = |condition: &&KernelCondition| {
+            matches!(
+                condition.predicate,
+                KernelPredicate::DestinationPort(_) | KernelPredicate::SourcePort(_)
+            )
+        };
         for condition in rule
             .conditions
             .iter()
             .filter(|condition| !predicate_is_empty(&condition.predicate))
+            .filter(port_first)
+            .chain(
+                rule.conditions
+                    .iter()
+                    .filter(|condition| !predicate_is_empty(&condition.predicate))
+                    .filter(|condition| !port_first(condition)),
+            )
         {
             let pass = asm.label();
-            emit_condition(&mut asm, condition, pass, fail)?;
+            emit_condition(&mut asm, condition, pass, fail, &fds)?;
             conditional = true;
             asm.bind(pass);
         }
@@ -481,12 +452,50 @@ fn emit_condition(
     condition: &KernelCondition,
     pass: Label,
     fail: Label,
+    fds: &RoutingMapFds,
 ) -> anyhow::Result<()> {
-    if condition.not {
-        emit_predicate(asm, &condition.predicate, fail, pass)
-    } else {
-        emit_predicate(asm, &condition.predicate, pass, fail)
+    let on_true = if condition.not { fail } else { pass };
+    let on_false = if condition.not { pass } else { fail };
+    match &condition.predicate {
+        KernelPredicate::DestinationIp(id) => {
+            emit_fact_bit_lazy(asm, FactKind::Destination, *id, on_true, on_false, fds)?
+        }
+        KernelPredicate::SourceIp(id) => {
+            emit_fact_bit_lazy(asm, FactKind::Source, *id, on_true, on_false, fds)?
+        }
+        KernelPredicate::Mac(id) => {
+            emit_fact_bit_lazy(asm, FactKind::Mac, *id, on_true, on_false, fds)?
+        }
+        _ => emit_predicate(asm, &condition.predicate, on_true, on_false)?,
     }
+    Ok(())
+}
+
+/// Test one bit of a lazily resolved category. The READY bit is set only
+/// after the lookup wrote all 32 bytes of the area, so a resolved
+/// all-zeros bitmap is never re-looked-up and an unresolved one is never
+/// read. Each use site carries its own guard, so a later rule still
+/// resolves a category an earlier rule skipped.
+fn emit_fact_bit_lazy(
+    asm: &mut Assembler,
+    kind: FactKind,
+    id: u32,
+    on_true: Label,
+    on_false: Label,
+    fds: &RoutingMapFds,
+) -> anyhow::Result<()> {
+    let resolved = asm.label();
+    let bit = 1i32 << (kind as u8 - 1);
+    // READY is a per-invocation bitmask; test the category bit, not
+    // equality against the whole mask (other resolved categories set
+    // other bits).
+    asm.mov_reg(R0, READY)?;
+    asm.and_imm(R0, bit)?;
+    asm.jump(BPF_JNE, R0, 0, resolved)?;
+    emit_fact_lookup(asm, kind, fds)?;
+    asm.or_imm(READY, bit)?;
+    asm.bind(resolved);
+    emit_fact_bit(asm, kind, id, on_true, on_false)
 }
 
 fn emit_predicate(
@@ -838,23 +847,22 @@ mod tests {
         ];
         let bytecode = emit(&rules);
         let calls = lookups(&bytecode);
+        // One guarded call site per fact use: domain in the prologue, and
+        // one per Destination/Source/MAC predicate across the rules. A
+        // later rule still resolves a category an earlier rule skipped, so
+        // the static count exceeds the old once-per-category total; the
+        // READY guard keeps each category to one runtime lookup.
         assert_eq!(
             calls.len(),
-            4,
-            "domain, destination, source and MAC: {calls:?}"
+            9,
+            "domain in prologue + per-use lazy lookups: {calls:?}"
         );
         let rule0 = rule_start(&bytecode, 0);
         let rule1 = rule_start(&bytecode, 1);
-        let rule4 = rule_start(&bytecode, 4);
-        let rule5 = rule_start(&bytecode, 5);
         assert!(calls[0] < rule0, "domain {calls:?} vs rule 0 at {rule0}");
         assert!(
-            rule0 < calls[1] && calls[2] < rule1,
-            "{calls:?} vs rule 0..1 at {rule0}..{rule1}"
-        );
-        assert!(
-            rule4 < calls[3] && calls[3] < rule5,
-            "MAC {calls:?} vs rule 4 at {rule4}..{rule5}"
+            rule0 < calls[1] && calls[1] < rule1,
+            "rule 0 dip use {calls:?} vs rule 0..1 at {rule0}..{rule1}"
         );
     }
 
@@ -886,7 +894,8 @@ mod tests {
         let bytecode = emit(&rules);
         let insns = &bytecode.insns;
         let calls = lookups(&bytecode);
-        assert_eq!(calls.len(), 4, "{calls:?}");
+        // One guarded call site per fact use across these rules.
+        assert_eq!(calls.len(), 7, "{calls:?}");
         let words = (FACT_BYTES / 8) as usize;
         let mut copy_loads = Vec::new();
         for &call in &calls {
@@ -959,14 +968,12 @@ mod tests {
         }
     }
 
-    /// A category first used by a later rule is resolved at that rule's
-    /// entry: after the previous rule's action (flows decided earlier skip
-    /// the lookup) and before the rule's own predicates, even one that
-    /// would short-circuit ahead of the fact. Conditions are emitted in
-    /// canonical order, port before MAC, so the port compare comes first
-    /// and a lookup at the first reached condition would follow it.
+    /// A category used by a later rule is resolved at that use, inside the
+    /// rule's own conditions — not at the rule entry before a port
+    /// short-circuit. The port compare precedes the lazy lookup, and a
+    /// matching port still resolves the category once via its READY guard.
     #[test]
-    fn a_fact_is_resolved_at_the_entry_of_its_first_use_rule() {
+    fn a_fact_is_resolved_at_its_first_reached_use_after_ports() {
         let rules = [
             rule(json!({"process_name": ["dnsmasq"]}), "direct"),
             rule(json!({"port": ["53"]}), "direct"),
@@ -980,17 +987,21 @@ mod tests {
         let calls = lookups(&bytecode);
         let rule2 = rule_start(&bytecode, 2);
         let rule3 = rule_start(&bytecode, 3);
-        assert_eq!(calls.len(), 1, "{calls:?}");
+        // One MAC use in rule 2, one in rule 3: two guarded call sites.
+        assert_eq!(calls.len(), 2, "{calls:?}");
         let port_compare = (rule2..rule3)
             .find(|index| {
                 let insn = &bytecode.insns[*index];
                 is_load(insn) && insn.src_reg() == R6 && insn.off == INPUT_DST_PORT
             })
             .expect("rule 2 reads the destination port");
+        // The lookup follows the port compare inside rule 2 (port first),
+        // and rule 3's own MAC use carries a second guarded call site.
         assert!(
-            rule2 < calls[0] && calls[0] < port_compare,
-            "{calls:?} vs rule 2 at {rule2}, port read at {port_compare}"
+            port_compare < calls[0] && calls[0] < rule3,
+            "port read at {port_compare}, calls {calls:?} vs rule 3 at {rule3}"
         );
+        assert!(rule3 < calls[1], "rule 3 lookup {calls:?} after {rule3}");
     }
 
     #[test]
