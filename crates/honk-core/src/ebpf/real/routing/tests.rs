@@ -112,7 +112,7 @@ fn domain_entry(
 
 #[test]
 #[ignore = "requires root, Linux 6.12+, and HONK_ROUTING_TEST_OBJECT"]
-fn lazy_fact_cache_short_circuit_reuse_and_alternating_inputs() {
+fn fact_cache_short_circuit_reuse_and_alternating_inputs() {
     use honk_config::routing::{RoutingCondition, RoutingNotCondition};
 
     let rules = vec![
@@ -295,7 +295,7 @@ fn lazy_fact_cache_short_circuit_reuse_and_alternating_inputs() {
 
 #[test]
 #[ignore = "requires root, Linux 6.12+, and HONK_ROUTING_TEST_OBJECT"]
-fn lazy_fact_cache_ipv6_host_overlap_and_default_prefix() {
+fn fact_cache_ipv6_host_overlap_and_default_prefix() {
     use honk_config::routing::RoutingCondition;
 
     let rules = vec![
@@ -367,7 +367,7 @@ fn lazy_fact_cache_ipv6_host_overlap_and_default_prefix() {
 
 #[test]
 #[ignore = "requires root, Linux 6.12+, and HONK_ROUTING_TEST_OBJECT"]
-fn lazy_fact_cache_null_zero_mac_presence_and_invalid_family() {
+fn fact_cache_null_zero_mac_presence_and_invalid_family() {
     use honk_config::routing::{RoutingCondition, RoutingNotCondition};
 
     let facts = vec![

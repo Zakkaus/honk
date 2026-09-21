@@ -8,8 +8,8 @@ use super::{KernelCondition, KernelPredicate, RoutingPushPlan};
 use anyhow::{Context, ensure};
 use aya_obj::generated::{
     BPF_ALU64, BPF_AND, BPF_B, BPF_CALL, BPF_DW, BPF_EXIT, BPF_IMM, BPF_JA, BPF_JEQ, BPF_JGE,
-    BPF_JGT, BPF_JMP, BPF_JNE, BPF_K, BPF_LD, BPF_LDX, BPF_MEM, BPF_MOV, BPF_OR, BPF_ST, BPF_STX,
-    BPF_W, BPF_X, bpf_insn,
+    BPF_JGT, BPF_JMP, BPF_JNE, BPF_K, BPF_LD, BPF_LDX, BPF_MEM, BPF_MOV, BPF_ST, BPF_STX, BPF_W,
+    BPF_X, bpf_insn,
 };
 use honk_ebpf_common::{
     ROUTING_FACT_CAPACITY, ROUTING_FEATURE_DOMAIN, ROUTING_FEATURE_DOMAIN_REROUTE,
@@ -24,7 +24,6 @@ const R4: u8 = 4;
 const R5: u8 = 5;
 const R6: u8 = 6;
 const R7: u8 = 7;
-const R8: u8 = 8;
 const R10: u8 = 10;
 const MAP_LOOKUP_ELEM: i32 = 1;
 const BPF_INSTRUCTION_CAPACITY: usize = 1_000_000;
@@ -64,8 +63,52 @@ enum FactKind {
 }
 
 impl FactKind {
+    fn of(predicate: &KernelPredicate) -> Option<Self> {
+        match predicate {
+            KernelPredicate::Domain(_) => Some(Self::Domain),
+            KernelPredicate::DestinationIp(_) => Some(Self::Destination),
+            KernelPredicate::SourceIp(_) => Some(Self::Source),
+            KernelPredicate::Mac(_) => Some(Self::Mac),
+            _ => None,
+        }
+    }
+
     fn area(self) -> i16 {
         -(self as i16 + 1) * FACT_BYTES
+    }
+}
+
+/// Which categories have been resolved into their stack areas.
+///
+/// Facts are values, not pointers: every fact use is dominated by one
+/// resolution of its category that initializes all 32 bytes of the area
+/// (the bitmap, or zeros when there is no entry), and no map pointer is
+/// read afterwards. The domain is resolved in the prologue because it also
+/// decides `domain_final`; the other categories at the entry of the first
+/// rule that uses them, unconditionally, so the resolved set at every rule
+/// entry is the same on every path. Resolving lazily at the first reached
+/// use, behind a runtime readiness mask, saves at most three lookups per
+/// decision but leaves the verifier distinct precise mask values on
+/// different paths; states with different masks cannot subsume each other,
+/// so it revisits the later process-name chains per mask. Measured on
+/// Linux 6.12.107: the #280 policy cost 160k processed instructions that
+/// way against 53k with rule-entry resolution, and a policy with four fact
+/// rules ahead of twenty-nine process-name rules 369k against 100k.
+struct FactAreas {
+    resolved: u8,
+}
+
+impl FactAreas {
+    fn new() -> Self {
+        Self { resolved: 0 }
+    }
+
+    fn is_resolved(&self, kind: FactKind) -> bool {
+        self.resolved & (1u8 << kind as u8) != 0
+    }
+
+    fn mark_resolved(&mut self, kind: FactKind) {
+        self.resolved |= 1u8 << kind as u8;
     }
 }
 
@@ -195,10 +238,6 @@ impl Assembler {
         self.emit(BPF_ALU64 | BPF_AND | BPF_K, dst, 0, 0, imm)?;
         Ok(())
     }
-    fn or_imm(&mut self, dst: u8, imm: i32) -> anyhow::Result<()> {
-        self.emit(BPF_ALU64 | BPF_OR | BPF_K, dst, 0, 0, imm)?;
-        Ok(())
-    }
     fn ldx_w(&mut self, dst: u8, src: u8, off: i16) -> anyhow::Result<()> {
         self.emit(BPF_LDX | BPF_W | BPF_MEM, dst, src, off, 0)?;
         Ok(())
@@ -232,12 +271,6 @@ impl Assembler {
         Ok(())
     }
 }
-
-/// Per-invocation resolved bits for the lazily evaluated categories
-/// (Destination/Source/MAC). Kept in R8, which callee-saves across the
-/// lookup helper; it says this call already resolved the category, not
-/// that the emitter merely emitted a lookup somewhere.
-const READY: u8 = R8;
 
 /// Emit a complete RoutingInput -> RoutingDecision function body.
 pub fn emit_routing_program(
@@ -276,10 +309,11 @@ pub fn emit_routing_program(
         (!plan.has_domain_rules || plan.features & ROUTING_FEATURE_DOMAIN_REROUTE == 0) as i32,
     )?;
     asm.st_imm(R7, RULE_ID, u32::MAX as i32)?;
-    asm.mov_imm(READY, 0)?;
 
+    let mut areas = FactAreas::new();
     if plan.has_domain_rules {
         emit_fact_lookup(&mut asm, FactKind::Domain, &fds)?;
+        areas.mark_resolved(FactKind::Domain);
     }
 
     for rule in &plan.rules {
@@ -292,28 +326,25 @@ pub fn emit_routing_program(
             continue;
         }
         asm.source(rule.id + 1, rule.source.as_str());
+        // Resolve, once and on every path, each category this rule is the
+        // first to use, before any of its conditions can branch.
+        for condition in &rule.conditions {
+            if let Some(kind) = FactKind::of(&condition.predicate)
+                && !areas.is_resolved(kind)
+            {
+                emit_fact_lookup(&mut asm, kind, &fds)?;
+                areas.mark_resolved(kind);
+            }
+        }
         let fail = asm.label();
         let mut conditional = false;
-        let port_first = |condition: &&KernelCondition| {
-            matches!(
-                condition.predicate,
-                KernelPredicate::DestinationPort(_) | KernelPredicate::SourcePort(_)
-            )
-        };
         for condition in rule
             .conditions
             .iter()
             .filter(|condition| !predicate_is_empty(&condition.predicate))
-            .filter(port_first)
-            .chain(
-                rule.conditions
-                    .iter()
-                    .filter(|condition| !predicate_is_empty(&condition.predicate))
-                    .filter(|condition| !port_first(condition)),
-            )
         {
             let pass = asm.label();
-            emit_condition(&mut asm, condition, pass, fail, &fds)?;
+            emit_condition(&mut asm, condition, pass, fail)?;
             conditional = true;
             asm.bind(pass);
         }
@@ -452,38 +483,10 @@ fn emit_condition(
     condition: &KernelCondition,
     pass: Label,
     fail: Label,
-    fds: &RoutingMapFds,
 ) -> anyhow::Result<()> {
     let on_true = if condition.not { fail } else { pass };
     let on_false = if condition.not { pass } else { fail };
-    emit_predicate(asm, &condition.predicate, on_true, on_false, fds)
-}
-
-/// Test one bit of a lazily resolved category. The READY bit is set only
-/// after the lookup wrote all 32 bytes of the area, so a resolved
-/// all-zeros bitmap is never re-looked-up and an unresolved one is never
-/// read. Each use site carries its own guard, so a later rule still
-/// resolves a category an earlier rule skipped.
-fn emit_fact_bit_lazy(
-    asm: &mut Assembler,
-    kind: FactKind,
-    id: u32,
-    on_true: Label,
-    on_false: Label,
-    fds: &RoutingMapFds,
-) -> anyhow::Result<()> {
-    let resolved = asm.label();
-    let bit = 1i32 << (kind as u8 - 1);
-    // READY is a per-invocation bitmask; test the category bit, not
-    // equality against the whole mask (other resolved categories set
-    // other bits).
-    asm.mov_reg(R0, READY)?;
-    asm.and_imm(R0, bit)?;
-    asm.jump(BPF_JNE, R0, 0, resolved)?;
-    emit_fact_lookup(asm, kind, fds)?;
-    asm.or_imm(READY, bit)?;
-    asm.bind(resolved);
-    emit_fact_bit(asm, kind, id, on_true, on_false)
+    emit_predicate(asm, &condition.predicate, on_true, on_false)
 }
 
 fn emit_predicate(
@@ -491,20 +494,19 @@ fn emit_predicate(
     predicate: &KernelPredicate,
     on_true: Label,
     on_false: Label,
-    fds: &RoutingMapFds,
 ) -> anyhow::Result<()> {
     match predicate {
         KernelPredicate::Domain(id) => {
             emit_fact_bit(asm, FactKind::Domain, *id, on_true, on_false)?;
         }
         KernelPredicate::DestinationIp(id) => {
-            emit_fact_bit_lazy(asm, FactKind::Destination, *id, on_true, on_false, fds)?;
+            emit_fact_bit(asm, FactKind::Destination, *id, on_true, on_false)?;
         }
         KernelPredicate::SourceIp(id) => {
-            emit_fact_bit_lazy(asm, FactKind::Source, *id, on_true, on_false, fds)?;
+            emit_fact_bit(asm, FactKind::Source, *id, on_true, on_false)?;
         }
         KernelPredicate::Mac(id) => {
-            emit_fact_bit_lazy(asm, FactKind::Mac, *id, on_true, on_false, fds)?;
+            emit_fact_bit(asm, FactKind::Mac, *id, on_true, on_false)?;
         }
         KernelPredicate::DestinationPort(ranges) => {
             emit_port_ranges(asm, ranges, INPUT_DST_PORT, on_true, on_false)?;

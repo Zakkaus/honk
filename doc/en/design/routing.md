@@ -172,16 +172,25 @@ map has no entry. Every fact use is dominated by that resolution and no map
 pointer is read after it; each condition tests its bit directly in the area (a
 zero bitmap fails every positive bit, which is what a missing entry meant),
 then applies negation. The domain is resolved in the prologue because a hit
-also sets `domain_final`. Within each rule, complete positive and negative
-destination/source-port conditions run before the remaining conditions.
-Non-domain facts are resolved at their first reached use, not at rule entry:
-each use checks its category bit in the invocation-local `R8` readiness mask.
-Only a completed bitmap copy or zero fill sets that bit; map misses, absent MACs,
-invalid families and present-zero bitmaps therefore also count as resolved.
-An earlier skipped use leaves the bit clear so a later use still resolves it.
-Every call starts with an empty readiness mask; no fact state crosses invocations
-or generations. Lazy guards add code at each use site, while avoiding fact work
-on paths rejected earlier; this is not a measured net throughput improvement.
+also sets `domain_final`; the other categories are resolved at the entry of the
+first rule that uses them, before any of that rule's conditions can branch, so
+the set of resolved categories at every rule entry is the same on every path
+and flows decided by earlier rules skip the lookup. Map misses, absent MACs and
+invalid families count as resolved (a zero-filled area). The areas are
+invocation-local; nothing in them crosses a generation.
+
+Resolving instead at the first reached use, behind a per-invocation readiness
+mask in a register, saves at most three lookups per decision but reintroduces
+path-dependent verifier state: conditional resolution leaves distinct
+resolved-category masks on different paths, the readiness tests keep them
+precise and live, and states with incompatible masks cannot subsume one
+another, so the verifier revisits the later process-name chains for different
+masks. Measured on Linux 6.12.107: the #280 policy cost 160,415 processed
+instructions that way against 53,380 with rule-entry resolution, and a policy
+with four fact rules ahead of twenty-nine process-name rules 368,874 against
+100,191. Rule-entry resolution is the design; a routing evaluation runs on
+flow-cache misses, not on ordinary cached packets, so the extra lookups are
+bounded and rare.
 
 The verifier is why. A pointer's type depends on the lookup outcome, and the
 verifier never merges a NULL with a map pointer, so a fact pointer kept live
@@ -195,12 +204,10 @@ that: the verifier explores the fall-through of an unresolved conditional
 first, so the copy from a map value sits on the fall-through at every split
 (including the IPv4/IPv6 dispatch) and the zero fill on the jump target; a
 zero fill recorded first becomes precise once a bit test on it is predictable
-and cannot subsume the later unknown values. The [historical measurements](https://paste.gentoozh.org/md/Jh3E30L0+Vf)
-on Linux 6.12.107 belong to the eager rule-entry implementation at `6a2b395`:
-53,279 processed instructions without the two rules and 53,380 with them.
-They are not measurements of the later port-first, READY-guarded implementation;
-successful verifier-budget tests establish loadability, not that numeric cost.
-IPv4/IPv6 key construction and map selection still join at one lookup call;
+and cannot subsume the later unknown values. Measured on the same kernel, the
+issue's policy verifies in 53,279 processed instructions without the two rules
+and 53,380 with them. Successful verifier-budget tests establish loadability,
+not that numeric cost. IPv4/IPv6 key construction and map selection still join at one lookup call;
 only IPv4 key padding is zeroed, without clearing bytes immediately overwritten.
 
 Fact preparation keeps hash-first duplicate coalescing, sorts only unique keys,

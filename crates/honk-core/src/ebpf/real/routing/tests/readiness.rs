@@ -70,9 +70,9 @@ fn mac_key(mac: [u8; 6]) -> LpmKey {
 fn readiness_plan(facts: RoutingFactMaps) -> RoutingPushPlan {
     RoutingPushPlan {
         rules: vec![
-            // Each failure edge is deliberately reachable: the scalar gate can
-            // fail before any fact, while each fact and the family gate can fail
-            // after a different prefix of the fact categories was computed.
+            // Each failure edge is deliberately reachable: the scalar gate,
+            // each fact and the family gate can all fail, and the decision
+            // after every join must be complete.
             kernel_rule(
                 0,
                 vec![
@@ -189,7 +189,7 @@ fn fact_readiness_failure_joins_preserve_full_decisions() {
     );
 
     for (label, connection, expected) in [
-        ("scalar failure before first lookup", &scalar_miss, positive),
+        ("scalar failure", &scalar_miss, positive),
         (
             "destination failure after destination lookup",
             &destination_miss,
@@ -221,7 +221,7 @@ fn fact_readiness_failure_joins_preserve_full_decisions() {
     );
     assert_route(
         &mut backend,
-        "absent MAC is a cached NULL negative fact",
+        "absent MAC is a zero-filled negative fact",
         &input(&absent_mac),
         decision(1, 0xa04, false, 1, 4),
     );

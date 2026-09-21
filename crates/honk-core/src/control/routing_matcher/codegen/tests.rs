@@ -1,5 +1,6 @@
 use super::*;
 use crate::routing::Router;
+use aya_obj::generated::BPF_ALU;
 use honk_config::routing::{RoutingCondition, RoutingOutbound, RoutingRule};
 use honk_config::types::DialMode;
 use serde_json::json;
@@ -12,10 +13,6 @@ fn fields(insn: &bpf_insn) -> (u32, u8, u8, i16, i32) {
         insn.off,
         insn.imm,
     )
-}
-
-fn jump_target(insns: &[bpf_insn], index: usize) -> usize {
-    (index as isize + 1 + insns[index].off as isize) as usize
 }
 
 fn rule(condition: serde_json::Value, outbound: &str) -> RoutingRule {
@@ -68,83 +65,204 @@ fn rule_start(bytecode: &RoutingBytecode, id: u32) -> usize {
         .expect("rule source line")
 }
 
+fn is_null_check(insn: &bpf_insn) -> bool {
+    insn.code as u32 == BPF_JMP | BPF_JEQ | BPF_K && insn.dst_reg() == R0 && insn.imm == 0
+}
+
+fn is_load(insn: &bpf_insn) -> bool {
+    insn.code as u32 & 0x07 == BPF_LDX && insn.code as u32 & 0xe0 == BPF_MEM
+}
+
+/// The #280 shape: two `sip && dip && dport` rules ahead of a long
+/// process-name chain, later `mac`, `sip`, `dip` and `domain` rules.
+/// Every category is looked up once, on every path, at the entry of the
+/// first rule that uses it (domain in the prologue).
 #[test]
-fn domain_lookup_stays_in_the_prologue_before_ports() {
-    let bytecode = emit(&[rule(
-        json!({"port": ["443"], "domain_suffix": ["example.com"]}),
-        "proxy",
-    )]);
+fn each_fact_category_is_resolved_exactly_once() {
+    let names = json!([
+        "dnsmasq",
+        "systemd-resolved",
+        "mosdns",
+        "NetworkManager",
+        "qbittorrent",
+        "iris-meta",
+        "sing-box",
+        "mihomo"
+    ]);
+    let rules = [
+        rule(
+            json!({"source_ip": ["198.18.81.2/32"], "ip": ["198.18.80.2/32"], "port": ["15201", "18081", "15203"]}),
+            "proxy",
+        ),
+        rule(
+            json!({"source_ip": ["198.18.81.2/32"], "ip": ["198.18.80.2/32"], "port": ["15202"]}),
+            "direct",
+        ),
+        rule(json!({"process_name": names, "port": ["53"]}), "direct"),
+        rule(json!({"process_name": names}), "direct"),
+        rule(
+            json!({"mac": ["00:a0:98:24:5e:83", "ba:da:2e:00:76:a0"]}),
+            "direct",
+        ),
+        rule(json!({"source_ip": ["10.10.10.24/32"]}), "direct"),
+        rule(json!({"ip": ["10.0.0.0/8", "192.168.0.0/16"]}), "direct"),
+        rule(json!({"domain_suffix": ["example.com"]}), "proxy"),
+        rule(json!({"ip": ["1.1.1.0/24"]}), "proxy"),
+    ];
+    let bytecode = emit(&rules);
     let calls = lookups(&bytecode);
-    assert_eq!(calls.len(), 1);
-    assert!(
-        bytecode.insns[..calls[0]]
-            .iter()
-            .any(|insn| fields(insn) == (BPF_ALU64 | BPF_MOV | BPF_K, READY, 0, 0, 0))
-    );
-    let start = rule_start(&bytecode, 0);
-    assert!(calls[0] < start);
     assert_eq!(
-        fields(&bytecode.insns[start]),
-        (BPF_LDX | BPF_W | BPF_MEM, R0, R6, INPUT_DST_PORT, 0)
+        calls.len(),
+        4,
+        "domain, destination, source and MAC: {calls:?}"
+    );
+    let rule0 = rule_start(&bytecode, 0);
+    let rule1 = rule_start(&bytecode, 1);
+    let rule4 = rule_start(&bytecode, 4);
+    let rule5 = rule_start(&bytecode, 5);
+    assert!(calls[0] < rule0, "domain {calls:?} vs rule 0 at {rule0}");
+    assert!(
+        rule0 < calls[1] && calls[2] < rule1,
+        "{calls:?} vs rule 0..1 at {rule0}..{rule1}"
+    );
+    assert!(
+        rule4 < calls[3] && calls[3] < rule5,
+        "MAC {calls:?} vs rule 4 at {rule4}..{rule5}"
     );
 }
 
+/// A lookup result is consumed by its copy and nothing else: right after
+/// the NULL check, four DW loads through R0 each store into the
+/// category's area, nothing else reads R0 until it is overwritten, and
+/// every other load goes through the input pointer or the stack.
+/// Structural: the kernel suite proves what the copied values mean.
 #[test]
-fn lazy_fact_guard_publishes_its_bit_after_copy_and_zero_paths() {
-    let fds = RoutingMapFds {
-        destination_v4: 11,
-        destination_v6: 12,
-        source_v4: 13,
-        source_v6: 14,
-        mac: 15,
-        domain: 16,
-    };
-    for (kind, bit, area) in [
-        (FactKind::Destination, 1, -64),
-        (FactKind::Source, 2, -96),
-        (FactKind::Mac, 4, -128),
-    ] {
-        let mut asm = Assembler::new();
-        let pass = asm.label();
-        let fail = asm.label();
-        emit_fact_bit_lazy(&mut asm, kind, 255, pass, fail, &fds).unwrap();
-        asm.bind(pass);
-        asm.mov_imm(R0, 0).unwrap();
-        asm.exit().unwrap();
-        asm.bind(fail);
-        asm.mov_imm(R0, 1).unwrap();
-        asm.exit().unwrap();
-        let bytecode = asm.finish().unwrap();
-        let insns = &bytecode.insns;
-        assert_eq!(
-            fields(&insns[0]),
-            (BPF_ALU64 | BPF_MOV | BPF_X, R0, READY, 0, 0)
-        );
-        assert_eq!(
-            fields(&insns[1]),
-            (BPF_ALU64 | BPF_AND | BPF_K, R0, 0, 0, bit)
-        );
-        let resolved = jump_target(insns, 2);
-        assert_eq!(
-            fields(&insns[2]),
-            (BPF_JMP | BPF_JNE | BPF_K, R0, 0, (resolved - 3) as i16, 0)
-        );
-        let calls = lookups(&bytecode);
-        assert_eq!(calls.len(), 1);
-        let copy = calls[0] + 2;
-        let absent = jump_target(insns, calls[0] + 1);
-        let publish = resolved - 1;
-        assert_eq!(jump_target(insns, copy + 8), publish);
-        assert_eq!(absent + 5, publish);
-        assert_eq!(
-            fields(&insns[publish]),
-            (BPF_ALU64 | BPF_OR | BPF_K, READY, 0, 0, bit)
-        );
-        assert_eq!(
-            fields(&insns[resolved]),
-            (BPF_LDX | BPF_W | BPF_MEM, R2, R10, area + 28, 0)
-        );
+fn a_lookup_result_is_copied_into_its_area_and_not_kept() {
+    let rules = [
+        rule(
+            json!({"source_ip": ["198.18.81.2/32"], "ip": ["198.18.80.2/32"], "port": ["15201"]}),
+            "proxy",
+        ),
+        rule(
+            json!({"process_name": ["dnsmasq", "qemu-system-x86"]}),
+            "direct",
+        ),
+        rule(json!({"mac": ["00:a0:98:24:5e:83"]}), "direct"),
+        rule(json!({"domain_suffix": ["example.com"]}), "proxy"),
+        rule(
+            json!({"not": {"mac": ["ba:da:2e:00:76:a0"]}, "ip": ["10.0.0.0/8"], "dscp": ["0"]}),
+            "direct",
+        ),
+        rule(json!({"source_ip": ["10.10.10.24/32"]}), "direct"),
+        rule(json!({"domain_suffix": ["example.org"]}), "direct"),
+    ];
+    let bytecode = emit(&rules);
+    let insns = &bytecode.insns;
+    let calls = lookups(&bytecode);
+    assert_eq!(calls.len(), 4, "{calls:?}");
+    let words = (FACT_BYTES / 8) as usize;
+    let mut copy_loads = Vec::new();
+    for &call in &calls {
+        assert!(is_null_check(&insns[call + 1]), "lookup at {call}");
+        let mut index = call + 2;
+        if insns[index].code as u32 == BPF_ST | BPF_W | BPF_MEM {
+            index += 1; // domain_final
+        }
+        for word in 0..words {
+            let (load, store) = (&insns[index], &insns[index + 1]);
+            assert!(
+                is_load(load)
+                    && load.code as u32 & 0x18 == BPF_DW
+                    && load.src_reg() == R0
+                    && load.off == (word * 8) as i16,
+                "copy load {word} after lookup at {call}"
+            );
+            assert!(
+                store.code as u32 == BPF_STX | BPF_DW | BPF_MEM
+                    && store.dst_reg() == R10
+                    && store.src_reg() == load.dst_reg()
+                    && (store.off + FACT_BYTES * 4) % FACT_BYTES == (word * 8) as i16,
+                "copy store {word} after lookup at {call}"
+            );
+            copy_loads.push(index);
+            index += 2;
+        }
     }
+    // Linear scan: from a helper call until the next write to R0, the
+    // only reads of R0 are the NULL check and the copy loads. The
+    // emitted code is straight-line there, so this is conservative.
+    let mut r0_is_result = false;
+    for (index, insn) in insns.iter().enumerate() {
+        let code = insn.code as u32;
+        let (class, op, from_register) = (code & 0x07, code & 0xf0, code & 0x08 == BPF_X);
+        if class == BPF_JMP && op == BPF_CALL {
+            r0_is_result = true;
+            continue;
+        }
+        let reads_r0 = match class {
+            BPF_LDX | BPF_STX => insn.src_reg() == R0,
+            BPF_ALU64 | BPF_ALU => {
+                (op != BPF_MOV && insn.dst_reg() == R0) || (from_register && insn.src_reg() == R0)
+            }
+            BPF_JMP => {
+                op == BPF_EXIT
+                    || (op != BPF_JA
+                        && (insn.dst_reg() == R0 || (from_register && insn.src_reg() == R0)))
+            }
+            _ => false,
+        };
+        if r0_is_result && reads_r0 {
+            assert!(
+                (calls.contains(&(index - 1)) && is_null_check(insn))
+                    || copy_loads.contains(&index),
+                "lookup result read at {index}"
+            );
+        }
+        if matches!(class, BPF_LDX | BPF_ALU64 | BPF_ALU) && insn.dst_reg() == R0 {
+            r0_is_result = false;
+        }
+        if is_load(insn) {
+            match insn.src_reg() {
+                R6 | R10 => {}
+                R0 => assert!(copy_loads.contains(&index), "load through R0 at {index}"),
+                base => panic!("load through R{base} at {index}"),
+            }
+        }
+    }
+}
+
+/// A category first used by a later rule is resolved at that rule's
+/// entry: after the previous rule's action (flows decided earlier skip
+/// the lookup) and before the rule's own predicates, even one that
+/// would short-circuit ahead of the fact. Conditions are emitted in
+/// canonical order, port before MAC, so the port compare comes first
+/// and a lookup at the first reached condition would follow it.
+#[test]
+fn a_fact_is_resolved_at_the_entry_of_its_first_use_rule() {
+    let rules = [
+        rule(json!({"process_name": ["dnsmasq"]}), "direct"),
+        rule(json!({"port": ["53"]}), "direct"),
+        rule(
+            json!({"port": ["443"], "mac": ["00:a0:98:24:5e:83"]}),
+            "proxy",
+        ),
+        rule(json!({"mac": ["ba:da:2e:00:76:a0"]}), "direct"),
+    ];
+    let bytecode = emit(&rules);
+    let calls = lookups(&bytecode);
+    let rule2 = rule_start(&bytecode, 2);
+    let rule3 = rule_start(&bytecode, 3);
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    let port_compare = (rule2..rule3)
+        .find(|index| {
+            let insn = &bytecode.insns[*index];
+            is_load(insn) && insn.src_reg() == R6 && insn.off == INPUT_DST_PORT
+        })
+        .expect("rule 2 reads the destination port");
+    assert!(
+        rule2 < calls[0] && calls[0] < port_compare,
+        "{calls:?} vs rule 2 at {rule2}, port read at {port_compare}"
+    );
 }
 
 // The verifier explores fall-through first, so it must copy unknown map scalars
@@ -212,65 +330,6 @@ fn fact_lookup_copies_or_zeros_its_stack_area_before_rejoining() {
         assert_eq!(fields(&insns[copy + 8]), (BPF_JMP | BPF_JA, 0, 0, 5, 0));
         assert_eq!(insns.len(), absent + 5);
     }
-}
-
-#[test]
-fn complete_positive_and_negative_ports_precede_ip_facts() {
-    let bytecode = emit(&[
-        rule(
-            json!({
-                "ip": ["203.0.113.0/24"], "source_ip": ["198.51.100.0/24"],
-                "port": ["80", "443-445"], "source_port": ["1024-2048", "4096"],
-                "not": {"port": ["81", "444"], "source_port": ["1500-1600", "2000"]}
-            }),
-            "proxy",
-        ),
-        rule(json!({"ip": ["192.0.2.0/24"]}), "direct"),
-    ]);
-    let insns = &bytecode.insns;
-    let fail = rule_start(&bytecode, 1);
-    let mut start = rule_start(&bytecode, 0);
-    let ports = [
-        (INPUT_DST_PORT, &[(80, 80), (443, 445)], false),
-        (INPUT_SRC_PORT, &[(1024, 2048), (4096, 4096)], false),
-        (INPUT_DST_PORT, &[(81, 81), (444, 444)], true),
-        (INPUT_SRC_PORT, &[(1500, 1600), (2000, 2000)], true),
-    ];
-    for (offset, ranges, negated) in ports {
-        assert_eq!(
-            fields(&insns[start]),
-            (BPF_LDX | BPF_W | BPF_MEM, R0, R6, offset, 0)
-        );
-        let next = start + 2 + 4 * ranges.len();
-        for (index, &(low, high)) in ranges.iter().enumerate() {
-            let range = start + 1 + 4 * index;
-            assert_eq!(
-                fields(&insns[range]),
-                (BPF_JMP | BPF_JGE | BPF_K, R0, 0, 1, low)
-            );
-            assert_eq!(fields(&insns[range + 1]), (BPF_JMP | BPF_JA, 0, 0, 2, 0));
-            assert_eq!(
-                fields(&insns[range + 2]),
-                (BPF_JMP | BPF_JGT | BPF_K, R0, 0, 1, high)
-            );
-            assert_eq!(insns[range + 3].code as u32, BPF_JMP | BPF_JA);
-            assert_eq!(
-                jump_target(insns, range + 3),
-                if negated { fail } else { next }
-            );
-        }
-        assert_eq!(insns[next - 1].code as u32, BPF_JMP | BPF_JA);
-        assert_eq!(
-            jump_target(insns, next - 1),
-            if negated { next } else { fail }
-        );
-        start = next;
-    }
-    assert_eq!(
-        fields(&insns[start]),
-        (BPF_ALU64 | BPF_MOV | BPF_X, R0, READY, 0, 0)
-    );
-    assert!(lookups(&bytecode)[0] > start);
 }
 
 #[test]
