@@ -8,7 +8,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures::{StreamExt, stream::FuturesUnordered};
-use std::net::IpAddr;
+use honk_config::{Config, node::Node, types::NodeProtocol};
+use std::{collections::HashMap, net::IpAddr};
 
 use super::{
     NativeState, error, invalid_query, parse_query,
@@ -17,6 +18,42 @@ use super::{
 use crate::connection_tracker::CloseOutcome;
 
 pub(super) const MAX_BULK_CLOSE: usize = 1000;
+
+/// Resolves the names a connection captured at dial time to catalog IDs.
+pub(super) struct ChainIds<'a> {
+    groups: &'a HashMap<String, String>,
+    nodes: HashMap<&'a str, &'a Node>,
+}
+
+impl<'a> ChainIds<'a> {
+    pub(super) fn new(config: &'a Config, groups: &'a HashMap<String, String>) -> Self {
+        Self {
+            groups,
+            nodes: config
+                .nodes
+                .iter()
+                .map(|node| (node.name.as_str(), node))
+                .collect(),
+        }
+    }
+
+    /// `names` is leaf first; the contract lists groups outermost first, then
+    /// the leaf. `None` when any name no longer resolves.
+    pub(super) fn resolve(&self, names: &[String]) -> Option<Vec<String>> {
+        let (leaf, groups) = names.split_first()?;
+        let node = self.nodes.get(leaf.as_str())?;
+        if matches!(node.protocol(), NodeProtocol::Direct | NodeProtocol::Block) {
+            return Some(Vec::new());
+        }
+        let mut chain = groups
+            .iter()
+            .rev()
+            .map(|name| self.groups.get(name).cloned())
+            .collect::<Option<Vec<_>>>()?;
+        chain.push(node.id.to_string());
+        Some(chain)
+    }
+}
 
 async fn admit(request: Request, id: &RequestId) -> Result<(), ApiError> {
     if super::config::request_header(&request, "idempotency-key")

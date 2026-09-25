@@ -49,12 +49,12 @@ async fn connections_filter_before_combined_limit_and_preserve_full_width_live_b
         "rule_expression",
         "ingress",
         "domain_source",
-        "started_at",
         "upload_bytes_per_second",
         "download_bytes_per_second",
     ] {
         assert_eq!(row.get(key), Some(&Value::Null), "{key}");
     }
+    assert!(row["started_at"].is_string());
     assert_eq!(row["outbound"], "routed-group");
     assert_eq!(row["chain"], json!([]));
     assert_eq!(row["chain_source"], "unknown");
@@ -112,6 +112,76 @@ async fn connections_filter_before_combined_limit_and_preserve_full_width_live_b
     .await;
     assert_eq!(removed["total_udp"], 0);
     assert_eq!(removed["udp"], json!([]));
+    app.shutdown().await;
+}
+
+#[tokio::test]
+async fn connections_without_flow_recording_report_the_dial_time_chain() {
+    use honk_config::{group::Group, node::Node};
+
+    let mut node = Node::from_share_link("socks5://127.0.0.1:1080").unwrap();
+    node.name = "leaf".into();
+    let app = TestApp::new(|config| {
+        config.nodes.push(node.clone());
+        config.groups = vec![
+            Group {
+                name: "outer".into(),
+                groups: vec!["inner".into()],
+                ..Default::default()
+            },
+            Group {
+                name: "inner".into(),
+                nodes: vec![node.id],
+                ..Default::default()
+            },
+        ];
+    })
+    .await;
+    let groups = response_json(app.get("/api/v1/groups").send().await.unwrap()).await;
+    let group_id = |name: &str| {
+        groups
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap()["id"]
+            .clone()
+    };
+    let tracker = app.control.connection_tracker();
+    let now = Instant::now();
+    for (id, chains) in [
+        ("proxied", vec!["leaf", "inner", "outer"]),
+        ("direct", vec!["direct"]),
+        ("blocked", vec!["block", "outer"]),
+        ("renamed", vec!["leaf", "gone"]),
+    ] {
+        let mut row = entry(id, "tcp", "192.0.2.1:4000", now);
+        row.chains = chains.into_iter().map(str::to_owned).collect();
+        tracker.register(row);
+    }
+    let list = response_json(app.get("/api/v1/connections").send().await.unwrap()).await;
+    let row = |id: &str| {
+        list["tcp"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let proxied = row("proxied");
+    assert_eq!(
+        proxied["chain"],
+        json!([group_id("outer"), group_id("inner"), node.id.to_string()])
+    );
+    assert_eq!(proxied["chain_source"], "evaluation");
+    assert!(proxied["started_at"].is_string());
+    for id in ["direct", "blocked"] {
+        assert_eq!(row(id)["chain"], json!([]), "{id}");
+        assert_eq!(row(id)["chain_source"], "evaluation", "{id}");
+    }
+    assert_eq!(row("renamed")["chain"], json!([]));
+    assert_eq!(row("renamed")["chain_source"], "unknown");
     app.shutdown().await;
 }
 

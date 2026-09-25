@@ -471,11 +471,22 @@ impl Ord for Candidate {
     }
 }
 
-fn connection(state: &NativeState, entry: &ConnectionEntry, full: bool) -> Connection {
+fn connection(
+    state: &NativeState,
+    entry: &ConnectionEntry,
+    chains: &connections::ChainIds,
+    full: bool,
+) -> Connection {
     let evidence = entry
         .native_flow_id
         .as_deref()
         .and_then(|id| state.observation.flows.connection_evidence(id));
+    let (chain, chain_source) = match &evidence {
+        Some(value) if value.chain_source != "unknown" => (value.chain.clone(), value.chain_source),
+        _ => chains
+            .resolve(&entry.chains)
+            .map_or((Vec::new(), "unknown"), |chain| (chain, "evaluation")),
+    };
     Connection {
         id: entry.id.clone(),
         flow_id: entry.native_flow_id.clone(),
@@ -485,13 +496,8 @@ fn connection(state: &NativeState, entry: &ConnectionEntry, full: bool) -> Conne
         dst: full.then(|| entry.destination.clone()),
         domain: full.then(|| entry.domain.clone()),
         outbound: entry.routed_outbound.clone(),
-        chain: evidence
-            .as_ref()
-            .map(|value| value.chain.clone())
-            .unwrap_or_default(),
-        chain_source: evidence
-            .as_ref()
-            .map_or("unknown", |value| value.chain_source),
+        chain,
+        chain_source,
         rule_id: evidence.as_ref().and_then(|value| value.rule_id.clone()),
         rule_expression: evidence
             .as_ref()
@@ -501,7 +507,11 @@ fn connection(state: &NativeState, entry: &ConnectionEntry, full: bool) -> Conne
             .map_or("unknown", |value| value.rule_source),
         ingress: None,
         domain_source: evidence.as_ref().and_then(|value| value.domain_source),
-        started_at: evidence.map(|value| value.started_at),
+        started_at: evidence.map(|value| value.started_at).or_else(|| {
+            SystemTime::now()
+                .checked_sub(entry.start_time.elapsed())
+                .map(timestamp)
+        }),
         observed_by: "userspace",
         upload_bytes: Some(entry.upload.load(Ordering::Relaxed).to_string()),
         download_bytes: Some(entry.download.load(Ordering::Relaxed).to_string()),
@@ -510,7 +520,7 @@ fn connection(state: &NativeState, entry: &ConnectionEntry, full: bool) -> Conne
     }
 }
 
-fn connections(state: &NativeState, uri: &Uri, id: &RequestId) -> Result<Response, ApiError> {
+async fn connections(state: &NativeState, uri: &Uri, id: &RequestId) -> Result<Response, ApiError> {
     let query = parse_query(uri, &["type", "src", "limit", "detail"], id)?;
     let full = full_detail(&query, id)?;
     let kind = query.get("type").map(String::as_str).unwrap_or("all");
@@ -533,6 +543,9 @@ fn connections(state: &NativeState, uri: &Uri, id: &RequestId) -> Result<Respons
     }
     let mut total_tcp = 0;
     let mut total_udp = 0;
+    let config = state.config.read().await.clone();
+    let catalog = state.observation.catalog.snapshot();
+    let chains = connections::ChainIds::new(&config, &catalog.groups);
     let mut selected: BinaryHeap<Candidate> = BinaryHeap::with_capacity(limit);
     state.tracker.visit(|entry| {
         let tcp = match entry.network.as_str() {
@@ -569,7 +582,7 @@ fn connections(state: &NativeState, uri: &Uri, id: &RequestId) -> Result<Respons
         selected.push(Candidate {
             observed: entry.start_time,
             tcp,
-            value: connection(state, entry, full),
+            value: connection(state, entry, &chains, full),
         });
     });
     let truncated = total_tcp + total_udp > selected.len() as u64;

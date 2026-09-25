@@ -402,7 +402,7 @@ pub(super) fn routes() -> Router<Arc<NativeState>> {
             resource(
                 get(
                     |State(state): App, Extension(id): Id, uri: Uri| async move {
-                        respond(super::connections(&state, &uri, &id), id)
+                        respond(super::connections(&state, &uri, &id).await, id)
                     },
                 )
                 .delete(
