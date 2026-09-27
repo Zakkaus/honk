@@ -63,6 +63,16 @@ fn invalid() -> ApiError {
     )
 }
 
+/// Details name the operation index and, when one member is at fault, its
+/// key; submitted pointers and values are never echoed.
+fn invalid_operation(index: usize, field: Option<&str>, kind: &str) -> ApiError {
+    let mut details = json!({"operation": index, "kind": kind});
+    if let Some(field) = field {
+        details["field"] = json!(field);
+    }
+    invalid().with_details(details)
+}
+
 pub(super) fn read_only() -> ApiError {
     ApiError::new(
         StatusCode::NOT_FOUND,
@@ -99,11 +109,12 @@ fn tolerance_not_urltest() -> ApiError {
 }
 
 /// The index of the supported path held by the operation's `key` pointer.
-fn field(operation: &serde_json::Map<String, Value>, key: &'static str) -> Result<usize, ApiError> {
-    let pointer = operation
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(invalid)?;
+fn field(
+    index: usize,
+    operation: &serde_json::Map<String, Value>,
+    key: &'static str,
+) -> Result<usize, ApiError> {
+    let pointer = string(index, operation, key)?;
     PATHS
         .iter()
         .position(|candidate| *candidate == pointer)
@@ -113,6 +124,19 @@ fn field(operation: &serde_json::Map<String, Value>, key: &'static str) -> Resul
                 json!({"field": key, "allowed": PATHS}),
             )
         })
+}
+
+fn string<'a>(
+    index: usize,
+    operation: &'a serde_json::Map<String, Value>,
+    key: &'static str,
+) -> Result<&'a str, ApiError> {
+    match operation.get(key) {
+        None => Err(invalid_operation(index, Some(key), "missing")),
+        Some(value) => value
+            .as_str()
+            .ok_or_else(|| invalid_operation(index, Some(key), "wrong_type")),
+    }
 }
 
 fn integer(value: &Value) -> Option<u64> {
@@ -218,22 +242,25 @@ impl GroupPatch {
                 None,
             ));
         }
-        for operation in operations {
-            let operation = operation.as_object().ok_or_else(invalid)?;
-            let op = operation
-                .get("op")
-                .and_then(Value::as_str)
-                .ok_or_else(invalid)?;
-            let path = field(operation, "path")?;
+        for (index, operation) in operations.iter().enumerate() {
+            let malformed = |field, kind| invalid_operation(index, field, kind);
+            let operation = operation
+                .as_object()
+                .ok_or_else(|| malformed(None, "wrong_type"))?;
+            let op = string(index, operation, "op")?;
+            let path = field(index, operation, "path")?;
             match op {
                 "add" | "replace" | "test" => {
-                    if operation.len() != 3 || !operation.contains_key("value") {
-                        return Err(invalid());
+                    if !operation.contains_key("value") {
+                        return Err(malformed(Some("value"), "missing"));
+                    }
+                    if operation.len() != 3 {
+                        return Err(malformed(None, "unknown_field"));
                     }
                     let value =
                         normalized(path, &operation["value"]).ok_or_else(|| rejected(op, path))?;
                     if op != "add" && values[path].is_none() {
-                        return Err(invalid());
+                        return Err(malformed(Some("path"), "absent"));
                     }
                     if op == "test" {
                         if values[path].as_ref() != Some(&value) {
@@ -249,23 +276,28 @@ impl GroupPatch {
                     }
                 }
                 "remove" => {
-                    if operation.len() != 2 || values[path].take().is_none() {
-                        return Err(invalid());
+                    if operation.len() != 2 {
+                        return Err(malformed(None, "unknown_field"));
+                    }
+                    if values[path].take().is_none() {
+                        return Err(malformed(Some("path"), "absent"));
                     }
                 }
                 "copy" | "move" => {
+                    let from = field(index, operation, "from")?;
                     if operation.len() != 3 {
-                        return Err(invalid());
+                        return Err(malformed(None, "unknown_field"));
                     }
-                    let from = field(operation, "from")?;
-                    let value = values[from].as_ref().ok_or_else(invalid)?;
+                    let value = values[from]
+                        .as_ref()
+                        .ok_or_else(|| malformed(Some("from"), "absent"))?;
                     let value = normalized(path, value).ok_or_else(|| rejected(op, path))?;
                     if op == "move" {
                         values[from] = None;
                     }
                     values[path] = Some(value);
                 }
-                _ => return Err(invalid()),
+                _ => return Err(malformed(Some("op"), "invalid_value")),
             }
         }
         let urltest = values[0]
@@ -388,7 +420,7 @@ pub(super) async fn patch(
                 None,
             )
         })?;
-    let operations: Value = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    let operations: Value = super::body::decode(&bytes, invalid)?;
     let reservation = state.observation.operations.reserve(
         state.principal(),
         "PATCH",
@@ -485,7 +517,7 @@ pub(super) async fn select(
                 id,
             )
         })?;
-    let body: SelectionBody = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    let body: SelectionBody = super::body::decode(&bytes, invalid)?;
     if body.member_id.is_empty() || body.member_id.len() > 256 {
         return Err(invalid());
     }
@@ -723,6 +755,65 @@ mod tests {
             let error = serde_json::to_value(patch.changes().unwrap_err()).unwrap();
             assert_eq!(error["error"]["code"], "unsupported_value");
             assert_eq!(error["error"]["message"], message);
+            assert_eq!(error["error"]["details"], details);
+            assert!(!error.to_string().contains("PRIVATE"), "{error}");
+        }
+    }
+
+    #[test]
+    fn malformed_operations_name_the_operation_and_member() {
+        let tolerance = "/config/tolerance";
+        for (operations, details) in [
+            (
+                json!([{"op":"test","path":tolerance,"value":50}, "PRIVATE"]),
+                json!({"operation":1,"kind":"wrong_type"}),
+            ),
+            (
+                json!([{"path":tolerance,"value":1}]),
+                json!({"operation":0,"field":"op","kind":"missing"}),
+            ),
+            (
+                json!([{"op":1,"path":tolerance,"value":1}]),
+                json!({"operation":0,"field":"op","kind":"wrong_type"}),
+            ),
+            (
+                json!([{"op":"PRIVATE","path":tolerance,"value":1}]),
+                json!({"operation":0,"field":"op","kind":"invalid_value"}),
+            ),
+            (
+                json!([{"op":"replace","value":1}]),
+                json!({"operation":0,"field":"path","kind":"missing"}),
+            ),
+            (
+                json!([{"op":"replace","path":tolerance}]),
+                json!({"operation":0,"field":"value","kind":"missing"}),
+            ),
+            (
+                json!([{"op":"replace","path":tolerance,"value":1,"PRIVATE":1}]),
+                json!({"operation":0,"kind":"unknown_field"}),
+            ),
+            (
+                json!([{"op":"remove","path":tolerance},{"op":"test","path":tolerance,"value":1}]),
+                json!({"operation":1,"field":"path","kind":"absent"}),
+            ),
+            (
+                json!([{"op":"remove","path":tolerance},{"op":"remove","path":tolerance}]),
+                json!({"operation":1,"field":"path","kind":"absent"}),
+            ),
+            (
+                json!([{"op":"copy","path":"/config/idle_timeout"}]),
+                json!({"operation":0,"field":"from","kind":"missing"}),
+            ),
+            (
+                json!([
+                    {"op":"remove","path":tolerance},
+                    {"op":"move","from":tolerance,"path":"/config/idle_timeout"}
+                ]),
+                json!({"operation":1,"field":"from","kind":"absent"}),
+            ),
+        ] {
+            let error = serde_json::to_value(request(operations).changes().unwrap_err()).unwrap();
+            assert_eq!(error["error"]["code"], "invalid_request");
             assert_eq!(error["error"]["details"], details);
             assert!(!error.to_string().contains("PRIVATE"), "{error}");
         }

@@ -143,7 +143,7 @@ pub(in crate::native_api) async fn replace(
     let bytes = axum::body::to_bytes(request.into_body(), 65536)
         .await
         .map_err(|_| too_large())?;
-    let replacement: Replacement = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    let replacement: Replacement = body::decode(&bytes, invalid)?;
     let reservation = state.observation.configuration.operations.reserve(
         state.principal(),
         "PUT",
@@ -185,7 +185,7 @@ pub(in crate::native_api) async fn create(
     let bytes = axum::body::to_bytes(request.into_body(), 65536)
         .await
         .map_err(|_| too_large())?;
-    let creation: Creation = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    let creation: Creation = body::decode(&bytes, invalid)?;
     if !new_source_path(&creation.path) {
         return Err(invalid());
     }
@@ -225,12 +225,7 @@ pub(in crate::native_api) async fn reload(
     let bytes = axum::body::to_bytes(request.into_body(), 65536)
         .await
         .map_err(|_| too_large())?;
-    if !bytes.is_empty() {
-        let value: Value = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-        if !value.as_object().is_some_and(|object| object.is_empty()) {
-            return Err(invalid());
-        }
-    }
+    body::no_inputs(&bytes, invalid)?;
     let reservation = state.observation.configuration.operations.reserve(
         state.principal(),
         "POST",
@@ -262,10 +257,10 @@ pub(in crate::native_api) async fn validate(
     let bytes = axum::body::to_bytes(request.into_body(), 65536)
         .await
         .map_err(|_| too_large())?;
-    let request: ValidationRequest = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    let request: ValidationRequest = body::decode(&bytes, invalid)?;
     if request.sources.is_empty() || request.sources.len() > MAX_SOURCES {
         return Err(if request.sources.is_empty() {
-            invalid()
+            invalid().with_details(json!({"field":"sources","kind":"empty"}))
         } else {
             too_large()
         });
@@ -276,29 +271,40 @@ pub(in crate::native_api) async fn validate(
             ErrorCode::UnsupportedValue,
             "Validation mode is not supported",
             None,
-        ));
+        )
+        .with_details(json!({"field":"mode","allowed":["syntax","full"]})));
     }
     let mut seen = HashSet::new();
     let mut paths = HashSet::new();
     let mut total = 0usize;
     for (index, source) in request.sources.iter().enumerate() {
+        let rejected = |field, kind| {
+            invalid().with_details(json!({"field":format!("sources[{index}].{field}"),"kind":kind}))
+        };
         let name = source
             .id
             .clone()
             .unwrap_or_else(|| format!("source-{}", index + 1));
-        if name.is_empty()
-            || name.len() > 128
+        if name.is_empty() {
+            return Err(rejected("id", "empty"));
+        }
+        if name.len() > 128
             || !name
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-            || !seen.insert(name)
         {
-            return Err(invalid());
+            return Err(rejected("id", "pattern"));
         }
-        if let Some(path) = &source.path
-            && (path.is_empty() || !paths.insert(path))
-        {
-            return Err(invalid());
+        if !seen.insert(name) {
+            return Err(rejected("id", "duplicate"));
+        }
+        if let Some(path) = &source.path {
+            if path.is_empty() {
+                return Err(rejected("path", "empty"));
+            }
+            if !paths.insert(path) {
+                return Err(rejected("path", "duplicate"));
+            }
         }
         total = total
             .checked_add(source.content.len())
