@@ -787,15 +787,11 @@ fn equal_ip_networks_share_one_matcher_across_routing_and_dns() {
         .union(&DnsRouter::geo_requirements(&config.dns));
     let sources = GeoSourceSet::load(&requirements);
     let mut shared = SharedMatchers::default();
-    let router =
-        Router::from_config_with_geo_sources(&config.routing, &sources, &mut shared).unwrap();
-    let dns = DnsRouter::new_with_geo_sources(&config.dns, &sources, &mut shared).unwrap();
+    let router = Router::from_config_sharing(&config.routing, &sources, &mut shared).unwrap();
+    let dns = DnsRouter::new_sharing(&config.dns, &sources, &mut shared).unwrap();
     drop(shared);
-    let unshared_router =
-        Router::from_config_with_geo_sources(&config.routing, &sources, &mut Default::default())
-            .unwrap();
-    let unshared_dns =
-        DnsRouter::new_with_geo_sources(&config.dns, &sources, &mut Default::default()).unwrap();
+    let unshared_router = Router::from_config_with_geo_sources(&config.routing, &sources).unwrap();
+    let unshared_dns = DnsRouter::new_with_geo_sources(&config.dns, &sources).unwrap();
 
     let routed: Vec<_> = router
         .compiled_routes()
@@ -806,12 +802,12 @@ fn equal_ip_networks_share_one_matcher_across_routing_and_dns() {
             _ => None,
         })
         .collect();
-    let answered = dns.answer_ip_matchers();
+    let answered = dns.answer_ip_tries();
     let [geo, geo_again, literal, negated] = routed[..] else {
         panic!("expected four destination IP conditions");
     };
     assert!(Arc::ptr_eq(geo, geo_again) && Arc::ptr_eq(geo, negated));
-    assert!(Arc::ptr_eq(geo, answered[0]) && Arc::ptr_eq(literal, answered[1]));
+    assert!(Arc::ptr_eq(geo.trie(), answered[0]) && Arc::ptr_eq(literal.trie(), answered[1]));
     assert!(!Arc::ptr_eq(geo, literal));
     assert_eq!(
         router.policy_fingerprint(),
@@ -835,10 +831,15 @@ fn equal_ip_networks_share_one_matcher_across_routing_and_dns() {
         assert_eq!(response(&dns), response(&unshared_dns), "{ip}");
     }
 
-    let old = Arc::downgrade(geo);
-    drop((router, dns));
+    let (matcher, trie) = (Arc::downgrade(geo), Arc::downgrade(geo.trie()));
+    drop(router);
     assert!(
-        old.upgrade().is_none(),
+        matcher.upgrade().is_none(),
+        "DNS must keep only the trie, not the network list"
+    );
+    drop(dns);
+    assert!(
+        trie.upgrade().is_none(),
         "the build must not outlive its routers"
     );
 }
@@ -888,15 +889,11 @@ fn geosite_selectors_share_one_matcher_across_routing_and_dns() {
         .union(&DnsRouter::geo_requirements(&config.dns));
     let sources = GeoSourceSet::load(&requirements);
     let mut shared = SharedMatchers::default();
-    let router =
-        Router::from_config_with_geo_sources(&config.routing, &sources, &mut shared).unwrap();
-    let dns = DnsRouter::new_with_geo_sources(&config.dns, &sources, &mut shared).unwrap();
+    let router = Router::from_config_sharing(&config.routing, &sources, &mut shared).unwrap();
+    let dns = DnsRouter::new_sharing(&config.dns, &sources, &mut shared).unwrap();
     drop(shared);
-    let unshared_router =
-        Router::from_config_with_geo_sources(&config.routing, &sources, &mut Default::default())
-            .unwrap();
-    let unshared_dns =
-        DnsRouter::new_with_geo_sources(&config.dns, &sources, &mut Default::default()).unwrap();
+    let unshared_router = Router::from_config_with_geo_sources(&config.routing, &sources).unwrap();
+    let unshared_dns = DnsRouter::new_with_geo_sources(&config.dns, &sources).unwrap();
 
     let [cn, games_cn, games, private] = router.geosite_matchers()[..] else {
         panic!("expected four routing geosite selectors");
