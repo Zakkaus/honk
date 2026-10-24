@@ -260,11 +260,17 @@ jobs:
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/honk-core" "dist/$name/"
           cp LICENSE README.md "dist/$name/"
-          # The embedded doona UI keeps its own license and notices; lean
-          # variants do not embed it and carry no doona directory.
+          # The embedded doona UI keeps its notices and the licences of the icons
+          # and fonts it bundles; lean variants do not embed it and carry no doona
+          # directory. Both projects are GPL-3.0-only, so the top-level LICENSE
+          # covers doona too, and the build stops if doona's text ever differs.
           if [[ "${{ matrix.variant }}" == full ]]; then
+            if ! cmp -s LICENSE "$HONK_DOONA_DIR/LICENSE"; then
+              echo "::error::doona's LICENSE differs from honk's; ship it under doona/ again"
+              exit 1
+            fi
             mkdir "dist/$name/doona"
-            cp -r "$HONK_DOONA_DIR"/{LICENSE,LICENSES,NOTICE,THIRD-PARTY-NOTICES.txt} "dist/$name/doona/"
+            cp -r "$HONK_DOONA_DIR"/{LICENSES,NOTICE,THIRD-PARTY-NOTICES.txt} "dist/$name/doona/"
           fi
           tar -czf "$name.tar.gz" -C dist "$name"
 
