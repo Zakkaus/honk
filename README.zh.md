@@ -55,7 +55,7 @@ honk 是用 Rust 编写的实验性 Linux 透明代理引擎。其 eBPF 数据�
 
 ### Debug 构建
 
-两次发布之间，维护者会从 `main` 发布 `debug.*` 构建：供测试的 release profile 二进制，并非 Cargo debug profile 构建。滚动的 [Debug 预发布](https://github.com/daeuniverse/honk/releases/tag/debug)始终是最新一次构建，不会标为 Latest；每个 debug tag 在最新十个之内也保留各自的 release。与正式版一样，它们附带 `SHA256SUMS`、构建来源证明与 Downloads 一节。发布细节见[发布规则](.agents/rules/release.md)。
+两次发布之间，维护者会从 `main` 发布 `debug.*` 构建：供测试的 release profile 二进制，并非 Cargo debug profile 构建。滚动的 [Debug 预发布](https://github.com/daeuniverse/honk/releases/tag/debug)始终是最新一次构建，不会标为 Latest；每个 debug tag 都保留各自的 release：最新的九个其他 tag，加上重跑刚更新的那个 tag。与正式版一样，它们附带 `SHA256SUMS`、构建来源证明与 Downloads 一节。发布细节见[发布规则](.agents/rules/release.md)。
 
 ## Review 状态
 

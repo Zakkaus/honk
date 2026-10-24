@@ -53,7 +53,7 @@ For unprivileged userspace development, use [mock mode](doc/en/how-to-start.md#u
 
 ### Debug builds
 
-Between releases, maintainers publish `debug.*` builds from `main`: release-profile binaries for testing, not Cargo debug-profile builds. The rolling [Debug prerelease](https://github.com/daeuniverse/honk/releases/tag/debug) always holds the newest one and is never marked Latest; each debug tag also keeps its own release while it is among the newest ten. Like formal releases, they carry `SHA256SUMS`, build provenance and a Downloads section. Publication details are in [the release rules](.agents/rules/release.md).
+Between releases, maintainers publish `debug.*` builds from `main`: release-profile binaries for testing, not Cargo debug-profile builds. The rolling [Debug prerelease](https://github.com/daeuniverse/honk/releases/tag/debug) always holds the newest one and is never marked Latest; each debug tag also keeps its own release: the nine newest other tags plus the tag a re-run has just updated. Like formal releases, they carry `SHA256SUMS`, build provenance and a Downloads section. Publication details are in [the release rules](.agents/rules/release.md).
 
 ## Review status
 
