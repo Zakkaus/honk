@@ -6,18 +6,8 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cd "$work"
 
-expect_rejection() {
-  local prefix=$1 status=0
-  bash "$ci_dir/check-release-artifacts.sh" "$prefix" > failure.log 2>&1 || status=$?
-  if [[ "$status" != 1 ]]; then
-    cat failure.log >&2
-    printf 'Expected incomplete %s artifacts to be rejected, got exit %s\n' "$prefix" "$status" >&2
-    exit 1
-  fi
-}
-
-# Debug builds and formal tags share the sixteen-archive set; only the name prefix differs.
-for prefix in debug v0.1.0-rc.1; do
+create_set() {
+  local prefix=$1
   mkdir dist
   for target in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl aarch64-unknown-linux-gnu aarch64-unknown-linux-musl; do
     for suffix in '' -stock; do
@@ -30,6 +20,21 @@ for prefix in debug v0.1.0-rc.1; do
       printf 'artifact\n' > "dist/honk-core-$prefix-$target$suffix-native-api.tar.gz"
     done
   done
+}
+
+expect_rejection() {
+  local prefix=$1 status=0
+  bash "$ci_dir/check-release-artifacts.sh" "$prefix" > failure.log 2>&1 || status=$?
+  if [[ "$status" != 1 ]]; then
+    cat failure.log >&2
+    printf 'Expected incomplete %s artifacts to be rejected, got exit %s\n' "$prefix" "$status" >&2
+    exit 1
+  fi
+}
+
+# Debug builds and formal tags share the sixteen-archive set; only the name prefix differs.
+for prefix in debug v0.1.0-rc.1; do
+  create_set "$prefix"
   bash "$ci_dir/check-release-artifacts.sh" "$prefix"
 
   artifact=dist/honk-core-$prefix-aarch64-unknown-linux-musl-stock-native-api.tar.gz
@@ -53,9 +58,8 @@ for prefix in debug v0.1.0-rc.1; do
   expect_rejection "$prefix"
 done
 
-# The other prefix's archives do not satisfy the check.
-mkdir -p dist
-printf 'artifact\n' > dist/honk-core-debug-x86_64-unknown-linux-gnu-full.tar.gz
+# A complete set under the other prefix does not satisfy the check.
+create_set debug
 expect_rejection v0.1.0-rc.1
 
 printf 'Release artifact preflight regression passed\n'
