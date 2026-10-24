@@ -22,8 +22,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Test Debug artifact preflight
+      - name: Test release artifact preflight
         run: bash .github/ci/test-release-artifacts.sh
+      - name: Test Debug release pruning
+        run: bash .github/ci/test-release-prune.sh
       - name: Test release asset table
         run: bash .github/ci/test-release-assets.sh
       - name: Test release version and notes scripts
@@ -438,8 +440,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName,publishedAt \
-            --jq '[.[] | select((.tagName | startswith("debug.")) and .tagName != env.GITHUB_REF_NAME)] | sort_by(.publishedAt) | reverse | .[9:] | .[].tagName' |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName,publishedAt |
+            bash release-source/.github/ci/release-prune.sh |
             while read -r tag; do
               gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
             done
