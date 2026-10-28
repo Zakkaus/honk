@@ -1642,7 +1642,7 @@ unknown_sections = 0
 
 [[case]]
 id = "honk-doc-en-how-to-start-04"
-source = { file = "doc/en/how-to-start.md", fence = 4 }
+source = { file = "doc/en/how-to-start.md", fence = 7 }
 wrap = ""
 layer = "structure"
 honk = "accept"
@@ -1959,7 +1959,7 @@ unknown_sections = 0
 
 [[case]]
 id = "honk-doc-zh-how-to-start-04"
-source = { file = "doc/zh/how-to-start.md", fence = 4 }
+source = { file = "doc/zh/how-to-start.md", fence = 7 }
 wrap = ""
 layer = "structure"
 honk = "accept"
