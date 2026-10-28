@@ -221,7 +221,7 @@ Explicit disabled feature blocks are treated as disabled, not as unsupported act
 
 TUIC permits an absent or empty password. Hysteria2 and Juicity accept an explicit `h3` ALPN matching their fixed runtime selection.
 
-Juicity starts with 8 MiB stream and connection receive windows; the connection window can auto-tune up to 32 MiB. Imported initial-window fields accept absent values, `0`, or `8388608`; other overrides are rejected.
+Juicity starts with 8 MiB stream and connection receive windows; adaptive flow control can raise each of them up to 32 MiB. Imported initial-window fields accept absent values, `0`, or `8388608`; other overrides are rejected.
 
 AnyTLS packet claims are resolved once in this order: `anytls-network`, applicable `network`, then `udp`. Empty or null network text supplies no claim. Network strings use comma-separated `tcp`/`udp` tokens; aliases are compared by UDP allowance, so `udp` and `tcp,udp` agree, while `tcp` with `udp: true` conflicts. Unknown tokens such as `quic` reject the entry even beside a valid alias. Equivalent claims retain the first explicit network spelling; only a boolean-only input synthesizes `tcp` or `tcp,udp`.
 
