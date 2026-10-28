@@ -45,30 +45,13 @@ Every publication, formal or Debug, also uploads one `SHA256SUMS` covering all p
 ### Release process (standing convention)
 
 - **Versions:** SemVer, `vMAJOR.MINOR.PATCH` with an optional `-alpha.N`, `-beta.N` or `-rc.N` suffix. `[workspace.package] version` in `Cargo.toml` holds the plain `MAJOR.MINOR.PATCH` being released, never a suffix: bump it (and `Cargo.lock`, `crates/honk-ebpf/Cargo.lock` and `fuzz/Cargo.lock`) in a pull request when that number changes, then tag `v<that version>` or `v<that version>-{alpha|beta|rc}.N` on the merged `main` tip once its branch CI is green. Release candidates of one version therefore need no manifest change; `honk --version` reports the tag. The test job runs `.github/ci/check-release-version.sh` and fails a tag that is not SemVer, a manifest version with a suffix, or a tag whose `MAJOR.MINOR.PATCH` differs from the manifest. A tag with a suffix publishes as a prerelease. Tags from before this scheme (`v0.0.1.beta.N`) stay as they are; never move or delete a published tag.
+- **Changelog:** before tagging, collect and commit fragments using [changes/README.md](../../changes/README.md#preview-and-release). Merge the dated section for the exact release version into `main`; do not collect fragments during publication.
 - **Draft:** the tag creates a draft Release. Nobody outside the repository sees it until the maintainer publishes it.
-- **Notes:** `.github/ci/release-notes.sh` writes the draft body from the commits since the previous `v*` tag, followed by the `## Downloads` section from `.github/ci/release-assets.sh`:
-
-    ```markdown
-    ## Highlights
-
-    <!-- Maintainer: two to five bullets on what this release means to a gateway operator. -->
-
-    ## What's Changed
-
-    ### New Features
-
-    - <subject> by @<github-author> in <short-hash>
-
-    ### Bug Fixes / ### Performance / ### Documentation
-
-    **Full Changelog**: https://github.com/daeuniverse/honk/compare/<prev-tag>...<tag>
-
-    ## Downloads
-    ```
-
-    - Commits are grouped by their `type(scope)` prefix: `feat` → New Features, `fix` → Bug Fixes, `perf` → Performance, `docs`/`bench` → Documentation; other types are counted, not listed.
-    - Authors are GitHub logins from `gh api repos/daeuniverse/honk/commits/<sha> --jq .author.login`, never raw git `Author:` names; a commit without a login is listed without one.
-- **Publish:** the maintainer replaces the Highlights comment, adjusts entries if needed, checks the assets against the build, then publishes with `gh release edit <tag> --repo daeuniverse/honk --draft=false` or **Publish release** in the web UI.
+- **Notes:** from a full clone, run `bash .github/ci/release-notes.sh <tag> [assets.md]` to print the draft body in doona's order: an opening sentence, Highlights, Changes, Pairing with doona, Downloads (the assets file) and a link line. It reads that tag's version section from `CHANGELOG.md` and fails if the section is missing. Each change type becomes a collapsed `<details>` block with its bullet count. PR numbers come from the collected changelog, not a publication-time lookup.
+    - The body retains the `## Highlights` placeholder for the maintainer and the full-changelog comparison link.
+    - `## Pairing with doona` links the embedded UI release from the tag's `.github/ci/pins.env`.
+    - The release workflow appends `## Downloads` from `.github/ci/release-assets.sh` without changing the archive explanations.
+- **Publish:** the maintainer replaces the Highlights comment with three to five bullets, keeps the generated entries and PR references unchanged (fix a wrong entry in `CHANGELOG.md` instead), checks the assets against the build, then publishes with `gh release edit <tag> --repo daeuniverse/honk --draft=false` or **Publish release** in the web UI.
 
 - **Deployment:** after tagging, use the canonical musl mimalloc gateway tarball. Note development/manual `scp` deployments in the PR/issue of record when they differ from release artifacts.
 
