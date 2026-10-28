@@ -122,7 +122,7 @@ The real-eBPF source build below uses:
 - the nightly in `crates/honk-ebpf/rust-toolchain.toml` (`rust-src`, `llvm-tools`);
 - the `bpf-linker` version in `.github/ci/pins.env`;
 - a C/C++ toolchain, CMake, Clang, LLVM, libclang, libbpf headers, binutils, pkg-config, and Git;
-- network access to crates.io and GitHub for dependencies not already cached.
+- network access to crates.io and GitHub.
 
 Debian/Ubuntu:
 
@@ -197,7 +197,7 @@ sudo install -d -m 0700 /etc/honk /var/lib/honk
 sudo install -m 0600 /path/to/config.dae /etc/honk/config.dae
 ```
 
-The default runtime root is `/var/lib/honk`. Existing artifacts under the legacy `/var/share/honk` root remain usable through the documented per-path fallback. Legacy cache and subscription imports move eligible state into `state/honk.db`; other reused writable artifacts remain active in place. Custom `data_dir` values use the same fallback order. Relative caches, subscription stores, ECH/UI and other read-only dependencies check the configured directory, then `/var/share/honk`, then their caller-specific legacy path. Relative logs are created only below the configured directory.
+The default runtime root is `/var/lib/honk`. Existing artifacts under the legacy `/var/share/honk` root remain usable through the documented per-path fallback. Legacy cache and subscription imports copy eligible state into `state/honk.db`. Custom `data_dir` values use the same fallback order. Relative caches, subscription stores, ECH/UI and other read-only dependencies check the configured directory, then `/var/share/honk`, then their caller-specific legacy path. Relative logs are created only below the configured directory.
 
 Start honk in the foreground:
 

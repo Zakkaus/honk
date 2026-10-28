@@ -122,7 +122,7 @@ honk-core --version
 - `crates/honk-ebpf/rust-toolchain.toml` 中固定的 nightly 版本（`rust-src`、`llvm-tools`）；
 - `.github/ci/pins.env` 中固定的 `bpf-linker` 版本；
 - C/C++ 工具链、CMake、Clang、LLVM、libclang、libbpf 头文件、binutils、pkg-config、Git；
-- 访问 crates.io 和 GitHub 的网络，用于获取尚未缓存的依赖。
+- 能访问 crates.io 和 GitHub 的网络。
 
 Debian/Ubuntu：
 
@@ -197,7 +197,7 @@ sudo install -d -m 0700 /etc/honk /var/lib/honk
 sudo install -m 0600 /path/to/config.dae /etc/honk/config.dae
 ```
 
-默认运行时根目录是 `/var/lib/honk`。旧根目录 `/var/share/honk` 中的已有资源会按各路径规则继续使用；旧缓存和订阅导入会将符合条件的状态迁入 `state/honk.db`；其他复用的可写资源仍在原位置更新。自定义 `data_dir` 也遵循相同的回退顺序。相对缓存、订阅存储、ECH/UI 与其他只读依赖依次检查配置目录、`/var/share/honk`，再检查调用方的旧候选路径；相对日志只会在配置目录下创建。
+默认运行时根目录是 `/var/lib/honk`。旧根目录 `/var/share/honk` 中的已有资源会按各路径规则继续使用；旧缓存和订阅导入会将符合条件的状态复制到 `state/honk.db`。自定义 `data_dir` 也遵循相同的回退顺序。相对缓存、订阅存储、ECH/UI 与其他只读依赖依次检查配置目录、`/var/share/honk`，再检查调用方的旧候选路径；相对日志只会在配置目录下创建。
 
 前台启动：
 

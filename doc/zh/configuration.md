@@ -60,7 +60,7 @@ include {
 2. `/var/share/honk/<path>`。
 3. 调用方的旧位置：缓存使用原始配置目录，其他依赖使用工作目录。
 
-都不存在时，honk 返回 `<data_dir>/<path>` 用于创建。旧根目录 `/var/share/honk`（`LEGACY_DATA_DIR`）中的已有资源可通过这些回退路径继续使用，但旧缓存和订阅导入会将符合条件的状态迁入 `state/honk.db`。相对日志始终使用 `<data_dir>/<path>` 创建。绝对路径保持原样。
+都不存在时，honk 返回 `<data_dir>/<path>` 用于创建。旧根目录 `/var/share/honk`（`LEGACY_DATA_DIR`）中的已有资源可通过这些回退路径继续使用，但旧缓存和订阅导入会将符合条件的状态复制到 `state/honk.db`。相对日志始终使用 `<data_dir>/<path>` 创建。绝对路径保持原样。
 
 Geo 资源独立按普通文件查找：`$DAE_LOCATION_ASSET`、`<data_dir>`、`/var/share/honk`、工作目录、honk share 目录，最后是 dae share 目录。
 

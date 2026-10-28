@@ -60,7 +60,7 @@ Relative writable artifacts and read-only dependencies use the first existing ca
 2. `/var/share/honk/<path>`.
 3. The caller's legacy location: the original config directory for cache, or the working directory for other dependencies.
 
-If none exists, honk returns `<data_dir>/<path>` for creation. Existing artifacts under `/var/share/honk` (`LEGACY_DATA_DIR`) remain usable through these fallbacks, except that legacy cache and subscription imports move eligible state into `state/honk.db`. Relative logs always use `<data_dir>/<path>` for creation. Absolute paths stay literal.
+If none exists, honk returns `<data_dir>/<path>` for creation. Existing artifacts under `/var/share/honk` (`LEGACY_DATA_DIR`) remain usable through these fallbacks, except that legacy cache and subscription imports copy eligible state into `state/honk.db`. Relative logs always use `<data_dir>/<path>` for creation. Absolute paths stay literal.
 
 Geo assets use an independent regular-file search order: `$DAE_LOCATION_ASSET`, `<data_dir>`, `/var/share/honk`, the working directory, honk share directories, then dae share directories.
 
