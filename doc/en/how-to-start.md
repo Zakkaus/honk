@@ -1,6 +1,6 @@
 # honk Quick Start
 
-honk is an experimental eBPF transparent proxy engine for Linux. Follow this guide to install, configure, and start it. Links at the end cover configuration fields and implementation details.
+Install, configure, and start honk, an experimental eBPF transparent proxy engine for Linux.
 
 > **Warning**
 >
@@ -205,7 +205,7 @@ Start honk in the foreground:
 sudo /usr/local/bin/honk-core --config /etc/honk/config.dae
 ```
 
-After `honk-core is running` appears, verify connectivity from a real LAN client before adding nodes, subscriptions, groups, routing, and DNS. The following is the smallest proxy structure; replace the address with a real node:
+After `honk-core is running` appears, verify connectivity from a real LAN client before adding nodes, subscriptions, groups, routing, and DNS. To use the smallest proxy structure below, add its `node` and `group` sections to the direct-only configuration and replace the existing `routing` section. Replace the example address and credentials with a real node:
 
 ```dae
 node {
@@ -231,6 +231,61 @@ bootstrap_resolver: '1.1.1.1:53'
 ```
 
 See the [configuration guide](configuration.md) for the complete configuration flow. The repository's `config.dae`, `config.min.dae`, and `example.dae` contain example interfaces or nodes and must be adapted before deployment.
+
+### Web UI and APIs
+
+Add one of the following blocks to the configuration, then restart honk. These examples listen only on the local machine. See the [experimental reference](reference/experimental.md) for all other fields and reverse-proxy requirements.
+
+**doona (native API).** Use a `full` release, which embeds the UI. A `native-api` build also works only if it includes `native-ui`; the stock `-native-api` release has the API but no embedded UI.
+
+```dae
+experimental {
+    native_api {
+        enabled: true
+        listen: '127.0.0.1:9527'
+        password_auth: true
+        config_write: true
+        ui: 'embedded'
+    }
+}
+```
+
+Open `http://127.0.0.1:9527/ui/` after startup.
+
+- `enabled` starts the native API listener; `listen` sets its address and port.
+- `password_auth` enables password login. On the first visit, create the administrator account; honk stores it under `data_dir` in `state/honk.db`, not in the configuration file.
+- `config_write` permits authenticated configuration writes and reloads. Sources containing listener credentials remain read-only.
+- `ui: 'embedded'` serves the standard doona bundled in the binary; it does not download a dashboard at startup.
+
+**doona lite.** Use the same build requirements, address and login procedure. This lighter edition is a preview. Choose this block instead of the standard doona block:
+
+```dae
+experimental {
+    native_api {
+        enabled: true
+        listen: '127.0.0.1:9527'
+        password_auth: true
+        config_write: true
+        ui: 'embedded-lite'
+    }
+}
+```
+
+**Clash API for Clash dashboards.** Use a `full` or `clash-api` build. Replace the secret with a long random string:
+
+```dae
+experimental {
+    clash_api {
+        external_controller: '127.0.0.1:9090'
+        external_ui: 'zashboard'
+        secret: '<a long random string>'
+    }
+}
+```
+
+`external_controller` starts the Clash listener. `external_ui` selects the dashboard directory; honk downloads zashboard on first start when that directory is missing or empty. Open `http://127.0.0.1:9090/ui/` and use the configured `secret` to connect the dashboard to the API. The API uses the secret for authentication; static UI files are public.
+
+Both APIs can run together in a build that includes both features, such as `full`. Put `native_api` and `clash_api` beside each other inside one `experimental` block; keep their separate listen ports. The [experimental reference](reference/experimental.md) covers the remaining settings.
 
 ### GeoIP and Geosite
 

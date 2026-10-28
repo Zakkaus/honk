@@ -4,9 +4,9 @@
 
 ## 范围
 
-控制平面负责透明代理入口、消费内核交接、用户态路由、嗅探、出站选择、中继、资源准入与运行时发布。向用户态交付流量的内核机制见[数据路径设计](./datapath.md)。组策略和健康状态驱动的选择见[组设计](./groups.md)，DNS 运行时行为见 [DNS 设计](./dns.md)。
+控制平面负责透明代理入口、内核交接、用户态路由、嗅探、出站选择、中继、资源准入与运行时发布。内核如何向用户态交付流量见[数据路径设计](./datapath.md)。组策略和健康状态如何驱动选择见[组设计](./groups.md)，DNS 运行时行为见 [DNS 设计](./dns.md)。
 
-主要实现在 `crates/honk-core/src/control/`。它消费 `EbpfBackend` 状态，并把 TCP 流或 `PacketTransport` UDP 契约交给 `honk-outbound`。
+主要实现在 `crates/honk-core/src/control/`。控制平面读取 `EbpfBackend` 状态，并把 TCP 流或 `PacketTransport` UDP 契约交给 `honk-outbound`。
 
 模块分工：
 
@@ -235,7 +235,7 @@ I/O 完成后，joined retirement worker 持有已准入 TCP 退役、socket、t
 
 NFQUEUE 冷 cell 重建在同一读锁 guard 内保留 conn-state 快照，并调用 backend 自有的 UDP 准入校验。无法解决的 retirement 所有权或超出 allocator 范围的身份不能重建 ActiveDirect 放行；已准入的 fast follower 仍保留既有无查询路径。
 
-真实 relay 完成后，TCP owner 先按实际结果恰一次结算 Score 与 relay-error 统计，再传播退役失败。退役失败不会把成功 relay 证据改成取消。TCP 补池仍要求 relay 成功且退役已确认；主动取消保留独立的中性路径。
+真实 relay 完成后，TCP owner 先按实际结果结算一次 Score 与 relay-error 统计，再传播退役失败。退役失败不会把成功 relay 证据改成取消。TCP 补池仍要求 relay 成功且退役已确认；主动取消保留独立的中性路径。
 
 `splice.rs` 的 `relay_splice` 与 `vision.rs` 共用双向引擎。**不得恢复单向 splice**，它曾导致超时；空闲排空期限可防止无数据传输的对端使任务和套接字长期停留在 CLOSE-WAIT。
 
@@ -351,7 +351,7 @@ Selector 写入由同一 control/reload owner 序列化，TCP/UDP 分开保存�
 
 Probe worker 拥有有界准备/排队/执行/清理，DNS 诊断使用真实 generation 与精确缓存 owner，provider refresh 由 SubscriptionSupervisor 拉取并等待 revision-fenced publication；GET 不伪造这些 producer。Routing trace 只模拟当前 compiled predicate，不 DNS/探测/选组；当前规则字典只在 parser 来源可用时提供脱敏 source location。Runtime settings 由一个 owner 先校验全量 merge 再发布，native+Clash mode 共用 `DatapathFlagsHandle`。Native 启用时模式不恢复/持久化；显式接受配置激活（含 no-op）重置 Rule 与 settings，provider/network refresh 不重置。
 
-自动诊断采集由 `native_api/settings.rs` 持有相互独立的需求：成功的 flow GET 或显式 flow-event kind/`flow_id` 开启 flows，logs stream 开启 logs，成功的 DNS-log GET 开启 DNS log。普通 events 只维持自己的 attachment，不开启这三个 recorder。准入失败及普通 API/validation 请求不增加诊断需求。每个 stream lease 只释放其实际取得的集合；每类 recorder 独立保有最后需求释放后的六十秒 grace，不由其他读取/stream 续期。配置许可与显式 runtime On/Off 仍有优先权；显式激活重置 override，provider/network refresh 保留。
+`native_api/settings.rs` 分别管理各类自动诊断采集需求：成功的 flow GET 或显式 flow-event kind/`flow_id` 开启 flows，logs stream 开启 logs，成功的 DNS-log GET 开启 DNS log。普通 events 只维持自己的 attachment，不开启这三个 recorder。准入失败及普通 API/validation 请求不增加诊断需求。每个 stream lease 只释放自己取得的集合；每类 recorder 独立保有最后需求释放后的六十秒 grace，不由其他读取/stream 续期。配置许可与显式 runtime On/Off 仍有优先权；显式激活重置 override，provider/network refresh 保留。
 
 Probe 准备阶段将捕获的计划消费为具体地址的可执行尝试或明确的家族地址不可用结果。DNS-owned resolver 保留代次及 canonical accepted-positive 应答资格；即使另一家族有地址，终止性 packet refusal 也拒绝整个准备。健康 ticket 与探测配置在同一发布屏障内捕获。
 

@@ -1,6 +1,6 @@
 # honk 直通手册
 
-honk 是 Linux 上的实验性 eBPF 透明代理引擎。本文说明普通用户需要的安装、配置和启动步骤；配置字段与实现细节见文末链接。
+honk 是 Linux 上的实验性 eBPF 透明代理引擎。安装、配置和启动步骤如下；配置字段与实现细节见文末链接。
 
 > **注意**
 >
@@ -33,7 +33,7 @@ uname -r
 zcat /proc/config.gz 2>/dev/null || cat /boot/config-$(uname -r)
 ```
 
-真实 datapath 至少需要对应下列能力的内核选项：
+真实数据路径至少需要对应下列能力的内核选项：
 
 ```text
 CONFIG_BPF=y
@@ -48,7 +48,7 @@ CONFIG_NET_NS=y
 
 TCX 后端需要由 `CONFIG_NET_CLS_ACT` 选中的隐藏选项 `CONFIG_NET_XGRESS`，不要求旧式 `CONFIG_NET_CLS_BPF` 或 `CONFIG_NET_SCH_INGRESS`。参见[挂钩与 qdisc 所有权](./design/datapath.md#接口挂钩集合)。
 
-默认启用的 held-first-packet UDP 还需要：
+默认启用的首包保留 UDP 还需要：
 
 ```text
 CONFIG_NF_TABLES=y|m
@@ -68,11 +68,11 @@ CONFIG_FUNCTION_TRACER=y
 CONFIG_DYNAMIC_FTRACE=y
 ```
 
-`udp_recvmsg` 或 `udpv6_recvmsg` hook 缺失或不兼容时，只禁用对应 socket 地址族的 fallback；两个地址族都依赖共享的 `__skb_recv_udp` hook。Fallback 部分成功或失败后不会在 listener 重载时重试；修改内核/BTF 支持后需重启。见[接收追踪所有权](./design/control-plane.md#启动与关闭)。
+`udp_recvmsg` 或 `udpv6_recvmsg` hook 缺失或不兼容时，只禁用对应套接字地址族的回退机制；两个地址族都依赖共享的 `__skb_recv_udp` hook。回退机制部分成功或失败后，不会在监听器重载时重试；修改内核/BTF 支持后需重启。见[接收追踪所有权](./design/control-plane.md#启动与关闭)。
 
 ### bpffs
 
-eBPF map 必须 pin 在 bpffs，不能使用普通目录：
+eBPF map 必须固定在 bpffs，不能使用普通目录：
 
 ```shell
 sudo install -d -m 0755 /sys/fs/bpf
@@ -98,7 +98,7 @@ bpf /sys/fs/bpf bpf defaults 0 0
 | clash-api | `-clash-api` | `clashapi` | 仅 Clash API；不含原生 API 与内嵌 UI（仅 musl） |
 | native-api | `-native-api` | `nativeapi` | 仅原生 API；不含 Clash API 与内嵌 UI（仅 musl） |
 
-musl 包是静态二进制，适合网关部署。无 `-stock` 后缀的包使用 mimalloc，优先考虑吞吐（标签 `mimalloc`）；`-stock` 包使用系统 allocator，更适合关注内存峰值的小内存设备（标签 `stockalloc`）。每个 release 的 Downloads 一节按 `{allocator}-{API}-{arch}-{libc}` 标签列出全部归档。
+musl 包是静态二进制，适合网关部署。无 `-stock` 后缀的包使用 mimalloc，优先考虑吞吐（标签 `mimalloc`）；`-stock` 包使用系统内存分配器，更适合关注内存峰值的小内存设备（标签 `stockalloc`）。每个发布版本的 Downloads 一节按 `{allocator}-{API}-{arch}-{libc}` 标签列出全部归档。
 
 精简变体按 fail-closed 处理：在 `-clash-api` 上启用 `experimental.native_api`，或没有 `native-ui` 却设置 `ui: embedded` 或 `ui: embedded-lite`，都会启动失败。`--store db` 与原生配置管理需要 `native-api`。`embedded-lite` 选择更轻量的 doona lite 预览版。
 
@@ -110,9 +110,9 @@ sudo install -m 0755 "$pkg/honk-core" /usr/local/bin/honk-core
 honk-core --version
 ```
 
-装有 GitHub CLI 时，还可以用 `gh attestation verify "$pkg.tar.gz" -R daeuniverse/honk` 确认该包由本仓库的发布 workflow 构建。
+装有 GitHub CLI 时，还可以用 `gh attestation verify "$pkg.tar.gz" -R daeuniverse/honk` 确认该包由本仓库的发布工作流构建。
 
-release binary 已内嵌 eBPF object，不需要单独安装 `honk-ebpf`。运行时也不会调用 `ip`、`nft`、`iptables` 或 `nsenter` 子进程。
+发布二进制已内嵌 eBPF 目标文件，不需要单独安装 `honk-ebpf`。运行时也不会调用 `ip`、`nft`、`iptables` 或 `nsenter` 子进程。
 
 ### 从源码构建
 
@@ -121,7 +121,7 @@ release binary 已内嵌 eBPF object，不需要单独安装 `honk-ebpf`。运�
 - 根目录 `rust-toolchain.toml` 中固定的 Rust stable 版本（`rustfmt`、`clippy`）；
 - `crates/honk-ebpf/rust-toolchain.toml` 中固定的 nightly 版本（`rust-src`、`llvm-tools`）；
 - `.github/ci/pins.env` 中固定的 `bpf-linker` 版本；
-- C/C++ toolchain、CMake、Clang、LLVM、libclang、libbpf headers、binutils、pkg-config、Git；
+- C/C++ 工具链、CMake、Clang、LLVM、libclang、libbpf 头文件、binutils、pkg-config、Git；
 - 可访问 crates.io 和 GitHub 的网络。
 
 Debian/Ubuntu：
@@ -169,11 +169,11 @@ cargo build --release -p honk-core --features ebpf
 sudo install -m 0755 target/release/honk-core /usr/local/bin/honk-core
 ```
 
-`RUSTFLAGS` 会覆盖 eBPF crate 的 BTF 参数；Aya 无法加载缺少 `.BTF` 的 object，因此不要省略清理和检查步骤。
+`RUSTFLAGS` 会覆盖 eBPF crate 的 BTF 参数；Aya 无法加载缺少 `.BTF` 的目标文件，因此不要省略清理和检查步骤。
 
 ## 最小配置
 
-先用 direct-only 配置确认 datapath 能正常启动，再加入订阅或代理节点。把 `br-lan` 替换为客户端流量实际进入的 LAN 接口；只代理本机时删除 `lan_interface`。
+先用仅直连的配置确认数据路径能正常启动，再加入订阅或代理节点。把 `br-lan` 替换为客户端流量实际进入的 LAN 接口；只代理本机时删除 `lan_interface`。
 
 ```dae
 global {
@@ -205,7 +205,7 @@ sudo install -m 0600 /path/to/config.dae /etc/honk/config.dae
 sudo /usr/local/bin/honk-core --config /etc/honk/config.dae
 ```
 
-看到 `honk-core is running` 后，从真实 LAN 客户端确认联网，再加入 node、subscription、group、routing 和 DNS。一个最小代理结构如下；地址必须替换成真实节点：
+看到 `honk-core is running` 后，先从真实 LAN 客户端确认联网，再加入节点、订阅、组、路由和 DNS。使用下方最小代理配置时，把 `node` 和 `group` 加入仅直连的配置，并替换原有 `routing` 小节。示例地址和凭据必须换成真实节点的信息：
 
 ```dae
 node {
@@ -231,6 +231,61 @@ bootstrap_resolver: '1.1.1.1:53'
 ```
 
 完整配置方法见[中文配置指南](configuration.md)。仓库中的 `config.dae`、`config.min.dae` 和 `example.dae` 包含示例接口或节点，部署前必须按实际网络修改。
+
+### 网页界面与 API
+
+将下面一种配置加入配置文件，然后重启 honk。这些示例只监听本机地址。其他字段和反向代理要求见 [experimental 参考](reference/experimental.md)。
+
+**doona（原生 API）。** 使用内嵌界面的 `full` 发布版本。`native-api` 构建只有同时包含 `native-ui` 时才能使用下方配置；官方 `-native-api` 发布版本只有 API，不含内嵌界面。
+
+```dae
+experimental {
+    native_api {
+        enabled: true
+        listen: '127.0.0.1:9527'
+        password_auth: true
+        config_write: true
+        ui: 'embedded'
+    }
+}
+```
+
+启动后打开 `http://127.0.0.1:9527/ui/`。
+
+- `enabled` 启用原生 API 监听器；`listen` 指定监听地址和端口。
+- `password_auth` 启用密码登录。首次访问时创建管理员账号；honk 将账号保存在 `data_dir` 下的 `state/honk.db`，而不是配置文件中。
+- `config_write` 允许通过认证的用户写入配置并重载。含监听器凭据的源文件仍然只读。
+- `ui: 'embedded'` 提供二进制程序内嵌的标准版 doona，启动时不下载面板。
+
+**doona lite。** 构建要求、访问地址和登录步骤相同。这个较轻量的版本仍处于预览阶段。选择下方配置替代标准版 doona 配置：
+
+```dae
+experimental {
+    native_api {
+        enabled: true
+        listen: '127.0.0.1:9527'
+        password_auth: true
+        config_write: true
+        ui: 'embedded-lite'
+    }
+}
+```
+
+**供 Clash 面板使用的 Clash API。** 使用 `full` 或 `clash-api` 构建。将密钥替换为一个足够长的随机字符串：
+
+```dae
+experimental {
+    clash_api {
+        external_controller: '127.0.0.1:9090'
+        external_ui: 'zashboard'
+        secret: '<a long random string>'
+    }
+}
+```
+
+`external_controller` 启用 Clash 监听器。`external_ui` 指定面板目录；首次启动时，如果目录不存在或为空，honk 会下载 zashboard。打开 `http://127.0.0.1:9090/ui/`，使用配置的 `secret` 将面板连接到 API。API 使用该密钥认证，静态界面文件无需认证即可访问。
+
+包含两种 API 功能的构建（如 `full`）可以同时运行它们。将 `native_api` 和 `clash_api` 并列放在同一个 `experimental` 小节内，并使用各自的监听端口。其他设置见 [experimental 参考](reference/experimental.md)。
 
 ### GeoIP 和 Geosite
 
@@ -285,7 +340,7 @@ sudo journalctl -xefu honk-core
 
 ## 检查运行状态
 
-进程启动不等于 datapath 可用。日志应显示 real eBPF backend、接口 hook、listeners 和 control plane 均已 ready。
+进程启动不等于数据路径可用。日志应显示真实 eBPF 后端、接口 hook、监听器和控制面均已就绪。
 
 每个已配置的接口在其 hook 就绪后，会以 info 级别记录一条 `configured interface is bound`。接口尚不存在、没有默认路由的 `auto` 条目，或挂载失败时，记录一条警告（`configured interface is not bound yet` 或 `configured interface attach failed; retrying`），之后仅以 debug 级别记录；不受支持的链路类型记录一条错误（`configured interface is not supported`）。`GET /runtime` 将同一情况报告为 `interface_binding` 降级（见 [API 参考](./reference/api.md#原生-api)）。
 
@@ -314,7 +369,7 @@ sudo systemctl reload honk-core
 sudo /usr/local/bin/honk-core reload
 ```
 
-是否应用成功以运行日志中的 `applied` 或 `rejected` 为准。接口、TPROXY、`data_dir`、NFQUEUE 开关、DNS bind、Clash API listener/secret、cache 等进程级设置发生变化时，需要重启。运行期间出现或消失的接口无需重载：watcher 会绑定和释放它们。
+是否应用成功以运行日志中的 `applied` 或 `rejected` 为准。接口、TPROXY、`data_dir`、NFQUEUE 开关、DNS 绑定、Clash API 监听器/密钥、缓存等进程级设置发生变化时，需要重启。运行期间出现或消失的接口无需重载：接口观察器会绑定和释放它们。
 
 正常停止：
 
@@ -322,7 +377,7 @@ sudo /usr/local/bin/honk-core reload
 sudo systemctl stop honk-core
 ```
 
-不要使用 `kill -9` 做日常停止。honk 会先关闭 datapath admission，再 fence NFQUEUE 并拆除 hook/link。同一主机只能运行一个真实 datapath 实例；`/run/honk-core.lock` 用于阻止资源冲突。
+不要使用 `kill -9` 做日常停止。honk 会先关闭数据路径准入，再对 NFQUEUE 执行隔离屏障并拆除 hook/link。同一主机只能运行一个真实数据路径实例；`/run/honk-core.lock` 用于阻止资源冲突。
 
 ## 无 root 开发
 
@@ -352,28 +407,28 @@ cargo run --release -p honk-core -- \
 
 - 出站支持 Direct、Block、SOCKS5、Shadowsocks/2022、Trojan、AnyTLS、Hysteria2、TUIC、Juicity、VMess 和 VLESS。
 - UDP 支持 Direct、SOCKS5、Shadowsocks、Trojan、AnyTLS、Hysteria2、TUIC、Juicity，以及独立 packet 权限已开启的 VLESS。VLESS 的回退 encoding 与 multiplex carrier 是另外两个独立选择；VMess 仍仅支持 TCP。见 [VLESS 节点参考](reference/nodes.md#vless-udp-and-multiplexing)。
-- group 支持 Selector、URLTest、LoadBalance、Fallback 和 Score。
+- 组支持 Selector、URLTest、LoadBalance、Fallback 和 Score。
 - DNS 上游支持 UDP、TCP、DoT、DoH、DoH3 和 DoQ，也可经 node/group 出站。
 - `direct` 和 `block` 是内建节点，不要在配置中重复声明。
-- `nfqueue_enable` 默认开启，固定使用 queue 320，并独占 `inet honk_nfqueue` / `udp_decision`。同一网络命名空间中的防火墙管理器不能改动这些对象。
-- mock 或未启用 Cargo `ebpf` feature 的构建不会提供透明代理。普通 `cargo build --release` 不包含真实 datapath；必须使用 `--features ebpf`。
-- 当前没有 VMess UDP、rootless datapath、Dockerfile 或 docker-compose 配置，也不支持非 Linux 系统。
+- `nfqueue_enable` 默认开启，固定使用队列 320，并独占 `inet honk_nfqueue` / `udp_decision`。同一网络命名空间中的防火墙管理器不能改动这些对象。
+- mock 或未启用 Cargo `ebpf` 特性的构建不会提供透明代理。普通 `cargo build --release` 不包含真实数据路径；必须使用 `--features ebpf`。
+- 当前没有 VMess UDP、无 root 数据路径、Dockerfile 或 docker-compose 配置，也不支持非 Linux 系统。
 
 ## 常见问题
 
 | 现象 | 处理 |
 | --- | --- |
 | `bpf-linker` 不存在 | 按源码构建章节安装，并将 Cargo 的 bin 目录加入 PATH。 |
-| `no BTF parsed for object` | 清除 `RUSTFLAGS` 和 `CARGO_ENCODED_RUSTFLAGS`，重新构建 eBPF object，并用 `readelf` 确认 `.BTF`。 |
+| `no BTF parsed for object` | 清除 `RUSTFLAGS` 和 `CARGO_ENCODED_RUSTFLAGS`，重新构建 eBPF 目标文件，并用 `readelf` 确认 `.BTF`。 |
 | 内核或 verifier 拒绝编译式路由 | 使用支持 BPF/BTF 和 freplace 的 Linux `6.12+`，保留完整 verifier 日志及生成规则定位信息，不要绕过启动失败。 |
 | pin map 报 `Invalid argument` | `/sys/fs/bpf` 不是 bpffs；按上文重新挂载。 |
-| mock 启动成功但流量不经过 honk | 这是预期行为；使用含 `ebpf` feature 的构建并以 root 启动。 |
-| NFQUEUE disabled 或 queue busy | 检查 nftables/NFQUEUE 内核支持、queue 320 占用者和残留 honk 实例；确实不需要时设置 `nfqueue_enable: false`。 |
+| mock 启动成功但流量不经过 honk | 这是预期行为；使用含 `ebpf` 特性的构建并以 root 启动。 |
+| NFQUEUE disabled 或 queue busy | 检查 nftables/NFQUEUE 内核支持、队列 320 占用者和残留 honk 实例；确实不需要时设置 `nfqueue_enable: false`。 |
 | LAN 流量未被代理 | `lan_interface` 为空或接口名错误；它不会自动使用 `lo`。接口名无误时见下一行。 |
 | `GET /runtime` 出现 `interface_binding` 降级 | 某个已配置的接口尚未绑定；日志中有接口名。`pending`：接口不存在，或 `auto` 条目没有 IPv4 默认路由。`unsupported_type`：链路类型被拒绝（例如 `lo`、VRF 设备或 `dae0`）；请改配受支持的接口或其成员。`attach_failed`：TCX link 无法创建、更新或校验；日志中的警告会给出原因。见 [API 参考](./reference/api.md#原生-api)。 |
-| VLESS/VMess 报 `No handler for protocol` | 构建缺少 `rprx`；使用默认 features，或显式加入 `rprx`。 |
-| Geo rule 加载失败 | 将 `geoip.dat`/`geosite.dat` 放入配置的 `data_dir`，或检查文档所列的旧目录/共享目录搜索位置；不需要时删除未使用的 Geo rule。 |
-| GNU binary 在 VyOS/精简系统无法执行 | 改用同架构的 musl release。 |
+| VLESS/VMess 报 `No handler for protocol` | 构建缺少 `rprx`；使用默认特性，或显式加入 `rprx`。 |
+| Geo 规则加载失败 | 将 `geoip.dat`/`geosite.dat` 放入配置的 `data_dir`，或检查文档所列的旧目录/共享目录搜索位置；不需要时删除未使用的 Geo 规则。 |
+| GNU 二进制在 VyOS/精简系统无法执行 | 改用同架构的 musl 发布版本。 |
 
 ## 继续阅读
 

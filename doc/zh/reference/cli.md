@@ -1,6 +1,6 @@
 # 命令行参考
 
-本文档覆盖当前的 `honk-core` 引擎 CLI 与 `honk-tool` 诊断工具箱。
+`honk-core` 提供引擎命令行接口，`honk-tool` 提供诊断工具。
 
 ## `honk-core`
 
@@ -19,7 +19,7 @@ honk-core [OPTIONS] [COMMAND]
 | `-b`, `--bpf-object PATH` | 内嵌目标文件 | 覆盖 `ebpf` 构建内嵌的目标文件。仅真实后端使用。 |
 | `--bpf-pin-root PATH` | `/sys/fs/bpf` | eBPF map 的 pin 根目录。 |
 | `--disable-timestamp` | 关 | 控制台日志行不再带时间戳。在 systemd 或其他自带时间戳的日志系统下使用；`--log-file` 或 `global.log_file` 指定的文件仍带时间戳。 |
-| `-d`, `--debug` | 关 | 当 `RUST_LOG` 未提供有效 filter 时，选择 `debug` 作为默认控制台 filter。 |
+| `-d`, `--debug` | 关 | 当 `RUST_LOG` 未提供有效过滤器时，选择 `debug` 作为默认控制台过滤器。 |
 | `--mock-ebpf` | 关 | 使用 `MockEbpfBackend`，不加载内核 eBPF。若配置请求 `global.nfqueue_enable: true`，honk 会记录警告并仅在本进程关闭 NFQUEUE 暂存。 |
 | `--store file\|db` | `file` | `db` 从 `<data-dir>/state/honk.db` 中的 revision 加载配置，数据库为空时导入 `-c`。见[配置数据库](./api.md#配置数据库--store-db)。 |
 | `--data-dir PATH` | `/var/lib/honk` | 数据目录，状态数据库位于其下的 `state/honk.db`，必须与 `global.data_dir` 相同。供 `--store db`、`config export` 与 `admin reset` 使用。 |
@@ -48,7 +48,7 @@ CLI 与 Clash API 共用构建时版本号：发布构建使用 GitHub tag 名�
 | 级别 | 含义 |
 | --- | --- |
 | `error` | 配置要求的功能在人工处理前无法恢复：激活已提交但降级、进程停止、子系统永久停止，或内部不变量被破坏。 |
-| `warn` | 降级但仍在运行，进入该状态时记一次：走了回退路径、资源到顶、节点或组变为不可用、新配置被拒但旧配置继续运行。每个 DNS 查询都会重复的失败（SERVFAIL、singleflight 饱和）最多每 10 秒告警一次。 |
+| `warn` | 降级但仍在运行，进入该状态时记一次：采用回退路径、资源达到上限、节点或组变为不可用、新配置被拒但旧配置继续运行。每个 DNS 查询都会重复的失败（SERVFAIL、singleflight 饱和）最多每 10 秒告警一次。 |
 | `info` | 启动、停止、激活、运维操作，以及从告警状态恢复。 |
 | `debug` | 单个连接、请求和 DNS 查询的结果，包括单次拨号与转发失败，以及周期维护结果。native flows 也记录同样的逐 flow 结果。 |
 
@@ -99,7 +99,7 @@ UDP NFQUEUE 没有环境变量开关，默认由 `global.nfqueue_enable` 开启�
 
 ## `honk-tool`
 
-`honk-tool` 是用于订阅探测、pin map 检查、引擎健康检查与离线 Geo 资源搜索的诊断工具箱。它不加载或挂载 eBPF 程序。
+`honk-tool` 用于订阅探测、已固定 map 检查、引擎健康检查与离线 Geo 资源搜索，不加载或挂载 eBPF 程序。
 
 ### 构建与部署
 
@@ -122,7 +122,7 @@ cargo build --release -p honk-tool --target x86_64-unknown-linux-musl
 scp target/x86_64-unknown-linux-musl/release/honk-tool root@GATEWAY:/tmp/
 ```
 
-当前 `just build-musl` 与 `just deploy-vyos` recipe 只构建和部署 `honk-core`，不包含 `honk-tool`。GNU 链接的构建可能无法在纯 musl 网关上执行。
+当前 `just build-musl` 与 `just deploy-vyos` 任务只构建和部署 `honk-core`，不包含 `honk-tool`。GNU 链接的构建可能无法在纯 musl 网关上执行。
 
 ### 命令族
 
@@ -134,7 +134,7 @@ scp target/x86_64-unknown-linux-musl/release/honk-tool root@GATEWAY:/tmp/
 | `geosite` | 列出、检查和反向搜索 `geosite.dat`。 |
 | `geoip` | 列出、检查和最长前缀搜索 `geoip.dat`。 |
 
-二进制提供 `-h`/`--help` 和 `-v`/`--version`，每个命令族与 action 也有帮助信息。构建版本与 `honk-core` 一致。
+每个命令族与操作也有帮助信息。构建版本与 `honk-core` 一致。
 
 ### `sub`
 
@@ -163,7 +163,7 @@ honk-tool sub <url|file|-> [--target HOST:PORT] [--url TEST_URL]
 
 远程订阅与本地文件共享引擎的自动格式识别：编码/原始分享链接、Clash YAML/JSON、SIP008、sing-box JSON，以及受支持的 Surge/Surfboard/Loon/Quantumult X 记录。不支持的节点会被跳过，不打印原始输入。使用 `-` 可避免把含凭据的 provider URL 放入 argv 和进程列表。
 
-对每个节点，命令报告服务端地址族、完整的代理 IPv4/IPv6 交换、代理 URLTest 延迟、经 packet handler 的 DNS 查询，以及经该 handler 的真实 QUIC 握手。VLESS 行使用以下脱敏 shape，不包含端点、UUID、REALITY key、SNI 或 URL query：
+对每个节点，命令报告服务端地址族、完整的代理 IPv4/IPv6 交换、代理 URLTest 延迟、经数据包处理器的 DNS 查询，以及经该处理器的真实 QUIC 握手。VLESS 行使用以下脱敏格式，不包含端点、UUID、REALITY 密钥、SNI 或 URL 查询参数：
 
 ```text
 vless/{plain|tls|reality}/{tcp|ws|grpc|xhttp}[/vision]/tcp={plain|h2mux|mux-cool}/{udp-fallback=auto|native|xudp|uot-v2|udp=disabled}[/padding=true|false][/mux=TCP:UDP:POLICY]
@@ -224,7 +224,7 @@ honk-tool bpf stats [--pin-root PATH]
 | `7` | `new_flow_rate_limited` | 被单源、每 CPU 新流限制丢弃的 LAN 流尝试。 |
 | `8` | `udp_reverse_learning_suspended` | conn 压力下，在 conn-state 查询未命中后被跳过的反向 UDP 学习尝试。 |
 
-`routing-handoff` 在读取前检查[handoff ABI](../design/datapath.md#map-清单)；请将工具与引擎/对象一起升级。
+`routing-handoff` 在读取前检查[handoff ABI](../design/datapath.md#map-清单)。
 
 `stats` 要求 `/sys/devices/system/cpu/possible` 可读且为内核的真实导出文件。每 CPU 缓冲区按该掩码中的 CPU 数量分配，不采用 present 或 online CPU 数量。`CONN_STATE_OCCUPANCY` 和 `OUTBOUND_STATS` 必须为每 CPU 数组，键均为 4 字节，值分别为 8 字节和 32 字节。CPU 列表不可读、格式无效或 map 元数据不兼容时，命令在每 CPU 查找前报错，不回退到猜测的 CPU 数量。
 

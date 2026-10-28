@@ -1,6 +1,6 @@
 # eBPF 内核数据路径
 
-内核侧拦截见本页；用户态路径见[控制平面](./control-plane.md)，持有首包的 UDP 路径见 [NFQUEUE](./nfqueue.md)。
+内核数据路径负责流量拦截。用户态路径见[控制平面](./control-plane.md)，持有首包的 UDP 路径见 [NFQUEUE](./nfqueue.md)。
 
 ## 网络命名空间与挂钩架构
 
@@ -200,8 +200,6 @@ TC 入口点是接受 `*mut __sk_buff` 的原始 `#[unsafe(no_mangle)] #[unsafe(
 
 真实透明 UDP/53 从 `SO_RCVMARK` 启用的 `SOL_SOCKET`/`SO_MARK` 辅助数据取得逐报文出站及策略代际。同一个 skb 的 `cb[2]` 跨链路保存路由编码与不回绕的 20 位已提交策略代际，再由必需的 `dae0peer` TC 恢复。签名掩码为 `0xc8000000`，可变携带位为 `0x37ffffff`。位 `0x100` 表示 8 位字段为不可变直连 mark 索引，而非出站编号；索引通过当前 Router 的排序 mark 表解析。`daens` 内部 fwmark 规则忽略这些可变位。用户 mark 保留位和 `UDP_DECISION_SEQUENCE` 保持不变。原始直连/分组的归属绝不依赖可变 tuple handoff。
 
-`RoutingInput`、`RoutingDecision`、`RoutingPolicyDescriptor` 的 ABI 分别为 128、24、24 字节。`RoutingDecision` 新增直连 mark 索引（缺省为 `u32::MAX`）；loader 校验路由槽输出的 BTF 布局，拒绝旧版本外部对象。
-
 非 DNS 本地套接字探测通过完整 socket mark 与 `PARAM.dae_socket_mark` 的比较，区分 honk 的透明监听器和普通本地服务。主机网络命名空间中的 `dns.bind` 套接字仍是普通未标记监听器，但它的存在不能绕过 LAN 端口 53 策略。
 
 ## 数据包行为与不变量
@@ -231,7 +229,7 @@ UDP53 不创建普通 UDP conn-state 或 decision token。LAN 查询分片需要
 
 本地非 honk UDP 请求原生放行；创建其反向回复 tuple 消耗[单源预算](#单源新流限制)，缓存命中的请求与回复绕过 socket/FIB 探测。预算耗尽时跳过学习，不丢弃请求，也不增加 `new_flow_rate_limited`，因此回复可能作为新流路由。`wan_ingress`/`lan_egress` 也学习反向 tuple，不受该预算约束；反向观察不覆盖正向所有权。即使本地服务关闭，持续请求仍会续期学习条目，保持原生绕过，直到 [UDP 空闲超时](#udp-生存期续期)。
 
-`ADMISSION_PRESSURE` 置位时，反向学习只查询：未命中增加 `udp_reverse_learning_suspended`，新观察到的服务回复可能作为新流路由，已有条目仍有效。压力之外，不请自来的反向观察可以抢先占据之后正向流的同一 tuple，使其原生放行。
+`ADMISSION_PRESSURE` 置位时，反向学习只查询：未命中增加 `udp_reverse_learning_suspended`，新观察到的服务回复可能作为新流路由，已有条目仍有效。未进入压力状态时，未经请求的反向流量可以抢先占据后续正向流的同一 tuple，使其原生放行。
 
 ### UDP 生存期续期
 

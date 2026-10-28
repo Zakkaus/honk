@@ -24,7 +24,7 @@ Speculative UDP dialing first returns `PreparedUdpTransport<T>`. Commit is falli
 request. Every other handler turns the selected node into bytes understood by
 its proxy server.
 
-Outbound dialing, groups, and health checking. Re-exported by `honk-core` as `honk_core::{proxy, group, outbound}`.
+`honk-core` re-exports outbound dialing, groups, and health checking as `honk_core::{proxy, group, outbound}`.
 
 ## Implementation ownership
 
@@ -409,15 +409,18 @@ may clamp and reports twice the configured sysctl accounting value; the core
 raises the corresponding maxima at startup.
 
 `bootstrap.rs` prevents proxy-hostname resolution from depending on honk's own
-intercepted DNS path. Node dial sites use `bootstrap::resolve` through
-`connect_marked` or the QUIC setup and never call bare `lookup_host` directly.
-The configured bootstrap resolver is queried over bypass-marked UDP/TCP; failure
-falls back to `/etc/hosts` and marked DNS to the first numeric nameserver in
-`/etc/resolv.conf`. This does not invoke libc NSS or apply search suffixes.
-A and AAAA are queried concurrently, each within its own 3 s budget, and only a
-response matching the random query ID and the exact question is accepted; a truncated UDP answer is retried over marked TCP.
-`query_ech_config` uses the same raw path for DNS HTTPS records (`qtype 65`)
-and extracts the SVCB `ech` parameter.
+intercepted DNS path. Node dial sites must use `bootstrap::resolve` through
+`connect_marked` (`util::connect_marked`) or the QUIC setup in `quic.rs`, never bare `lookup_host`.
+The implementation in `crates/honk-outbound/src/bootstrap.rs` provides dae
+`bootstrap_resolver` parity with a process-wide resolver and a hand-rolled wire codec.
+It queries the configured bootstrap resolver over bypass-marked UDP/TCP. On failure,
+it falls back to `/etc/hosts` and marked DNS to the first numeric nameserver in
+`/etc/resolv.conf`, without libc NSS or search suffixes.
+A and AAAA queries run concurrently, each within its own 3 s budget. The resolver
+accepts only responses matching the random query ID and exact question, and retries
+a truncated UDP answer over marked TCP.
+`tls::discover_ech_config` uses `query_ech_config` for DNS HTTPS records (`qtype 65`)
+and extraction of the SVCB `ech` parameter through the same raw-query path.
 
 After resolution, `src/address_race.rs` schedules proxy-server TCP `connect_marked`
 and shared QUIC `QuicClient` attempts with stable IPv4/IPv6 interleaving and at most
@@ -430,7 +433,6 @@ at the configured ceiling a fallback waits for an earlier attempt to finish;
 already selected node: socket marks and security settings are identical, and
 TCP TLS setup and QUIC protocol setup/authentication run only on the winning transport; QUIC TLS handshakes participate in address racing. Errors are reported deterministically in original address order.
 
-`crates/honk-outbound/src/bootstrap.rs` provides bootstrap DNS resolution for proxy-server hostnames (dae `bootstrap_resolver` parity): process-wide resolver querying over bypass-marked UDP/TCP with a hand-rolled wire codec, falling back to `/etc/hosts` and marked DNS to the first numeric `/etc/resolv.conf` nameserver without libc NSS. Node dials must use it (wired into `util::connect_marked` and `quic.rs`), never bare `lookup_host` — otherwise resolution deadlocks against honk's own intercepted DNS path. Also carries the raw-query path behind ECH discovery: `query_ech_config` (HTTPS RR qtype 65, SVCB `ech` param parsing) used by `tls::discover_ech_config`.
 `crates/honk-outbound/src/util.rs` holds `connect_marked` / `connect_outbound` (TCP `SO_MARK`, keepalive, timeout), `udp_marked_bind`. `marked_udp_socket` requests 8 MiB `SO_RCVBUF`/`SO_SNDBUF`; Linux clamps each request to `rmem_max`/`wmem_max` respectively and reports twice the accounting value. Non-mock honk-core startup attempts to raise `net.core.rmem_max`/`wmem_max` to 16 MiB and only warns on failure: the 208 KiB default caps QUIC at ~2 Gbps/ms RTT. Follow the runtime **Bypass mark** invariant; otherwise `wan_egress` loops sockets into `daens`.
 
 ## TLS, fingerprinting, ECH, and pins

@@ -23,9 +23,9 @@ VMess JSON 的 `ps` 备注缺失或为空时，先使用 `vmess-{host}` 通过�
 
 识别 tag 与链接的结束引号时，反斜杠会转义下一个字符；解析后的文本保留原始转义序列。
 
-协议已识别但格式错误的链接会被丢弃并产生 warning。已知的无效字段保留具体的安全原因及 schema 路径；未知解析失败使用 `invalid-node-entry`。诊断携带原始节点条目序号与来源位置，不包含原始链接、值或节点名称。数据接口返回诊断而不记录日志；普通接口只报告一次。未知协议或已删除的 VLESS `vless_mode` 属于配置硬错误。独立的 `mux:` 或 `mux=` 行也会被拒绝；VLESS 数据包与 carrier 选择必须写在该链接精确的 `packetEncoding=`、`mux=` 和 `udp=` query 参数中。
+协议已识别但格式错误的链接会被丢弃并产生警告。已知的无效字段保留具体的安全原因及 schema 路径；未知解析失败使用 `invalid-node-entry`。诊断携带原始节点条目序号与来源位置，不包含原始链接、值或节点名称。数据接口返回诊断而不记录日志；普通接口只报告一次。未知协议或已删除的 VLESS `vless_mode` 会导致配置被拒绝。独立的 `mux:` 或 `mux=` 行也会被拒绝；VLESS 数据包与 carrier 选择必须写在该链接精确的 `packetEncoding=`、`mux=` 和 `udp=` query 参数中。
 
-被接受的链接只会产生 `legacy-*` 代码的 warning。节点条目上的其他任何 warning 都表示该条目已被丢弃，因此客户端可以用 `syntax` 模式校验单个 `node { name: 'link' }` 声明，仅凭代码区分被跳过与被接受的链接。
+被接受的链接只会产生 `legacy-*` 代码的警告。节点条目上的其他警告都表示该条目已被丢弃。客户端可用 `syntax` 模式校验单个 `node { name: 'link' }` 声明，仅凭诊断代码区分被跳过与被接受的链接。
 
 旧版 `ss://base64(method:password@host:port)` 格式按字面值读取解码后的凭据，不做 URL 解码：`%20` 保持为 `%20`，`?`、`/`、`#`、`:` 和 `@` 仍是密码字符。最后一个 `@` 分隔凭据与端点；userinfo 本身也可以是 `base64(method:password)`。解码后的载荷缺少 `@`，或凭据无法解析为方法与密码时，拒绝解析。URL userinfo 格式仍按百分号解码凭据。端点、路径、query（包括 `/?plugin=...`）和 fragment 继续按 URL 处理。
 
@@ -49,7 +49,7 @@ XHTTP 身份还包含有效的 TLS/明文安全配置，以及全部已接受的
 
 不要为了迁移 ID 而删除缓存。持久化已启用且可读时，直连节点的 Selector 选择按节点 ID 保存，因此 ID 变化会丢失该固定选择，子组的选择按组名保存，可以保留；有效且不超过 24 小时的 TCP-v4 延迟样本会在启动时按节点名关联到新 ID。这些样本只用于排名，不恢复存活状态；改名或重复名称不能保证恢复同一个叶节点。就绪流原本就随所属 generation 退役，`name`/`subtag` 筛选语义不变。
 
-只要可拨号端点和 dial shape 不变，身份在改名、reload 和订阅刷新后仍保持稳定。配置与运行时组装会拒绝重复的派生 ID。`Node::default()` 的 ID 为 nil；构造路径会派生 ID，出站运行时注册表会拒绝任何传入的 nil ID。
+只要可拨号端点和拨号形态不变，身份在改名、重载和订阅刷新后仍保持稳定。配置与运行时组装会拒绝重复的派生 ID。`Node::default()` 的 ID 为 nil；构造路径会派生 ID，出站运行时注册表会拒绝任何传入的 nil ID。
 
 ## 节点字段
 
@@ -169,7 +169,7 @@ SOCKS5 UDP ASSOCIATE 为每个客户端 source 保持一条控制 TCP 连接和�
 
 对于支持 `network` 的协议，扁平结构化输入接受逗号分隔的 `tcp`/`udp`，忽略各项首尾空白和 ASCII 大小写。`tcp` 关闭 UDP；`udp` 与 `tcp,udp` 都允许 UDP。空文本或纯空白规范化为未指定，保留协议的默认能力。`quic` 等未知值，或非空列表中的空项，会使节点被拒绝。该字段只控制 UDP 准入；`udp` 不会额外禁止 TCP。
 
-没有 `rprx` Cargo feature 时，VMess 与 VLESS 节点仍能解析，但不会注册 handler，拨号以 `No handler for protocol` 失败；正常 feature-off 构建不会分配 VLESS pool 或 carrier semaphore。`honk-core` 与 `honk-tool` 默认启用 `rprx`。
+未启用 Cargo 特性 `rprx` 时，VMess 与 VLESS 节点仍能解析，但不会注册处理器，拨号以 `No handler for protocol` 失败；未启用该特性的正常构建不会分配 VLESS 池或 carrier 信号量。`honk-core` 与 `honk-tool` 默认启用 `rprx`。
 
 `honk-core` 在启动和 reload 时注入具有固定保留 ID 的 `direct` 与 `block`。用户节点不得使用这些名称或协议。组不会从节点池中自动纳入它们，只有精确匹配名称的 `filter: name(direct)` 或 `name(block)` 才会纳入，见[组参考](./groups.md#语法)。
 
@@ -183,11 +183,11 @@ SOCKS5 UDP ASSOCIATE 为每个客户端 source 保持一条控制 TCP 连接和�
 | `2022-blake3-aes-256-gcm` | 32 字节 |
 | `2022-blake3-chacha20-poly1305` | 32 字节 |
 
-长度错误或不是 base64 的密钥会导致 handler 构造失败。
+密钥长度错误或不是 base64 时，处理器构造失败。
 
-UDP 重放保护分别保留当前和前一个服务端 session 的窗口。前一个 session
-连续 60 秒没有活动后才接受第三个 session。只有认证及响应 header 校验
-成功后才修改接收 session 状态，无效包不能重置重放历史。
+UDP 重放保护分别保留当前和前一个服务端会话的窗口。前一个会话
+连续 60 秒没有活动后才接受第三个会话。只有认证及响应头校验
+成功后才修改接收会话状态，无效包不能重置重放历史。
 
 Shadowsocks UDP（传统 AEAD 与 2022）为每个客户端 source 的所有目的地只保留一个
 面向服务端的 socket；2022 在这些目的地之间共用一个 session ID、一个递增的包计数器
@@ -212,9 +212,9 @@ VMess JSON 的 `net` 和 Shadowrocket 传输参数只选择流传输方式，不
 
 VLESS 支持 TCP+REALITY+Vision、TCP+REALITY、TCP+WS、TCP+WS+TLS、TCP+gRPC 与下述 H2 XHTTP profile。未加密 Vision 的 direct-copy 要求使用 TLS 1.3 或 REALITY 的裸 TCP，不能使用 WS/gRPC/XHTTP；加密 Vision 遵循下文的组合规则。
 
-Vision 添加上行 padding 并移除下行 padding。上行 Direct 要求在第一个完整的
-application-data record 前已观察到符合条件的 TLS 1.3 ServerHello；early data
-或检查预算耗尽但仍未决定时，会改用 End 结束 padding 并保留 outer transport。
+Vision 添加上行填充并移除下行填充。上行 Direct 要求在第一个完整的
+应用数据记录前已观察到符合条件的 TLS 1.3 ServerHello；出现早期数据，
+或检查预算耗尽时仍未决定，都会改用 End 结束填充并保留外层传输。
 两个方向各自独立切换。参见
 [Vision 支持边界](../design/outbound.md)。
 
@@ -275,7 +275,7 @@ Clash 导入会比较 `servername`、`server-name` 和 `sni`；记录格式还�
 
 ### Hysteria2
 
-同时接受 `hysteria2://` 和 `hy2://`。完整的 percent-decoded userinfo 是认证字符串：字面 `user:password` 保留两部分及冒号，与 percent-encoded `user%3Apassword` 等价。
+同时接受 `hysteria2://` 和 `hy2://`。完整的百分号解码后 userinfo 是认证字符串：字面 `user:password` 保留两部分及冒号，与百分号编码的 `user%3Apassword` 等价。
 
 | 链接输入 | 节点字段 / 行为 |
 | --- | --- |
@@ -318,10 +318,10 @@ node {
 | --- | --- |
 | userinfo 密钥 | `password` 与 `anytls_password` |
 | `min_idle_session` | `anytls_min_idle_session`；按 u16 解析并用作请求的待机下限，受八条 session 的池上限约束 |
-| `idle_session_check_interval` | 以秒存储的 duration；当前不生效，因为 janitor 周期固定为 30 秒 |
-| `idle_session_timeout` | 以秒存储的 duration；默认 30 秒 |
+| `idle_session_check_interval` | 以秒存储的时长；当前不生效，因为清理周期固定为 30 秒 |
+| `idle_session_timeout` | 以秒存储的时长；默认 30 秒 |
 
-Duration 接受裸秒数以及 `ms`、`s`、`m`、`h` 后缀。
+时长接受裸秒数以及 `ms`、`s`、`m`、`h` 后缀。
 
 ## VLESS
 
@@ -364,7 +364,7 @@ node {
 
 **破坏性配置变更：**`vless_mode` 已删除，不是兼容别名。升级前应迁移静态链接与 provider 内容。静态 `node {}` 中出现该字段会拒绝候选配置；订阅只丢弃对应条目，保留其他有效节点。全部使用旧模式的订阅缓存无法在离线状态下恢复节点；离线升级前应确保本地已有迁移后的正文，不要删除仍可用的 Selector 或延迟状态。单个 provider 恢复失败本身不导致启动退出，但最终组装的配置仍须通过校验。
 
-每种旧 mode 都有直接且保留能力的替代组合：
+每种旧模式都有保留原有能力的替代组合：
 
 | 已移除的 `vless_mode` | `packetEncoding` | `mux` | `udp` | 额外 query |
 | --- | --- | --- | --- | --- |
@@ -420,7 +420,7 @@ mlkem768x25519plus.<native|xorpub|random>.<1rtt|0rtt>.<base64url-key>
 
 REALITY 仅使用 TLS 1.3，首次尝试依次通告 hybrid `X25519MLKEM768` 与预设 classic `X25519` share。仅当握手完成后收到非 ed25519 叶证书，才向同一 peer 新建一次仅使用 X25519 的连接；新连接仍须通过配置的 REALITY key/HMAC 认证，之后才能发送代理数据。两次尝试共享 `3 × connect_timeout` 的 setup deadline，不增加配置项。该触发结果未经认证，并非服务端版本检测。ed25519 HMAC 错误、TLS/IO 错误及 HRR 仍是最终失败。每条连接只 seal 一次 ClientHello，不复用 key/nonce。参见[兼容与认证边界](../design/outbound.md)。
 
-裸 TCP pool 仅在握手前 socket 保持静默时接纳它。任何排队的服务端字节（包括 fatal TLS alert）都会在接纳或取出时拒绝该裸 entry；没有 SNI/alert 特例，也不会重试握手。已经完成协议准备的 ready stream 即使含有有效的 buffered application data，也不会因此被拒绝。
+裸 TCP 池只接纳握手前保持静默的套接字。任何排队的服务端字节（包括致命 TLS 警报）都会使该裸连接在接纳或取出时被拒绝；没有 SNI/警报特例，也不会重试握手。已经完成协议准备的就绪流即使缓冲了有效应用数据，也不会因此被拒绝。
 
 REALITY 不使用 CA 校验或 `skip_cert_verify`。target TLS record 的缓冲限制取决于服务端版本：文档中的 sing-box 1.12 / MetaCubeX-uTLS 1.8.0 peer 有包含 framing 的 8192 字节缓冲区，这不是 honk 统一的证书上限。参见[服务端版本约束](../design/outbound.md)。REALITY profile 还会加入 ed25519；被忽略的 `fp` 和全局 Chrome-oriented 模式都不承诺精确浏览器身份。
 

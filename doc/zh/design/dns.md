@@ -71,7 +71,7 @@ flowchart LR
 
 ## DNS 所有权状态机
 
-下表区分 LAN 入站与普通主机/loopback 投递。honk 透明代理依赖真实 eBPF 数据面与已挂载的 LAN hook；mock 模式不能拦截报文。`must` 表示不再通过嗅探重判、保留已选出站，不是一个“绕过所有处理”的开关。
+下表区分 LAN 入站与普通主机/loopback 投递。honk 透明代理依赖真实 eBPF 数据面与已挂载的 LAN hook；mock 模式不能拦截报文。`must` 保留已选出站，不再通过嗅探重判，但不绕过所有处理。
 
 | 查询路径 | 流量策略结果 | 接收者 | 应答路径 |
 | --- | --- | --- | --- |
@@ -100,8 +100,6 @@ LAN client -> gateway :53 -> transparent Honk DNS policy
 Honk 的独立 bind 可以是 `:53530`、其他空闲端口或关闭；它不是 LAN 端口 53 的接管开关。主机 loopback 到 dnsmasq 的请求不会因为启动了 Honk 就变成 LAN 请求。如果改为 dnsmasq 把未命中请求转发给 Honk，Honk 的选定上游就不能再指回该 dnsmasq，否则形成递归环。只有 Honk DNS 策略选中 dnsmasq 后端时，才会获取它的本地/DHCP 名称与缓存应答。
 
 ## 解析管线
-
-生产路径顺序如下：
 
 生产路径中的 `DnsService` 调用方在发布缓存前要求严格校验查询和响应的报文格式。原始 `DnsForwarder::resolve*` 兼容接口仍供旧内部调用方使用。
 
@@ -203,7 +201,7 @@ wire 身份保留 flags、精确 question 编码、QCLASS 与 EDNS 内容。UDP 
 | Stale 处理 | 过期正应答在一小时内仍可用于 serve-stale。普通上游交换失败或已接受的 SERVFAIL 可返回该应答；typed local packet refusal 不可。`optimistic_stale_reply_ttl` 默认为 30 秒；非零值替换每个非 OPT RR 的 TTL，并设置 outcome TTL。`0` 保留缓存中已按策略改写的 TTL，而不是权威 TTL；此时 outcome TTL 由该 wire 的 `extract_min_ttl` 得出，不存在正 TTL 时回退为 60 秒。接近过期的命中会启动去重的 stale-while-revalidate refresh。 |
 | Flush fence | publication epoch 防止 flush 前开始的前台或后台工作在 flush barrier 后重新填充内存或持久化。 |
 
-后台刷新在命中正缓存时，一并读取 `Resolve` 缓存槽的发布版本号（`revision`）。每次已接受的精确键发布都会推进版本号，包括负缓存合并和持久化恢复。发布时在分片锁内检查：版本号必须一致，正缓存也必须仍在。版本号不符、缓存槽仅剩负缓存或已被驱逐时，刷新结果会被丢弃；被驱逐的槽不会因刷新完成而重新写入。
+后台刷新在命中正缓存时，一并读取 `Resolve` 缓存槽的发布版本号（`revision`）。每次已接受的精确键发布都会推进版本号，包括负缓存合并和持久化恢复。发布时在分片锁内检查：版本号必须一致，正缓存也必须仍在。版本号不符、缓存槽仅剩负缓存或已被淘汰时，刷新结果会被丢弃；已淘汰的槽不会因刷新完成而重新写入。
 
 匹配且可缓存的 NXDOMAIN 先移除被刷新的正缓存，再写入负缓存；可缓存的正应答或 NODATA 替换整个缓存槽。NXDOMAIN、NODATA 或零 TTL 正应答没有可用生命周期时移除整个槽，包括其中的负缓存。若 SERVFAIL 没有可用的过期应答回退，则保留正缓存并合并负缓存。
 
@@ -219,7 +217,7 @@ wire 身份保留 flags、精确 question 编码、QCLASS 与 EDNS 内容。UDP 
 
 | 协议 | 复用模型 | 拨号路径代理 |
 | --- | --- | --- |
-| UDP | 每个直连上游一个由 generation 持有的 connected socket 与 receive task；`TC` fallback 由 TCP 池处理。 | 配置代理时，查询会刻意由池化 TCP-DNS 承载。 |
+| UDP | 每个直连上游一个由 generation 持有的 connected socket 与 receive task；`TC` fallback 由 TCP 池处理。 | 配置代理时，查询由池化 TCP-DNS 承载。 |
 | TCP | RFC 7766 空闲 stream 池。 | 支持经所选节点或组叶子。 |
 | DoT | 空闲 TLS stream 池。 | 支持经代理 TCP 基础 stream。 |
 | DoH | 一个长生命周期、可复用并发请求的 HTTP/2-only TLS session。 | HTTP/2 会话可经由代理 TCP 连接建立。 |

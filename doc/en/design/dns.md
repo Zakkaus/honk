@@ -32,13 +32,13 @@ Non-`must` transparent DNS and the standalone ingress adapter use the same `DnsC
 - [`src/dns/validation.rs`](../../../crates/honk-config/src/dns/validation.rs) owns named upstream-reference checks called by `Config::validate` at startup, SIGHUP, and public runtime reload. A private request-source selector in `DnsRouting` serves both validation and `effective_request`, preserving legacy field paths without allocating converted rules during validation. Parse-only loaders do not run whole-config validation.
 - DNS hosts use immutable, generation-pinned snapshots. Ordered `use_host` sources merge before request routing, cache lookup, or upstream exchange. Source syntax, precedence, and transactional SIGHUP behavior: [Configuration](../configuration.md).
 
-- [`src/dns/`](../../../crates/honk-core/src/dns/) — module ownership:
-    - `runtime.rs` / `runtime/provider.rs` — `DnsRuntime` and `DnsServiceProvider`; [generations and retirement](#generations-and-reload).
-    - `forwarder/`, `engine/`, `planner.rs`, `policy.rs` — [resolution pipeline](#resolution-pipeline) and request/response policy.
-    - `cache/` — [answer cache and persistence](#cache-and-persistence).
-    - `upstream_pool/`, `transport/` — [upstream sessions and drivers](#upstream-transports); `transport/retry.rs` owns the retry decision, `transport/lifecycle.rs` owns session retirement, and `transport/udp_pool/error_queue.rs` owns Linux quoted-packet error reception.
-    - `projection/` — generation-owned routing projection and domain-fact reconciliation ([routing projection](#routing-projection)).
-    - `service.rs`, `resolver.rs` — current-provider access for transparent DNS, `dns.bind`, Clash API, and application lookups.
+- [`src/dns/`](../../../crates/honk-core/src/dns/): module ownership:
+    - `runtime.rs` / `runtime/provider.rs`: `DnsRuntime` and `DnsServiceProvider`; [generations and retirement](#generations-and-reload).
+    - `forwarder/`, `engine/`, `planner.rs`, `policy.rs`: [resolution pipeline](#resolution-pipeline) and request/response policy.
+    - `cache/`: [answer cache and persistence](#cache-and-persistence).
+    - `upstream_pool/`, `transport/`: [upstream sessions and drivers](#upstream-transports); `transport/retry.rs` owns the retry decision, `transport/lifecycle.rs` owns session retirement, and `transport/udp_pool/error_queue.rs` owns Linux quoted-packet error reception.
+    - `projection/`: generation-owned routing projection and domain-fact reconciliation ([routing projection](#routing-projection)).
+    - `service.rs`, `resolver.rs`: current-provider access for transparent DNS, `dns.bind`, Clash API, and application lookups.
 
 ## Ingress paths
 
@@ -99,8 +99,6 @@ LAN client -> gateway :53 -> transparent Honk DNS policy
 Honk's optional bind may be `:53530`, another free port, or disabled; it is not what intercepts LAN port `53`. Host-loopback requests to dnsmasq do not become LAN requests merely because Honk exists. If dnsmasq instead forwards misses to Honk, do not also point Honk's selected upstream back at that dnsmasq: this creates a recursion loop. Local/DHCP names and cached dnsmasq answers reach Honk only when its DNS policy selects that backend.
 
 ## Resolution pipeline
-
-The production path is ordered as follows:
 
 Production `DnsService` callers require strict query/response wire validation before cache publication. The raw `DnsForwarder::resolve*` compatibility surface remains for legacy internal callers.
 

@@ -1,6 +1,6 @@
 # Subscription reference
 
-`subscription {}` configures remote node lists. This reference covers entries, durable recovery, and accepted subscription body formats.
+`subscription {}` configures remote node lists.
 
 ## `subscription {}` syntax
 
@@ -19,7 +19,16 @@ subscription {
 }
 ```
 
-The entry block accepts `ua`, `interval`, `cache` and `route`. `interval` is a duration; `0` disables periodic refresh. `cache: false` keeps this subscription's body out of the subscription store. `route` selects the fetch route (see below). A missing option uses the `assets.subscription` default, or `assets.route` for the route, then the built-in default: User-Agent `honk/<version>`, `86400s`, cache on, `routing`. See the [assets reference](./assets.md).
+The entry block accepts four options:
+
+| Option | Effect | Built-in default |
+| --- | --- | --- |
+| `ua` | Override the request User-Agent. | `honk/<version>` |
+| `interval` | Set the refresh duration; `0` disables periodic refresh. | `86400s` |
+| `cache` | `false` keeps this subscription's body out of the subscription store. | On |
+| `route` | Select the fetch route (see below). | `routing` |
+
+A missing option uses the `assets.subscription` default, or `assets.route` for the route, before the built-in default. See the [assets reference](./assets.md).
 
 Two earlier forms still parse without a warning: a `(UA)` suffix after a quoted URL (`compatible: 'https://example.net/sub'(honk/1.0 like)`), and a block containing the URL (`detailed: { url: '…' ua: '…' }`). The block also accepts `download_detour` as an alias for `route`; setting both fails with `conflicting-subscription-route`. The rules below for suffixes and glued comments apply to the `(UA)` form.
 
@@ -89,9 +98,13 @@ Subscription fetches follow routing unless the entry's `route` (or `assets.route
 
 A subscription can route through nodes it supplies itself, for example when the rules send its URL to a group made only of its own nodes. On a fresh install those nodes do not exist yet. honk never falls back to direct: when the chosen route has no usable node, the fetch fails with an error that names the subscription and the outbound, says the route cannot carry the download yet, and suggests `route: direct` for that subscription. The provider status in the native API reports `last_error.code` `route_unavailable`. Nodes restored from the stored body stay in service throughout.
 
-Routing starts after the startup subscription pass. Only `direct` subscriptions take part in the five-second first-fetch wait; routed subscriptions restore their stored body there and are fetched as soon as routing is ready.
+Startup restores nodes before refreshing subscriptions:
 
-Startup parses stored bodies before launching network refreshes. A valid restored body supplies active nodes immediately and excludes that subscription from the five-second first-fetch wait; its refresh still runs in the background. Missing, invalid or empty stored bodies are ignored. Only direct subscriptions without a valid restore enter the shared bounded wait, until their fetch finishes or the deadline expires; routed subscriptions fetch once routing is ready. A later accepted refresh replaces the SQLite body row, not a legacy file.
+1. Parse stored bodies before starting network refreshes. A valid restored body supplies active nodes immediately. Missing, invalid or empty stored bodies are ignored.
+2. Wait for direct subscriptions without a valid restore to finish fetching, within one shared five-second deadline. A valid restore excludes that subscription from the wait; its refresh still runs in the background.
+3. Make routing ready after the startup subscription pass, then fetch routed subscriptions.
+
+A later accepted refresh replaces the SQLite body row, not a legacy file.
 
 A restored or first-fetched body whose node ID is already used by an inline node or another subscription's node leaves that subscription out of the startup configuration instead of failing startup; a runtime publication rejects the same collision. A body may still replace the subscription's own nodes. The native API provider reports `last_error.code` `publication_rejected` with `last_error.details.diagnostic_code` `duplicate-node-id`. A restored body rejected this way still counts as restored: the subscription does not join the first-fetch wait, and its background refresh still runs and repeats the check.
 

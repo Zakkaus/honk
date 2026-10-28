@@ -1,6 +1,6 @@
 # honk Configuration Guide
 
-Use this guide to assemble and operate a honk configuration; the reference docs list individual fields.
+Use this guide to assemble and operate a honk configuration. For installation and the direct-only, proxy and UI/API starting points, begin with the [startup guide](./how-to-start.md#minimal-configuration). The reference docs list individual fields.
 
 honk uses a dialect of dae configuration syntax; the [dialect reference](./reference/dialect.md) lists known differences. The table lists runtime sections and the CLI entry point. `include {}` composes files.
 
@@ -16,7 +16,7 @@ honk uses a dialect of dae configuration syntax; the [dialect reference](./refer
 | `experimental` | Enable the independent native API, Clash API, or persistent cache. | [Experimental reference](./reference/experimental.md) |
 | CLI | Select a config, backend, object file, or local command. | [CLI reference](./reference/cli.md) |
 
-honk injects the built-in outbounds `direct` and `block` at startup. They may be used in groups and routing rules.
+honk injects the built-in outbounds `direct` and `block` at startup. Use them in groups and routing rules.
 
 ## Configuration format
 
@@ -44,13 +44,25 @@ Empty or comment-only included `.dae` files contribute no sections; the dae entr
 
 Only top-level `include` accepts an opener on a later line, with a `legacy-include-opener` warning; prefer `include {` on one line. Include comments follow the token rule: `path.dae # note` includes `path.dae`, but `path.dae#note` is a literal glob and emits `legacy-include-hash`. Quote literal hashes to avoid the migration warning. String parsing checks include structure but never opens included files; includes do not splice fragments into an open block.
 
-Every relative include, including one in a nested included file, resolves against the directory containing the entry config passed to `--config`. The loader canonicalizes the entry directory and every match; an absolute path or symlink target outside that directory is rejected. Loading the same canonical file twice, directly or through a cycle, is also rejected.
+Every relative include, including one in a nested included file, resolves against the directory containing the entry config passed to `--config`. The loader canonicalizes the entry directory and every match. It rejects any absolute path or symlink target that resolves outside that directory. It also rejects loading the same canonical file twice, directly or through a cycle.
 
 The entry file's own sections merge first regardless of where its `include` block appears, followed by each included file and its descendants. Later scalar keys override earlier values. Collection entries such as nodes, subscriptions, groups, DNS upstreams, fixed TTLs, and routing rules append in merge order.
 
 ## Runtime data directory
 
-`global.data_dir` is the process-wide root for runtime state and relative runtime-supplied files. It defaults to `/var/lib/honk`, must be a non-empty absolute path, and is restart-required. At startup honk recursively creates the directory and probes it with a private create-new/remove file; an unusable candidate falls back only to a working directory that passes the same probe. Existing artifacts under `/var/share/honk` (`LEGACY_DATA_DIR`) remain usable without automatic migration; reused writable state continues to be updated in place. For relative writable artifacts and read-only dependencies, honk checks an existing `<data_dir>/<path>`, then an existing `/var/share/honk/<path>`, then the existing per-caller legacy candidate (the original config directory for cache, or the working directory for other dependencies), and otherwise returns `<data_dir>/<path>` for creation. Relative logs are creation-only and always use `<data_dir>/<path>`; absolute paths stay literal. Geo assets use an independent regular-file search order: `$DAE_LOCATION_ASSET`, `<data_dir>`, `/var/share/honk`, the working directory, honk share directories, then dae share directories.
+`global.data_dir` is the process-wide root for runtime state and relative runtime-supplied files. It defaults to `/var/lib/honk` and must be a non-empty absolute path. Changing it requires restart.
+
+At startup, honk recursively creates the directory and probes it by creating and removing a new private file. An unusable candidate falls back only to a working directory that passes the same probe.
+
+Relative writable artifacts and read-only dependencies use the first existing candidate:
+
+1. `<data_dir>/<path>`.
+2. `/var/share/honk/<path>`.
+3. The caller's legacy location: the original config directory for cache, or the working directory for other dependencies.
+
+If none exists, honk returns `<data_dir>/<path>` for creation. Existing artifacts under `/var/share/honk` (`LEGACY_DATA_DIR`) remain usable without automatic migration; reused writable state continues to update in place. Relative logs always use `<data_dir>/<path>` for creation. Absolute paths stay literal.
+
+Geo assets use an independent regular-file search order: `$DAE_LOCATION_ASSET`, `<data_dir>`, `/var/share/honk`, the working directory, honk share directories, then dae share directories.
 
 See the [global reference](./reference/global.md).
 
@@ -207,7 +219,11 @@ experimental {
 
 ## Choosing interfaces
 
-Set `lan_interface` to the interface or comma-separated interfaces receiving forwarded LAN traffic, and `wan_interface` to the interface carrying host-originated traffic. `auto` follows the IPv4 default-route interface; it stays pending rather than falling back to loopback when no default route exists, then reconciles on link, address, or route changes. An absent, refused (`lo`, a VRF device, `dae0`) or unattachable interface never stops startup; see [interface semantics](./reference/global.md#interface-semantics). For a WAN-only host proxy, omit `lan_interface`: configured WAN hooks still process host-originated TCP and UDP. Never add `lo` as a synthetic LAN interface.
+- Set `lan_interface` to the interface receiving forwarded LAN traffic; separate multiple interfaces with commas.
+- Set `wan_interface` to the interface carrying host-originated traffic. `auto` follows the IPv4 default-route interface. Without a default route it stays pending, rather than falling back to loopback, and reconciles on link, address or route changes.
+- For a WAN-only host proxy, omit `lan_interface`: configured WAN hooks still process host-originated TCP and UDP. Never add `lo` as a synthetic LAN interface.
+
+An absent, refused (`lo`, a VRF device, `dae0`) or unattachable interface never stops startup. See [interface semantics](./reference/global.md#interface-semantics).
 
 See the [global reference](./reference/global.md).
 
@@ -230,7 +246,15 @@ See the [node reference](./reference/nodes.md).
 
 ## Building groups
 
-Use `filter: name(...)` for static names, `filter: subtag(...)` for subscription provenance, and `filter: group(...)` for nested groups. Predicates joined by `&&` are ANDed and `!` negates one predicate; separate `filter:` lines are ORed. No filters and no nested groups include all nodes, while nested groups alone do not. Choose `selector`/`fixed`, `urltest`/`min_moving_avg`, `loadbalance`/`roundrobin`, or `fallback`; set `final` for an empty policy selection. Selector TCP and UDP follow the chosen member and never switch to a sibling because of health; the same-leaf TCP last resort does not bypass nested Selector choices. Group dials always resolve to one leaf node. A configuration may define at most 250 top-level user groups; higher ordinals are reserved by the routing ABI.
+Build a group in this order:
+
+1. Select members with `filter: name(...)` for static names, `filter: subtag(...)` for subscription provenance, or `filter: group(...)` for nested groups.
+2. Combine predicates with `&&` for AND and `!` to negate one predicate. Separate `filter:` lines mean OR. With neither filters nor nested groups, a group includes all nodes; nested groups alone do not include all nodes.
+3. Choose `selector`/`fixed`, `urltest`/`min_moving_avg`, `loadbalance`/`roundrobin`, or `fallback`. Set `final` for an empty policy selection.
+
+Selector TCP and UDP follow the chosen member and never switch to a sibling because of health. The same-leaf TCP last resort does not bypass nested Selector choices. Group dials always resolve to one leaf node.
+
+A configuration may define at most 250 top-level user groups; the routing ABI reserves higher ordinals.
 
 See the [group reference](./reference/groups.md).
 
@@ -272,7 +296,13 @@ See the [DNS reference](./reference/dns.md).
 
 ## Subscriptions
 
-Declare each source as `tag: 'url'`; add a block after the quoted URL for per-subscription `ua`, `interval`, `cache`, or `route` overrides. `assets.subscription` supplies shared `ua`, `interval`, and `cache` defaults; `assets.route` supplies the download route unless an entry overrides it. The tag is what `subtag(...)` matches. A successfully fetched and parsed raw body is stored in the state db only when `global.store_subscribe` (default `true`) and the entry's effective `cache` are both true. Requests use `honk/<version>` unless the entry or `assets.subscription` sets `ua`; the cache key includes the configured override, so distinct request identities keep distinct stored bodies. Startup restores valid non-empty stored bodies before background refresh; SIGHUP carries active subscription nodes but does not restore from the store. Fetch, parse, or no-usable-node failures keep the active nodes and last valid body. Subscription nodes remain runtime-only. Changing `store_subscribe` requires restart.
+Declare each source as `tag: 'url'`; `subtag(...)` matches that tag. To override `ua`, `interval`, `cache` or `route` for one subscription, add a block after its quoted URL.
+
+- Shared defaults: `assets.subscription` supplies `ua`, `interval` and `cache`; `assets.route` supplies the download route unless the entry overrides it.
+- Request identity: requests use `honk/<version>` unless the entry or `assets.subscription` sets `ua`. The cache key includes the configured override, so distinct request identities keep distinct stored bodies.
+- Persistence: honk stores a successfully fetched and parsed raw body in the state db only when both `global.store_subscribe` (default `true`) and the entry's effective `cache` are true. Changing `store_subscribe` requires restart.
+- Startup and reload: startup restores valid non-empty stored bodies before background refresh. SIGHUP carries active subscription nodes but does not restore from the store.
+- Failure: fetch, parse or no-usable-node failures keep the active nodes and last valid body. Subscription nodes remain runtime-only.
 
 See the [subscription reference](./reference/subscription.md).
 

@@ -1,16 +1,20 @@
 # 原生 API、Clash API 与 `/stats` 参考
 
-本页列出 honk 的原生 API、已实现的 Clash 兼容 HTTP 接口及其用户态统计快照。原生与 Clash API 的 feature、listener、凭据及 HTTP 边界相互独立，共用底层引擎 handles 与用户态统计。
+原生 API 与已实现的 Clash 兼容 HTTP 接口共用底层引擎句柄及用户态统计，但功能开关、监听器、凭据及 HTTP 边界相互独立。
 
 ## 原生 API
 
-`native-api` Cargo feature 需显式启用：以 `--features native-api`（或 `native-ui`）构建；full 发布产物包含它及内嵌 UI（`native-ui`），`-native-api` 产物包含它但不含 Clash 与 UI，`-clash-api` 产物不含它。listener 默认关闭，须显式启用 [`experimental.native_api`](./experimental.md#native_api)。`--no-default-features --features native-api` 可脱离 Clash 使用。`.dae` 仍是配置格式；显式授权后可读取与替换已接受的源文件，或以 `--store db` 把 revision 记录在 SQLite 配置数据库中（见[配置数据库](#配置数据库--store-db)）。
+原生 API 需要显式启用 `native-api` Cargo 功能：以 `--features native-api`（或 `native-ui`）构建。`--no-default-features --features native-api` 可脱离 Clash 使用。按所需接口选择发布产物：
 
-原生契约（包括认证、节点/provider 管理、geodata 与自动策略 override）为 [api-standardize e6b0dbab5599689d965bc18a71be67c809d99d0f](https://github.com/daeuniverse/api-standardize/tree/e6b0dbab5599689d965bc18a71be67c809d99d0f)；`crates/honk-core/tests/fixtures/native_api_openapi.yaml` 跟踪该 bundle。原生 runtime mode 仍未开放，不声明 `full_transparency`。源管理要求真实 `.dae` 启动，写入还需启用 `config_write` 并配置非空 secret 或 `password_auth`。可用功能以 capabilities 和逐源权限为准，不按路由名称推断。
+| 发布产物 | 原生 API | 内嵌 UI | Clash API |
+| --- | --- | --- | --- |
+| Full | 有 | 有（`native-ui`） | 有 |
+| `-native-api` | 有 | 无 | 无 |
+| `-clash-api` | 无 | 无 | 有 |
 
-`Node.stream_transport` 是可选、可为 null 的字符串，投影已接受的 Trojan/VMess/VLESS 配置：`tcp`、`ws`、`grpc` 或 `xhttp`（包括 `splithttp` 别名）。无法识别或不适用时，honk 返回 null。该字段表示配置的传输方式，不表示协商结果或健康状态；`protocol` 与 TCP/UDP 健康传输字段的含义不变。它不暴露凭据、host、path、extra 选项或链接。测试 fixture 复制 doona 契约 bundle，保留其 `read_only_reason` 扩展（SHA-256 `ef3e1ce08392c26d256b70277318d61a7ec932f4f5825ac8117d839944a33646`）；此固定版本不代表已发布的前端版本。
+监听器默认关闭，须显式启用 [`experimental.native_api`](./experimental.md#native_api)。`.dae` 仍是配置格式；显式授权后可读取与替换 `-c` 指定的已接受源文件，或以 `--store db` 把修订记录保存在 SQLite 配置数据库中（见[配置数据库](#配置数据库--store-db)）。
 
-`POST /api/v1/nodes` 接受 1–8192 个字符的链接；更长的声明（例如接近 16 KiB header 上限的 XHTTP `extra`）应通过编辑配置源写入。引擎拒绝的链接返回 `422 unsupported_value`，`error.message` 为解析器给出的静态原因，例如 `XHTTP xPaddingBytes must stay within 1-8192`，`details.fields` 为 `["name","link"]`；不会回显提交的名称、链接或选项值，也不会写入任何内容。`POST /api/v1/providers` 以同样方式报告被拒绝的订阅条目。其他拒绝仍使用通用消息。
+原生契约（包括认证、节点与订阅源管理、地理数据及自动策略覆盖）为 [api-standardize e6b0dbab5599689d965bc18a71be67c809d99d0f](https://github.com/daeuniverse/api-standardize/tree/e6b0dbab5599689d965bc18a71be67c809d99d0f)；`crates/honk-core/tests/fixtures/native_api_openapi.yaml` 跟踪该契约包。原生运行模式仍未开放，不声明 `full_transparency`。源管理要求真实 `.dae` 启动，写入还需启用 `config_write` 并配置非空 `secret` 或 `password_auth`。可用功能以能力声明和逐源权限为准，不按路由名称推断。
 
 | 方法 | 路径 | 含义 |
 | --- | --- | --- |
@@ -119,7 +123,7 @@ Setup 与 login 每分钟按规范化对端 IP 最多接受 5 次尝试，全局
 
 记录使用 PBKDF2-HMAC-SHA256、100,000 次迭代及新生成的 16 字节随机 salt。密码模式直接使用配置的 `global.data_dir`：该目录不可用时启动失败，不回退到其他目录，以免在别处重新开放 setup。首次 setup 插入该行，不替换已有记录，因此两个进程在同一个状态数据库上同时 setup 时只有一个成功。写入开始前数据库忙碌，或插入失败且已回滚时，setup 失败，可以重试。提交或该回滚失败时，由于该行是否已持久化无法确定，进程在重启前拒绝登录和再次 setup。
 
-Setup 占有凭据状态后，discovery 返回 `setup_required:false`，耐久性不确定时也不重新开放。无法确认写入时返回 503 与 `durability_confirmed:false`，不带 `Retry-After`，不声称 `written:true`；须重启才能重新确认数据库中的账户状态。
+Setup 占有凭据状态后，discovery 返回 `setup_required:false`；无法确认持久化结果时也不重新开放。无法确认写入时返回 503 与 `durability_confirmed:false`，不带 `Retry-After`，不声称 `written:true`；须重启才能重新确认数据库中的账户状态。
 
 不提供 HTTP 密码重置。恢复访问时，停止 honk，执行 `honk-core admin reset`，重启后重新 setup。把 `<data_dir>/state` 整个移走也能恢复，但会丢弃所有其他持久化状态。
 
@@ -160,6 +164,8 @@ Flow ID 表示 incarnation，不是五元组。TCP/UDP 捕获真实执行的路�
 Flow list 接受 `network/state/connection_id/detail/limit/cursor`。最多八份有界不可变 snapshot，TTL 30 秒，游标绑定 instance 与原过滤器/detail。可识别的游标带不同过滤器、detail 或 limit 时返回 `400 invalid_request`。表满时淘汰最旧 snapshot；保留字节预算耗尽才返回 `503 snapshot_unavailable` 与 Retry-After。过期或被淘汰的列表返回 `410 snapshot_expired`，已知淘汰 ID 的有界 tombstone 返回 `410 flow_expired`，未知 ID 返回 `404 resource_not_found`。Detail 不接受 query，始终返回保留的 full input/trace。计数为十进制字符串，revision/seq/elapsed_us 为 safe JSON number；显示字段在 512 字节 `MAX_TEXT` 上限内保留路径、`@` 和 URL；标识符仍单独校验。无法表示或超限的文本、步骤/字节预算溢出仍明确报告为不完整证据，不丢弃因果 ID 或结果。保留的规则展示属于捕获时的代次，不从当前配置重建。
 
 ### 节点与组
+
+`Node.stream_transport` 是可选、可为 null 的字符串，投影已接受的 Trojan/VMess/VLESS 配置：`tcp`、`ws`、`grpc` 或 `xhttp`（包括 `splithttp` 别名）。无法识别或不适用时，honk 返回 null。该字段表示配置的传输方式，不表示协商结果或健康状态；`protocol` 与 TCP/UDP 健康传输字段的含义不变。它不暴露凭据、host、path、extra 选项或链接。测试 fixture 复制 doona 契约 bundle，保留其 `read_only_reason` 扩展（SHA-256 `ef3e1ce08392c26d256b70277318d61a7ec932f4f5825ac8117d839944a33646`）；此固定版本不代表已发布的前端版本。
 
 节点读取接受 `group_id`、`limit`（1–1000）及 `cursor`；只筛直接成员，不展开叶节点。节点分页最多八份 snapshot、30 秒、4 MiB，冻结分页期间观测；放不下时返回 `503 snapshot_unavailable` 并带 `Retry-After`；无法识别的游标返回 `410 snapshot_expired`，可识别但过滤器或 `limit` 不同的游标返回 `400 invalid_request`。Groups 返回摘要数组；detail 含 `config_revision`，不带 `ETag`；`GET /groups/{groupId}/config` 返回 `{policy, config}`，并以该 revision 作为带引号的 `ETag`。组 ID 为进程生命周期随机身份：同名 reload/重排保持，删除再添加获得新 ID，重启重新发现；不使用位置 UUID 或名称 hash。
 
@@ -232,7 +238,7 @@ PUT 与校验请求体含未知字段（包括 `secrets_redacted`）时返回 `4
 
 因为 reload 会拒绝修改需重启设置的候选配置，而已写入的文件不回滚，磁盘 hash 会与 accepted hash 不一致，后续写入都返回 412，所以协调器在写入前拒绝。Group PATCH、节点与 provider 编辑、数据库模式的 import 与 revision 激活同样适用；`full` 模式校验以 warning 报告这些诊断。需重启的设置应在配置文件中修改，然后重启 honk。
 
-协调器在副作用前预留 operation，串行处理 API 新写入和 SIGHUP，SIGHUP 也先入队再读盘。单源 overlay 完整校验后，采用目录 FD、拒绝符号链接的普通文件检查、独占临时文件、保留 mode、文件 fsync、目标与完整依赖集复查、原子 rename、目录 fsync。外部编辑器不受协调器约束，最后检查到 rename 之间仍有竞争窗口；UI 保存期间不要并行手工改同一文件。Rename 后若目录 fsync 失败，503 明确携带 `written:true,durability_confirmed:false`，不带 `Retry-After`：可见内容已经改变，不表示未写或回滚。写入后 reload 无法入队时同样返回 `written:true`，不带 `Retry-After`。
+协调器在副作用前预留 operation，串行处理 API 新写入和 SIGHUP；SIGHUP 也先入队再读盘。单源 overlay 通过完整校验后，写入使用目录 FD，检查目标为非符号链接的普通文件，创建独占临时文件并保留 mode，再依次执行文件 fsync、目标与完整依赖集复查、原子 rename、目录 fsync。外部编辑器不受协调器约束，最后检查到 rename 之间仍有竞争窗口；UI 保存期间不要并行手工改同一文件。Rename 后若目录 fsync 失败，503 明确携带 `written:true,durability_confirmed:false`，不带 `Retry-After`：可见内容已经改变，不表示未写或回滚。写入后 reload 无法入队时同样返回 `written:true`，不带 `Retry-After`。
 
 `POST /api/v1/config/sources` 新建一个源文件。能力中的 `config.create` 仅在 `config.writable` 为 true 时为 true；配置不可用或不可写时的响应与 PUT 相同；配置可写但 `config.create` 为 false 时返回 `404 capability_not_supported`。Body 为 `{"path":"config.d/proxies.dae","content":"..."}`。`path` 相对入口目录，只含普通路径段，以 `.dae` 结尾，不超过 1024 字节且不含控制字符；父目录必须位于入口根目录内，经符号链接指向根目录外同样拒绝。不满足时返回 `400 invalid_request`。路径已存在于磁盘或属于已接受的源时返回 `409 state_conflict`，不覆盖。候选配置执行与 PUT 相同的完整校验、凭据检查与需重启设置检查，且新文件必须由某个 include 模式加载；否则 422 携带归属主文件、位置为 null 的 `source-not-included` 错误诊断。文件经临时文件与禁止覆盖的 rename 写入，使用入口文件的 mode；数据库模式改为把新源记录到新 revision。Reload 失败时新建的文件保留在原处，因为删除它会与该路径的其他编辑者竞争。每个失败的新建 operation 都报告 `written`（文件创建后为 `true`）与 `committed`（`false`、`true` 或 `null`）。大小限制、`Idempotency-Key` 以及 413、415、429、503 响应与 PUT 相同。
 
@@ -317,6 +323,8 @@ DNS 查询与缓存响应及 DNS 日志分页会遮蔽监听凭据展示值，�
 GET 和成功的 PATCH 响应包含只读 `recording`：`flows`、`logs`、`dns_log` 各含 `{allowed, mode, active}`，其中 `mode` 为 `"auto"`、`"on"` 或 `"off"`；`events.active` 表示事件捕获是否开启，`grace_remaining_seconds` 表示通用连接宽限期剩余秒数，不是任何独立 flow/日志/DNS 日志诊断需求的倒计时；仍有通用流连接时该字段为零。读取设置不延长任何期限。
 
 ### 主文件条目与 geodata 管理
+
+`POST /api/v1/nodes` 接受 1–8192 个字符的链接；更长的声明（例如接近 16 KiB header 上限的 XHTTP `extra`）应通过编辑配置源写入。引擎拒绝的链接返回 `422 unsupported_value`，`error.message` 为解析器给出的静态原因，例如 `XHTTP xPaddingBytes must stay within 1-8192`，`details.fields` 为 `["name","link"]`；不会回显提交的名称、链接或选项值，也不会写入任何内容。`POST /api/v1/providers` 以同样方式报告被拒绝的订阅条目。其他拒绝仍使用通用消息。
 
 `resources.nodes.can_manage` 与 `resources.providers.can_manage` 要求来源协调器运行，且 accepted 主文件可写、不含 API 凭据。创建节点提交 `{"name":"edge","link":"socks5://192.0.2.2:1080"}`；创建 provider 提交 `{"name":"feed","kind":"subscription","url":"https://example.net/sub"}`。`resources.providers.create_options` 列出可选 provider 字段省略时的生效值：`update_interval`（秒，最多一年，`0` 表示只在请求时刷新，内置默认 `86400`）、`user_agent`（1 至 256 个可打印 ASCII 字符，内置默认 `honk/<version>`），以及仅在 `global.store_subscribe` 打开订阅存储时列出的 `cache`（内置默认 `true`）。内置默认值只是回退值；`assets.subscription` 设置了对应默认值时，`create_options` 返回该设置值。`resources.providers` 还会声明 `create_unfetched: true`，表示支持这种未拉取即创建的方式。显式提供选项的 provider 写作 `tag: 'url' { ... }`，`ua`、`interval` 和 `cache` 各占一行；schema 长度、pattern、kind、interval 或 user-agent 边界违规返回 `400 invalid_request`；未声明的选项（如没有 store 时的 `cache`）返回 `422 unsupported_value`。严格 JSON 与 64 KiB 正文限制不变。复用引擎 parser、完整离线准入、FD 相对耐久写入及真实 reload；激活与订阅协调完成后才以 `201` 返回当前 Node/Provider 和 `Location`。HTTP 断连不取消已入队工作；使用 `--store db` 时，这些操作记录新 revision，不重写主文件。
 
@@ -411,7 +419,7 @@ WebSocket upgrade 也可以改用 `?token=<percent-encoded-secret>`。honk 会�
 | GET | `/stats` | 返回下文所述的用户态出站、ready pool、热资源、Score 选路原因和 UDP 快照。 |
 | GET | `/logs` | 通过 WebSocket 或分块 JSON 行推送 tracing 事件；所有订阅者共用一个 256 槽位的广播队列，`?level=` 默认为 `info`。 |
 | GET | `/dns/query` | 经 honk DNS 解析 `?name=` 并返回 DoH 风格 JSON；`?type=` 默认为 `A`。 |
-| POST | `/cache/fakeip/flush` | 相容 no-op，返回 204；没有持久化 FakeIP 映射可清除。 |
+| POST | `/cache/fakeip/flush` | 兼容性 no-op，返回 204；没有持久化 FakeIP 映射可清除。 |
 | POST | `/cache/dns/flush` | 清除存活 DNS cache 及其持久化 DNS 状态。 |
 | GET | `/providers/proxies` | 将非空组暴露为 Clash proxy provider。 |
 | GET | `/providers/rules` | 返回当前空桩文档 `{"providers":[]}`。 |
@@ -461,7 +469,7 @@ WebSocket upgrade 也可以改用 `?token=<percent-encoded-secret>`。honk 会�
 
 ### 延迟测量
 
-调用方通过 `?url=` 指定测试 URL。组请求最多同时执行 `URLTEST_MAX_CONCURRENT`（10）项经代理的测量。
+两个接口使用上表所列的 URL 参数与并发上限。
 
 延迟测试使用规范的 HTTP 检查目标解码器：HEAD 保留原始路径与查询串（包括点段和仅查询串的 `/?query`），authority 移除凭据和默认端口，fragment 不会发送。它与周期健康检查共享 HTTP 实现，报告第二轮请求的热路径 RTT，不含代理拨号、目标 TLS 与第一轮请求。HTTPS 验证证书，协商 HTTP/2 或 HTTP/1.1，并禁用 server push。两轮最终响应的解码状态都必须为有效的 200–499。第二轮传输失败或超时可回退到已验证的第一轮样本；HTTP/1 部分响应即使超时也不回退，而正常 HTTP/2 GOAWAY 可以回退。每轮 HTTP/1 临时响应头与最终响应头的累计上限为 16 KiB，H2 响应头列表上限同样为 16 KiB。session 预热、拨号、目标 TLS、H2 启动与每轮请求分别使用阶段预算。冷可复用 generation 探测使用带 guard 的临时 runtime，结束后关闭；HTTP/2 driver 在完成或取消后释放，因此组扫描不会为每个已测试节点留下新的常驻可复用 runtime。
 
@@ -737,7 +745,7 @@ Readonly／Peek 使用已提交参与者，不重新排名。Apply 初始化并�
 | `warm.sessions.juicity` | 已占用的 Juicity client slot 数。 |
 | `warm.sessions.hysteria2` | 已占用的 Hysteria2 client slot 数。 |
 
-一个节点可以同时计入多个显式原因。gauge 跟随当前 runtime generation；已排干资源会从下一次快照中消失。
+一个节点可以同时计入多个显式原因。gauge 跟随当前运行时代次；已排干资源会从下一次快照中消失。
 
 ## Related docs
 

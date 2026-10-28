@@ -1,10 +1,10 @@
 # Global configuration reference
 
-`global { ... }` configures process-wide settings. The fields and their runtime effects are listed below.
+`global { ... }` configures process-wide settings.
 
 ## Fields
 
-Compatibility-only keys are accepted by the dae parser and stored in `GlobalConfig`, but the current runtime does not consume them. They are identified explicitly below.
+The dae parser accepts compatibility-only keys and stores them in `GlobalConfig`, but the current runtime does not consume them. The table identifies these keys explicitly.
 
 | dae key | Internal field | Default | Meaning |
 | ------- | -------------- | ------- | ------- |

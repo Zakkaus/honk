@@ -1,6 +1,6 @@
 # 订阅参考
 
-`subscription {}` 配置远程节点列表。本页说明条目、持久化恢复机制与支持的订阅正文格式。
+`subscription {}` 配置远程节点列表。条目语法、持久化恢复机制与支持的订阅正文格式如下。
 
 ## `subscription {}` 语法
 
@@ -19,7 +19,16 @@ subscription {
 }
 ```
 
-条目块接受 `ua`、`interval`、`cache` 和 `route`。`interval` 表示 duration，设为 `0` 可禁用定期刷新。`cache: false` 使该订阅的正文不写入订阅存储。`route` 指定拉取出口（见下文）。未设置的项依次取 `assets.subscription` 的默认值（出口取 `assets.route`）和内置默认值：User-Agent `honk/<version>`、`86400s`、开启缓存、`routing`。见 [Assets 配置参考](./assets.md)。
+条目块接受四个选项：
+
+| 选项 | 作用 | 内置默认值 |
+| --- | --- | --- |
+| `ua` | 覆盖请求的 User-Agent。 | `honk/<version>` |
+| `interval` | 设置刷新间隔；`0` 禁用定期刷新。 | `86400s` |
+| `cache` | `false` 使该订阅的正文不写入订阅存储。 | 开启 |
+| `route` | 指定拉取出口（见下文）。 | `routing` |
+
+未设置的选项先取 `assets.subscription` 的默认值（出口取 `assets.route`），再取内置默认值。见 [Assets 配置参考](./assets.md)。
 
 两种旧写法仍可读取，且不产生警告：带引号的 URL 后追加 `(UA)`（`compatible: 'https://example.net/sub'(honk/1.0 like)`），以及把 URL 写在块内（`detailed: { url: '…' ua: '…' }`）；后者也接受 `download_detour` 作为 `route` 的别名，两者同时设置时报 `conflicting-subscription-route`。下文关于后缀和紧贴注释的规则适用于 `(UA)` 写法。
 
@@ -83,21 +92,25 @@ URL 带引号时，紧贴结束引号或一个完整 `(UA)` 后缀的 `#` 作为
 | 重定向 | 最多 5 跳。从 `https` 重定向到其他 scheme 会让本次拉取失败；重定向到配置 URL 自身未使用的回环、私有、链路本地或未指定字面地址同样失败。解析到这类地址的主机名不在检测范围内。 |
 | 正文大小 | 最多 8 MiB，在读取过程中判定，而不是缓冲完整正文之后。 |
 
-订阅正文及其产生的节点都只属于 runtime 状态；两者都不会写回 dae 配置。
+订阅正文及其产生的节点都只属于运行时状态，不会写回 dae 配置。
 
 订阅拉取默认经过路由，与 honk 自身发起的其他下载一致，除非条目的 `route`（或 `assets.route`）另行指定。`routing` 时拉取目标与用户流量一样经过路由规则，因此规则可将其发往节点、组、`direct` 或 `block`；每次重定向都重新路由。组名则强制经过该组。经路由的请求与 geodata、外部 UI 下载共用路由决策和隧道，发送相同的 `User-Agent` 与 header，并保持 30 秒超时、8 MiB 上限和重定向规则（只跟随 301、302、303、307 和 308，最多 5 次，不从 HTTPS 转到 HTTP，不从公网地址转到私有字面地址）。URL 中的 userinfo 以 basic 认证发送；重定向到其他 scheme、主机或端口时，与直连客户端一样去掉 `Authorization`、`Cookie` 和 `Proxy-Authorization`。`direct` 沿用原有传输：bootstrap resolver 加绕过标记，不经过路由。未启用 `native-api` feature 的构建同样按上述方式经路由拉取。
 
 订阅可能经由自身提供的节点拉取，例如规则把订阅 URL 发往一个只含该订阅节点的组。全新安装时这些节点尚不存在。honk 不会回退到直连：所选路由没有可用节点时，拉取失败，错误信息指明订阅名和出站，说明该路由暂时无法承载这次下载，并建议为该订阅设置 `route: direct`。原生 API 的 provider 状态中 `last_error.code` 为 `route_unavailable`。期间从已存正文恢复的节点继续生效。
 
-路由在启动阶段的订阅处理之后才就绪。因此只有 `direct` 订阅参与 5 秒首次拉取等待；经路由的订阅在此阶段恢复已存正文，路由就绪后立即拉取。
+启动时先恢复节点，再刷新订阅：
 
-启动时先解析已存正文，再开始联网刷新。有效恢复立即提供活动节点，并让该订阅退出五秒首次拉取等待；其刷新仍在后台运行。缺失、无效或空正文被忽略。只有未有效恢复的 direct 订阅进入共享的有界等待，直至拉取结束或 deadline 到期；经路由的订阅在路由就绪后拉取。后续通过校验的刷新替换 SQLite 正文行，而不是旧存储文件。
+1. 联网刷新前先解析已存正文。有效正文立即提供活动节点；缺失、无效或空正文被忽略。
+2. 未有效恢复的 `direct` 订阅共用五秒首次拉取等待，直到拉取完成或期限到达。有效恢复的订阅不参与等待，但仍在后台刷新。
+3. 启动阶段的订阅处理完成后，路由就绪，再拉取经路由的订阅。
+
+后续通过校验的刷新替换 SQLite 正文行，而不是旧存储文件。
 
 恢复或首次拉取的正文中，若有节点 ID 已被内联节点或其他订阅的节点占用，启动配置会排除该订阅，而不是让启动失败；运行时发布同样会拒绝这种冲突。正文仍可替换该订阅自己的节点。原生 API provider 报告 `last_error.code` 为 `publication_rejected`，`last_error.details.diagnostic_code` 为 `duplicate-node-id`。以此方式被拒绝的已恢复正文仍视为已恢复：该订阅不参与首次拉取等待，其后台刷新仍会运行并重复该检查。
 
 SIGHUP 时，fetch 身份（URL + 配置的 `ua` + headers）相同的订阅保留 runtime ID。重载会沿用仍处于启用状态的订阅所属活动节点，提交重建后的配置，再立即开始后台刷新。即使某订阅没有存活节点，重载也不会读取已存正文；只有启动时才会从存储恢复正文。
 
-失败处理会保留可用 runtime，而不会清空它：
+拉取失败时保留可用的运行时状态：
 
 - HTTP、UTF-8 编码、解析或无可用节点错误不会发布替换节点，也不会写入，因此活动节点与上一次有效正文都会保留。通过校验的正文按原始字节保存，不修复编码。
 - 解析成功后，持久化写入失败属于非致命错误。新解析出的节点仍会返回用于发布，原子写入不会保存不完整的正文。下次重启可以恢复磁盘上保留的任一完整有效正文。
@@ -117,7 +130,7 @@ Clash、SIP008 和 sing-box 的凭据标量保留字符串原始字节，并把�
 
 ### 分享链接列表
 
-正文可以是纯文本，或 standard / URL-safe Base64；padding 可以省略，编码块之间允许 ASCII 空白。原始正文与解码正文均接受开头的 UTF-8 BOM。每行包含一个分享链接：
+正文可以是纯文本，也可以使用标准或 URL-safe Base64 编码；填充可以省略，编码块之间允许 ASCII 空白。原始正文与解码正文均接受开头的 UTF-8 BOM。每行包含一个分享链接：
 
 ```text
 # blank lines and comments are ignored
@@ -129,7 +142,7 @@ vless://00000000-0000-4000-8000-000000000000@example.com:443?security=tls#edge
 
 ### Clash YAML 与 JSON
 
-完整配置或 provider 正文必须包含顶层 `proxies` sequence。缺少受支持的 `type`、服务器地址、有效非零端口或必需凭据的条目会被跳过。端口可以是整数或数字字符串。JSON 使用原生解码，支持显示名称中的 UTF-16 代理对转义。
+完整配置或 provider 正文必须包含顶层 `proxies` 序列。缺少受支持的 `type`、服务器地址、有效非零端口或必需凭据的条目会被跳过。端口可以是整数或数字字符串。JSON 使用原生解码，支持显示名称中的 UTF-16 代理对转义。
 
 接受的 `type` 值包括 `socks5`、`ss`/`shadowsocks`、`trojan`、`vmess`、`vless`、`hysteria2`/`hysteria`、`tuic`、`juicity` 与 `anytls`。无关的客户端元信息会被忽略；不支持的线协议传输、代理插件和相互矛盾的安全设置不会被静默替换。
 
@@ -153,7 +166,7 @@ vless://00000000-0000-4000-8000-000000000000@example.com:443?security=tls#edge
 
 Hysteria2 导入 `password`/`auth`、`obfs: salamander` 与 `obfs-password`、上传/下载带宽、`ports`/`mport` 跳跃端口范围、`hop-interval`/`mhop`、接收窗口、MTU 与 MTU 发现设置。TUIC 导入 UUID/password、拥塞控制、ALPN、接收窗口和 MTU。AnyTLS 导入 `idle-session-check-interval`、`idle-session-timeout` 和 `min-idle-session`。支持的拼写别名会在派生节点身份前规范化。
 
-显式关闭的功能 block 按禁用处理，不会误判为启用未支持功能。原生支持 UDP 的协议接受 `udp: true`；节点模型无法保留显式 UDP 限制时会拒绝导入。TUIC 允许省略 password 或使用空密码。Hysteria2 和 Juicity 接受与运行时固定选择一致的 `h3` ALPN；Juicity 接收窗口固定为 8 MiB，因此拒绝非默认覆盖值。
+显式关闭的功能块按禁用处理，不会误判为启用未支持功能。原生支持 UDP 的协议接受 `udp: true`；节点模型无法保留显式 UDP 限制时会拒绝导入。TUIC 允许省略 password 或使用空密码。Hysteria2 和 Juicity 接受与运行时固定选择一致的 `h3` ALPN；Juicity 接收窗口固定为 8 MiB，因此拒绝非默认覆盖值。
 
 AnyTLS 按 `anytls-network`、适用的 `network`、`udp` 的顺序一次性解析数据包能力声明。空文本或 null 不提供网络声明。网络字符串使用逗号分隔的 `tcp`/`udp`；别名按是否允许 UDP 比较，因此 `udp` 与 `tcp,udp` 一致，而 `tcp` 与 `udp: true` 冲突。即使存在有效别名，`quic` 等未知值仍会使条目被拒绝。等价声明保留第一个显式网络字段的写法；仅提供布尔值时，才生成 `tcp` 或 `tcp,udp`。
 
@@ -220,7 +233,7 @@ sing-box 配置从 `outbounds` 导入受支持的 Shadowsocks、SOCKS5、VMess�
 
 ### Surge、Surfboard、Loon 与 Quantumult X
 
-导入器接受 Surge/Surfboard/Loon 的具名逗号分隔记录，以及 Quantumult X 的 `protocol=endpoint,...,tag=name` 记录。完整配置使用 `[Proxy]` 或 `[server_local]`；其他 section 会被忽略。带引号的名称/密码可以包含逗号、等号、转义引号和有意保留的首尾空格。
+导入器接受 Surge/Surfboard/Loon 的具名逗号分隔记录，以及 Quantumult X 的 `protocol=endpoint,...,tag=name` 记录。完整配置使用 `[Proxy]` 或 `[server_local]`；其他配置段会被忽略。带引号的名称/密码可以包含逗号、等号、转义引号和有意保留的首尾空格。
 
 显式凭据和加密方法别名在转换前须一致。具名记录仅在对应具名值缺失时使用位置参数；有效的显式值不会因位置参数不同而冲突。Quantumult X 不使用位置参数回退。显式空凭据参与别名比较，不会触发回退。
 
@@ -249,7 +262,7 @@ honk-tool sub ./share-links.txt --limit 10
 honk-tool sub https://example.com/sub --ua honk-tool
 ```
 
-下载正文与本地文件使用相同的自动识别。传入 `-` 会从标准输入读取一个 HTTP(S) 订阅 URL，而不是从标准输入读取订阅正文。探测 flag 与输出见 [CLI 参考](./cli.md)。
+传入 `-` 会从标准输入读取一个 HTTP(S) 订阅 URL，而不是订阅正文。探测参数与输出见 [CLI 参考](./cli.md)。
 
 ## 相关文档
 
