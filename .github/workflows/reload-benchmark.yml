@@ -11,9 +11,12 @@ on:
       - "crates/honk-nfqueue/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
       - ".github/workflows/reload-benchmark.yml"
       - ".github/ci/pins.env"
       - "ci/compare-reload-benchmark.py"
+      - "ci/test-compare-reload-benchmark.py"
   schedule:
     - cron: "23 4 * * 1"
   workflow_dispatch:

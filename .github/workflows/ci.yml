@@ -70,7 +70,7 @@ jobs:
               - 'config.min.dae'
               - 'example.dae'
               - 'ci/**'
-              - '.github/ci/**'
+              - '.github/ci/pins.env'
               - '.github/workflows/**'
               - 'Justfile'
               - '.config/**'
@@ -116,7 +116,11 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'Justfile'
-              - '.github/ci/**'
+              - '.github/ci/pins.env'
+              - '.github/ci/run-vm-gate.sh'
+              - '.github/ci/ebpf-vm-tests.sh'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
               - '.github/workflows/ci.yml'
       - name: Record lane selection
         if: always()
