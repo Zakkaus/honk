@@ -236,7 +236,7 @@ See the [configuration guide](configuration.md) for the complete configuration f
 
 Add one of the following blocks to the configuration, then restart honk. These examples listen only on the local machine. See the [experimental reference](reference/experimental.md) for all other fields and reverse-proxy requirements.
 
-**doona (native API).** Use a `full` release, which embeds the UI. A `native-api` build also works only if it includes `native-ui`; the stock `-native-api` release has the API but no embedded UI.
+**doona (native API).** Use a `full` release, which embeds the UI. The `native-api` release has the API but no embedded UI.
 
 ```dae
 experimental {
@@ -285,7 +285,7 @@ experimental {
 
 `external_controller` starts the Clash listener. `external_ui` selects the dashboard directory; honk downloads zashboard on first start when that directory is missing or empty. Open `http://127.0.0.1:9090/ui/` and use the configured `secret` to connect the dashboard to the API. The API uses the secret for authentication; static UI files are public.
 
-Both APIs can run together in a build that includes both features, such as `full`. Put `native_api` and `clash_api` beside each other inside one `experimental` block; keep their separate listen ports. The [experimental reference](reference/experimental.md) covers the remaining settings.
+Both APIs can run together in a build that includes both features, such as `full`. Put `native_api` and `clash_api` beside each other inside one `experimental` block; keep their separate listen ports.
 
 ### GeoIP and Geosite
 

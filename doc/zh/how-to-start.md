@@ -236,7 +236,7 @@ bootstrap_resolver: '1.1.1.1:53'
 
 将下面一种配置加入配置文件，然后重启 honk。这些示例只监听本机地址。其他字段和反向代理要求见 [experimental 参考](reference/experimental.md)。
 
-**doona（原生 API）。** 使用内嵌界面的 `full` 发布版本。`native-api` 构建只有同时包含 `native-ui` 时才能使用下方配置；官方 `-native-api` 发布版本只有 API，不含内嵌界面。
+**doona（原生 API）。** 使用内嵌界面的 `full` 发布版本。`native-api` 发布版本只有 API，不含内嵌界面。
 
 ```dae
 experimental {
@@ -285,7 +285,7 @@ experimental {
 
 `external_controller` 启用 Clash 监听器。`external_ui` 指定面板目录；首次启动时，如果目录不存在或为空，honk 会下载 zashboard。打开 `http://127.0.0.1:9090/ui/`，使用配置的 `secret` 将面板连接到 API。API 使用该密钥认证，静态界面文件无需认证即可访问。
 
-包含两种 API 功能的构建（如 `full`）可以同时运行它们。将 `native_api` 和 `clash_api` 并列放在同一个 `experimental` 小节内，并使用各自的监听端口。其他设置见 [experimental 参考](reference/experimental.md)。
+包含两种 API 功能的构建（如 `full`）可以同时运行它们。将 `native_api` 和 `clash_api` 并列放在同一个 `experimental` 小节内，并使用各自的监听端口。
 
 ### GeoIP 和 Geosite
 
