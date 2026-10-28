@@ -46,15 +46,16 @@ OpenWrt 用户可使用 [daeuniverse 软件源](https://openwrt.daeuniverse.org/
 
 ## 网页界面
 
-[doona](https://github.com/Zakkaus/doona) 是原生 API 的网页界面；doona lite 是较轻量的预览版。可先体验[演示版](https://demo.daeuniverse.org/)或 [lite 演示版](https://demo.daeuniverse.org/lite/)。
+honk 支持两类网页界面：
+
+- [doona](https://github.com/Zakkaus/doona) 使用原生 API，可查看观测数据、诊断并编辑配置。doona lite 是较轻量的预览版。可先体验[演示版](https://demo.daeuniverse.org/)或 [lite 演示版](https://demo.daeuniverse.org/lite/)。
+- [zashboard](https://github.com/Zephyruso/zashboard) 等 Clash 面板使用 Clash 兼容 API。
 
 ![doona 活动页的流量图表与状态卡片](https://doona.daeuniverse.org/screenshots/zh-CN/activity-light.webp)
 
 ![doona lite 节点页](https://doona.daeuniverse.org/images/lite-nodes-light.webp)
 
-使用 full 发布构建时，启用 `experimental.native_api` 并设置 `ui: 'embedded'`；使用 doona lite 时设置 `ui: 'embedded-lite'`。配置步骤见[快速入门](https://doona.daeuniverse.org/zh-CN/quick-start.html)。
-
-可选的原生 API 提供观测、诊断与配置管理功能，详见[原生 API 设置](doc/zh/reference/experimental.md#native_api)。
+使用 `full` 构建时，启用 `experimental.native_api` 并设置 `ui: 'embedded'`；使用 doona lite 时设置 `ui: 'embedded-lite'`，步骤见 [doona 快速入门](https://doona.daeuniverse.org/zh-CN/quick-start.html)。使用 Clash 面板时设置 `experimental.clash_api`，honk 首次启动时会下载 zashboard。两者的设置项见 [experimental 设置](doc/zh/reference/experimental.md)。
 
 ## 文档
 

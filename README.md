@@ -46,15 +46,16 @@ Follow the [startup guide](doc/en/how-to-start.md) for kernel checks, installati
 
 ## Web interface
 
-[doona](https://github.com/Zakkaus/doona) is the native API's web UI; doona lite is a lighter preview edition. Try the [demo](https://demo.daeuniverse.org/) or the [lite demo](https://demo.daeuniverse.org/lite/).
+honk works with two kinds of web UI:
+
+- [doona](https://github.com/Zakkaus/doona) uses the native API, which adds observations, diagnostics and configuration editing. doona lite is a lighter preview edition. Try the [demo](https://demo.daeuniverse.org/) or the [lite demo](https://demo.daeuniverse.org/lite/).
+- Clash dashboards such as [zashboard](https://github.com/Zephyruso/zashboard) use the Clash-compatible API.
 
 ![doona Activity page with traffic charts and status cards](https://doona.daeuniverse.org/screenshots/en/activity-light.webp)
 
 ![doona lite Nodes page](https://doona.daeuniverse.org/images/lite-nodes-light.webp)
 
-With a full release build, enable `experimental.native_api` and set `ui: 'embedded'`, or `ui: 'embedded-lite'` for doona lite. Follow the [quick start](https://doona.daeuniverse.org/en/quick-start.html) for configuration.
-
-The opt-in native API provides observations, diagnostics, and configuration controls; see the [native API settings](doc/en/reference/experimental.md#native_api).
+With a `full` build, enable `experimental.native_api` and set `ui: 'embedded'`, or `ui: 'embedded-lite'` for doona lite; the [doona quick start](https://doona.daeuniverse.org/en/quick-start.html) walks through it. For a Clash dashboard, set `experimental.clash_api`; honk downloads zashboard on first start. The [experimental settings](doc/en/reference/experimental.md) list every field of both.
 
 ## Documentation
 
