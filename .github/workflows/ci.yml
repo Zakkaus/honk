@@ -48,6 +48,8 @@ jobs:
           persist-credentials: false
       - name: Test changelog scripts
         run: bash .github/ci/test-changelog.sh
+      - name: Test release scripts
+        run: for t in artifacts prune assets version notes; do bash .github/ci/test-release-$t.sh; done
       - name: Check PR changelog fragments
         if: github.event_name == 'pull_request'
         env:

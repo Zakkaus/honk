@@ -138,6 +138,8 @@ jobs:
             cargo bench -p honk-core --bench reload --no-default-features \
               --features reload-bench-counters,reload-alloc-bench -- --noplot 2>&1 \
             | tee ../candidate-reload.log
+      - name: Test reload benchmark comparison
+        run: python3 candidate/ci/test-compare-reload-benchmark.py
       - name: Compare candidate with main
         env:
           HONK_RELOAD_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
