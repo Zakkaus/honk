@@ -28,7 +28,7 @@ There is no FakeIP engine, full mihomo parity, or Windows/macOS datapath.
 
 ## Install
 
-Download an archive for your platform from [Releases](https://github.com/daeuniverse/honk/releases). Builds exist for x86_64 and aarch64 Linux; pick `full` if unsure.
+Download an archive for your platform from [Releases](https://github.com/daeuniverse/honk/releases). Releases cover x86_64 and aarch64 Linux; `full` suits most deployments.
 
 | Build | Native API | Clash API | Embedded doona and doona lite |
 | --- | --- | --- | --- |

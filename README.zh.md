@@ -28,7 +28,7 @@ honk 的 eBPF 数据面和配置语法参考 dae 的设计，出站组与 Clash 
 
 ## 安装
 
-从 [Releases](https://github.com/daeuniverse/honk/releases) 下载适合目标平台的归档。提供 x86_64 与 aarch64 Linux 版本；不确定时选 `full`。
+从 [Releases](https://github.com/daeuniverse/honk/releases) 下载适合目标平台的归档。发布物支持 x86_64 与 aarch64 Linux，一般用途建议选择 `full`。
 
 | 构建 | 原生 API | Clash API | 内嵌 doona 与 doona lite |
 | --- | --- | --- | --- |
@@ -36,7 +36,7 @@ honk 的 eBPF 数据面和配置语法参考 dae 的设计，出站组与 Clash 
 | `native-api` | 是 | 否 | 否 |
 | `clash-api` | 否 | 是 | 否 |
 
-每种构建都有静态链接的 musl 版本，`full` 另有链接 glibc 的 `gnu` 版本。名称含 `stock` 的归档使用系统分配器而非 mimalloc。每个版本的 Downloads 一节列出校验和及构建来源证明。
+各构建均提供静态链接的 musl 版本，`full` 另提供链接 glibc 的 `gnu` 版本。名称含 `stock` 的归档使用系统分配器而非 mimalloc。每个版本的 Downloads 一节列出校验和及构建来源证明。
 
 OpenWrt 用户可使用 [daeuniverse 软件源](https://openwrt.daeuniverse.org/zh-cn/)。
 
@@ -46,16 +46,16 @@ OpenWrt 用户可使用 [daeuniverse 软件源](https://openwrt.daeuniverse.org/
 
 ## 网页界面
 
-honk 支持两类网页界面：
+honk 可配合以下两类网页界面使用：
 
-- [doona](https://github.com/Zakkaus/doona) 使用原生 API，可查看观测数据、诊断并编辑配置。doona lite 是较轻量的预览版。可先体验[演示版](https://demo.daeuniverse.org/)或 [lite 演示版](https://demo.daeuniverse.org/lite/)。
-- [zashboard](https://github.com/Zephyruso/zashboard) 等 Clash 面板使用 Clash 兼容 API。
+- [doona](https://github.com/Zakkaus/doona)：基于原生 API，提供运行观测、诊断与配置编辑功能。doona lite 为其轻量预览版。在线演示见[标准版](https://demo.daeuniverse.org/)与 [lite 版](https://demo.daeuniverse.org/lite/)。
+- Clash 面板：基于 Clash 兼容 API，例如 [zashboard](https://github.com/Zephyruso/zashboard)。
 
 ![doona 活动页的流量图表与状态卡片](https://doona.daeuniverse.org/screenshots/zh-CN/activity-light.webp)
 
 ![doona lite 节点页](https://doona.daeuniverse.org/images/lite-nodes-light.webp)
 
-使用 `full` 构建时，启用 `experimental.native_api` 并设置 `ui: 'embedded'`；使用 doona lite 时设置 `ui: 'embedded-lite'`，步骤见 [doona 快速入门](https://doona.daeuniverse.org/zh-CN/quick-start.html)。使用 Clash 面板时设置 `experimental.clash_api`，honk 首次启动时会下载 zashboard。两者的设置项见 [experimental 设置](doc/zh/reference/experimental.md)。
+启用 doona 需使用 `full` 构建，在 `experimental.native_api` 中将 `ui` 设为 `'embedded'`；启用 doona lite 则设为 `'embedded-lite'`。配置步骤见 [doona 快速入门](https://doona.daeuniverse.org/zh-CN/quick-start.html)。启用 Clash 面板需配置 `experimental.clash_api`，honk 首次启动时自动下载 zashboard。各设置项的说明见 [experimental 设置](doc/zh/reference/experimental.md)。
 
 ## 文档
 
@@ -78,7 +78,7 @@ honk 支持两类网页界面：
 
 ## 报告问题
 
-代理、路由和 DNS 问题请到 [honk issues](https://github.com/daeuniverse/honk/issues) 提交；网页界面问题请到 [doona issues](https://github.com/Zakkaus/doona/issues) 提交。
+代理、路由和 DNS 问题请提交至 [honk issues](https://github.com/daeuniverse/honk/issues)；网页界面问题请提交至 [doona issues](https://github.com/Zakkaus/doona/issues)。
 
 安全漏洞请按 [SECURITY.md](.github/SECURITY.md) 报告。
 
