@@ -5,7 +5,7 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
     inputs:
       ebpf:
@@ -42,6 +42,19 @@ jobs:
       full: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
       ebpf_label: ${{ contains(github.event.pull_request.labels.*.name, 'ci:ebpf') }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test changelog scripts
+        run: bash .github/ci/test-changelog.sh
+      - name: Check PR changelog fragments
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          NO_CHANGELOG: ${{ contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
+        run: bash .github/ci/check-changelog.sh
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         if: github.event_name == 'pull_request'
         id: filter
@@ -67,6 +80,7 @@ jobs:
               - '*.md'
               - '.agents/**'
               - 'doc/**'
+              - 'changes/**'
             parser:
               - 'crates/honk-config/**'
               - 'tools/dae-parse/**'
@@ -262,7 +276,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
-          args: --offline --include-fragments --hidden '*.md' '.agents/**/*.md' 'doc/**/*.md'
+          args: --offline --include-fragments --hidden '*.md' '.agents/**/*.md' 'doc/**/*.md' 'changes/*.md'
           fail: true
 
   lint:
