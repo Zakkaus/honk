@@ -116,13 +116,13 @@ honk-core --version
 
 ### 从源码构建
 
-源码构建需要：
+下述包含真实 eBPF 的源码构建使用：
 
 - 根目录 `rust-toolchain.toml` 中固定的 Rust stable 版本（`rustfmt`、`clippy`）；
 - `crates/honk-ebpf/rust-toolchain.toml` 中固定的 nightly 版本（`rust-src`、`llvm-tools`）；
 - `.github/ci/pins.env` 中固定的 `bpf-linker` 版本；
 - C/C++ 工具链、CMake、Clang、LLVM、libclang、libbpf 头文件、binutils、pkg-config、Git；
-- 可访问 crates.io 和 GitHub 的网络。
+- 访问 crates.io 和 GitHub 的网络，用于获取尚未缓存的依赖。
 
 Debian/Ubuntu：
 
@@ -197,7 +197,7 @@ sudo install -d -m 0700 /etc/honk /var/lib/honk
 sudo install -m 0600 /path/to/config.dae /etc/honk/config.dae
 ```
 
-默认运行时根目录是 `/var/lib/honk`。旧根目录 `/var/share/honk` 中的已有资源会按各路径规则继续使用；honk 不会自动迁移它们；可写状态仍在原位置更新。自定义 `data_dir` 也遵循相同的回退顺序。相对缓存、订阅存储、ECH/UI 与其他只读依赖依次检查配置目录、`/var/share/honk`，再检查调用方的旧候选路径；相对日志只会在配置目录下创建。
+默认运行时根目录是 `/var/lib/honk`。旧根目录 `/var/share/honk` 中的已有资源会按各路径规则继续使用；旧缓存和订阅导入会将符合条件的状态迁入 `state/honk.db`；其他复用的可写资源仍在原位置更新。自定义 `data_dir` 也遵循相同的回退顺序。相对缓存、订阅存储、ECH/UI 与其他只读依赖依次检查配置目录、`/var/share/honk`，再检查调用方的旧候选路径；相对日志只会在配置目录下创建。
 
 前台启动：
 
@@ -236,7 +236,7 @@ bootstrap_resolver: '1.1.1.1:53'
 
 将下面一种配置加入配置文件，然后重启 honk。这些示例只监听本机地址。其他字段和反向代理要求见 [experimental 参考](reference/experimental.md)。
 
-**doona（原生 API）。** 使用内嵌界面的 `full` 发布版本。`native-api` 发布版本只有 API，不含内嵌界面。
+**doona（原生 API）。** 下例使用内嵌界面的 `full` 发布版本。启用 `native-api` 的构建也可以提供单独安装的 doona 目录：将 `ui` 设为该目录的路径。
 
 ```dae
 experimental {
@@ -257,7 +257,7 @@ experimental {
 - `config_write` 允许通过认证的用户写入配置并重载。含监听器凭据的源文件仍然只读。
 - `ui: 'embedded'` 提供二进制程序内嵌的标准版 doona，启动时不下载面板。
 
-**doona lite。** 构建要求、访问地址和登录步骤相同。这个较轻量的版本仍处于预览阶段。选择下方配置替代标准版 doona 配置：
+**doona lite。** 下述内嵌示例的构建要求、访问地址和登录步骤相同。这个较轻量的版本仍处于预览阶段。选择下方配置替代标准版 doona 配置：
 
 ```dae
 experimental {
@@ -271,7 +271,7 @@ experimental {
 }
 ```
 
-**供 Clash 面板使用的 Clash API。** 使用 `full` 或 `clash-api` 构建。将密钥替换为一个足够长的随机字符串：
+**供 Clash 面板使用的 Clash API。** 使用启用 `clash-api` 的构建，例如 `full` 或 `clash-api` 发布版本。将密钥替换为一个足够长的随机字符串：
 
 ```dae
 experimental {

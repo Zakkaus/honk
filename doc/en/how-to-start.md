@@ -116,13 +116,13 @@ Release binaries embed the eBPF object, so `honk-ebpf` does not need to be insta
 
 ### Build from source
 
-A source build requires:
+The real-eBPF source build below uses:
 
 - the stable Rust version in the root `rust-toolchain.toml` (`rustfmt`, `clippy`);
 - the nightly in `crates/honk-ebpf/rust-toolchain.toml` (`rust-src`, `llvm-tools`);
 - the `bpf-linker` version in `.github/ci/pins.env`;
 - a C/C++ toolchain, CMake, Clang, LLVM, libclang, libbpf headers, binutils, pkg-config, and Git;
-- network access to crates.io and GitHub.
+- network access to crates.io and GitHub for dependencies not already cached.
 
 Debian/Ubuntu:
 
@@ -197,7 +197,7 @@ sudo install -d -m 0700 /etc/honk /var/lib/honk
 sudo install -m 0600 /path/to/config.dae /etc/honk/config.dae
 ```
 
-The default runtime root is `/var/lib/honk`. Existing artifacts under the legacy `/var/share/honk` root remain usable through the documented per-path fallback. honk does not automatically relocate them; writable state remains active in place. Custom `data_dir` values use the same fallback order. Relative caches, subscription stores, ECH/UI and other read-only dependencies check the configured directory, then `/var/share/honk`, then their caller-specific legacy path. Relative logs are created only below the configured directory.
+The default runtime root is `/var/lib/honk`. Existing artifacts under the legacy `/var/share/honk` root remain usable through the documented per-path fallback. Legacy cache and subscription imports move eligible state into `state/honk.db`; other reused writable artifacts remain active in place. Custom `data_dir` values use the same fallback order. Relative caches, subscription stores, ECH/UI and other read-only dependencies check the configured directory, then `/var/share/honk`, then their caller-specific legacy path. Relative logs are created only below the configured directory.
 
 Start honk in the foreground:
 
@@ -236,7 +236,7 @@ See the [configuration guide](configuration.md) for the complete configuration f
 
 Add one of the following blocks to the configuration, then restart honk. These examples listen only on the local machine. See the [experimental reference](reference/experimental.md) for all other fields and reverse-proxy requirements.
 
-**doona (native API).** Use a `full` release, which embeds the UI. The `native-api` release has the API but no embedded UI.
+**doona (native API).** The example below uses a `full` release, which embeds the UI. A build with `native-api` can instead serve a separately installed doona directory: set `ui` to that directory's path.
 
 ```dae
 experimental {
@@ -257,7 +257,7 @@ Open `http://127.0.0.1:9527/ui/` after startup.
 - `config_write` permits authenticated configuration writes and reloads. Sources containing listener credentials remain read-only.
 - `ui: 'embedded'` serves the standard doona bundled in the binary; it does not download a dashboard at startup.
 
-**doona lite.** Use the same build requirements, address and login procedure. This lighter edition is a preview. Choose this block instead of the standard doona block:
+**doona lite.** The embedded example uses the same build requirements, address and login procedure. This lighter edition is a preview. Choose this block instead of the standard doona block:
 
 ```dae
 experimental {
@@ -271,7 +271,7 @@ experimental {
 }
 ```
 
-**Clash API for Clash dashboards.** Use a `full` or `clash-api` build. Replace the secret with a long random string:
+**Clash API for Clash dashboards.** Use a build with `clash-api` enabled, such as the `full` or `clash-api` release. Replace the secret with a long random string:
 
 ```dae
 experimental {

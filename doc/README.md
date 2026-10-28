@@ -68,6 +68,6 @@ How honk works, by subsystem. / honk 的工作原理，按子系统划分。
 
 Conventions / 约定：
 
-- Files under `en/` link only within `en/`; files under `zh/` link only within `zh/`. / `en/` 内文档只链接 `en/`，`zh/` 内文档只链接 `zh/`。
+- Links between translated documentation pages use the same language. / 已翻译的文档页面之间使用同一语言的链接。
 - The reference files are exhaustive for their config section; the design files explain mechanisms and invariants. / 参考文档穷尽对应配置小节的字段，设计文档解释机制与不变量。
 - The [AGENTS.md](../AGENTS.md) at the repo root carries agent-oriented layout notes. / 仓库根目录的 [AGENTS.md](../AGENTS.md) 提供面向代理的结构说明。

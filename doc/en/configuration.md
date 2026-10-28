@@ -21,7 +21,7 @@ honk injects the built-in outbounds `direct` and `block` at startup. Use them in
 ## Configuration format
 
 - Put settings in `section { ... }` blocks as one `key: value` pair per line. One-line blocks such as `global { log_level: debug }` and nested one-line blocks are accepted.
-- Quote URLs, values containing whitespace, and values containing syntax characters such as `:`, `+`, or `#`. Scalar values plus `include` and `node` entries accept single or double quotes; use single quotes for quoted `subscription` URLs.
+- Prefer quoting URLs, values containing whitespace, and values containing syntax characters such as `:`, `+`, or `#`. Scalar values plus `include` and `node` entries accept single or double quotes; use single quotes for quoted `subscription` URLs.
 - Matching single or double quotes keep commas, closing parentheses, `&&`, and `->` literal in matcher arguments and filter/routing expressions. `group(...)` and `qtype(...)` still interpret quoted comma-separated text as lists.
 - Write lists accepted by a setting or matcher with commas: `lan_interface: eth0, eth1` or `dport(80, 443)`.
 - Second-based durations accept bare seconds or `ms`, `s`, `m`, and `h` suffixes. Millisecond settings such as `check_tolerance` accept bare milliseconds, `ms`, or `s`.
@@ -52,7 +52,7 @@ The entry file's own sections merge first regardless of where its `include` bloc
 
 `global.data_dir` is the process-wide root for runtime state and relative runtime-supplied files. It defaults to `/var/lib/honk` and must be a non-empty absolute path. Changing it requires restart.
 
-At startup, honk recursively creates the directory and probes it by creating and removing a new private file. An unusable candidate falls back only to a working directory that passes the same probe.
+At startup, honk recursively creates the directory and probes it by creating and removing a new private file. An unusable candidate falls back only to a working directory that passes the same probe, except that `--store db` and enabled native API password login refuse this fallback.
 
 Relative writable artifacts and read-only dependencies use the first existing candidate:
 
@@ -60,7 +60,7 @@ Relative writable artifacts and read-only dependencies use the first existing ca
 2. `/var/share/honk/<path>`.
 3. The caller's legacy location: the original config directory for cache, or the working directory for other dependencies.
 
-If none exists, honk returns `<data_dir>/<path>` for creation. Existing artifacts under `/var/share/honk` (`LEGACY_DATA_DIR`) remain usable without automatic migration; reused writable state continues to update in place. Relative logs always use `<data_dir>/<path>` for creation. Absolute paths stay literal.
+If none exists, honk returns `<data_dir>/<path>` for creation. Existing artifacts under `/var/share/honk` (`LEGACY_DATA_DIR`) remain usable through these fallbacks, except that legacy cache and subscription imports move eligible state into `state/honk.db`. Relative logs always use `<data_dir>/<path>` for creation. Absolute paths stay literal.
 
 Geo assets use an independent regular-file search order: `$DAE_LOCATION_ASSET`, `<data_dir>`, `/var/share/honk`, the working directory, honk share directories, then dae share directories.
 

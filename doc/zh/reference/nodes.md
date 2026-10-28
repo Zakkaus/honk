@@ -128,7 +128,7 @@ sing-box 的 `hop_interval`、`idle_session_timeout` 和 `idle_session_check_int
 
 Hysteria2 端口跳跃集合在拨号前拒绝重复端口和重叠范围，包括 `443,443`。单端口集合仍然有效。有效配置保留原写法；地址中的端口列表仍拒绝空项。出站构造函数对直接构造的节点使用同一个检查函数。
 
-普通分享链接、VMess JSON、独立扁平 Node 反序列化和订阅导入都在构造完成时校验节点。使用 UUID 的协议要求有效 UUID；不支持的加密方式、传输类型、数据包能力、flow、ALPN 上下文或端口跳跃集合，会在派生身份前被拒绝。Vision 要求 TLS 或 REALITY。直接构造的节点也不能使用本应由适配器归一化掉的空 SNI、flow 或 network。订阅格式特有的非空密码要求仍留在对应适配器；SOCKS 可选认证及处理器支持的空凭据仍然有效。无效 dae 节点行和订阅条目仍按原策略跳过，有效条目保留。仅解析 Config 片段的 API 仍不执行整份配置准入，但片段内的无效节点现在会在构造时被拒绝。独立反序列化保留传入的 ID；运行时身份准入是另一项检查。
+普通分享链接、VMess JSON、独立扁平 Node 反序列化和订阅导入都在构造完成时校验节点。使用 UUID 的协议要求有效 UUID；不支持的加密方式、传输类型、数据包能力、flow、ALPN 上下文或端口跳跃集合，会在派生身份前被拒绝。未启用 VLESS Encryption 时，Vision 要求 TLS 或 REALITY。直接构造的节点也不能使用本应由适配器归一化掉的空 SNI、flow 或 network。订阅格式特有的非空密码要求仍留在对应适配器；SOCKS 可选认证及处理器支持的空凭据仍然有效。无效 dae 节点行和订阅条目仍按原策略跳过，有效条目保留。仅解析 Config 片段的 API 仍不执行整份配置准入，但片段内的无效节点现在会在构造时被拒绝。独立反序列化保留传入的 ID；运行时身份准入是另一项检查。
 
 直接调用 `Node::validate()` 与适配器完成构造时使用相同的固定脱敏错误。校验错误不包含传入的节点名称或凭据值。
 
@@ -415,7 +415,7 @@ mlkem768x25519plus.<native|xorpub|random>.<1rtt|0rtt>.<base64url-key>
 | `flow=xtls-rprx-vision-udp443` | 规范化为 `xtls-rprx-vision`；默认已经允许 UDP/443。 |
 | `fp` | 接受但忽略；ClientHello 指纹由全局 TLS mode 控制。 |
 
-显式 `security=` 会覆盖 VLESS 历史默认值：`none` 关闭 TLS，其他值开启。没有 `security` 时 VLESS 默认开启 TLS。标准 VMess 链接改用其 v2rayN JSON `tls` 字段。
+显式 `security=` 会覆盖 VLESS 历史默认值：`none` 关闭 TLS，其他值开启。没有 `security` 时，显式 `tls=0|1` 控制 TLS；未指定时，普通 VLESS 链接默认开启 TLS，base64 编码地址的 Shadowrocket 链接默认关闭，除非 REALITY 字段将其开启。标准 VMess 链接改用其 v2rayN JSON `tls` 字段。
 重复的 `security` 与已识别的 `tls` 声明必须一致，包括别名之间的 TLS 开关；后值不能覆盖前面的冲突声明。VLESS 与编码 VMess 只接受 `tls=0|1`；其他 scheme 保留对未识别 `tls` 文本的处理。Trojan 与 AnyTLS 会拒绝显式明文声明，而不是静默保留强制 TLS。
 
 REALITY 仅使用 TLS 1.3，首次尝试依次通告 hybrid `X25519MLKEM768` 与预设 classic `X25519` share。仅当握手完成后收到非 ed25519 叶证书，才向同一 peer 新建一次仅使用 X25519 的连接；新连接仍须通过配置的 REALITY key/HMAC 认证，之后才能发送代理数据。两次尝试共享 `3 × connect_timeout` 的 setup deadline，不增加配置项。该触发结果未经认证，并非服务端版本检测。ed25519 HMAC 错误、TLS/IO 错误及 HRR 仍是最终失败。每条连接只 seal 一次 ClientHello，不复用 key/nonce。参见[兼容与认证边界](../design/outbound.md)。
