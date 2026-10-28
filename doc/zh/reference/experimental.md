@@ -25,7 +25,7 @@
 | `allow_anonymous_loopback` | `false` | 仅在 `secret` 为空、`password_auth` 为 false 且实际监听 IP 为 loopback 时允许无凭证请求。 |
 | `allow_origins` | 空列表 | 额外允许的完整 HTTP(S) Origin；不含路径、凭据、query、fragment、`null` 或通配符。 |
 | `allowed_hosts` | 空列表 | 额外允许的 HTTP Host authority；不含 URL scheme、路径、凭据或通配符。省略端口表示 80，不是监听端口。 |
-| `ui` | `""` | 空值关闭托管；其他值为含可读 `index.html` 的可信本地目录，或配合默认关闭的 `native-ui` feature 使用 `embedded`。启动不下载、不解压、不构建前端。 |
+| `ui` | `""` | 空值关闭托管；其他值为含可读 `index.html` 的可信本地目录，或配合默认关闭的 `native-ui` feature 使用 `embedded` / `embedded-lite`。`embedded-lite` 是更轻量的 doona lite 预览版。启动不下载、不解压、不构建前端。 |
 | `record_flows` | `true` | 允许按 flow 诊断需求记录有界用户态 flow，或通过显式运行时设置持续记录。`false` 禁止记录，运行时设置不能覆盖；修改配置需重启。 |
 | `record_traffic` | `true` | 无客户端也记录流量 history；最多 600 点/600 秒，false 在重启后释放对应缓冲，不关闭即时计数。 |
 | `record_memory` | `true` | 无客户端也记录 RSS/cgroup history；最多 600 点/600 秒，false 在重启后释放对应缓冲，不关闭即时内存观测。 |
@@ -65,7 +65,7 @@ experimental {
 
 相对 UI 路径沿用依赖搜索顺序：`global.data_dir` 下已有路径、`/var/share/honk` 下已有路径、工作目录已有路径；均不存在时定位到 `global.data_dir` 并在启动时报错。目录及其符号链接目标均由可信管理员负责。参见[原生 API 契约](./api.md#原生-api)。
 
-单文件部署可使用 full 发布产物，或执行 `HONK_DOONA_DIR=$(ci/fetch-doona.sh) cargo build -p honk-core --features native-ui`，并设置 `ui: embedded`；`native-ui` 隐含 `native-api`，不要求 Clash。没有 `native-ui` 时启用内嵌托管会启动失败。静态资源不注入凭据；客户端通过公共 discovery 选择静态 token 输入或密码 setup/login。产物/源码身份、对应源码分发和管理契约见 [API 参考](./api.md#内嵌-doona-来源)。
+单文件部署可使用 full 发布产物，或执行 `HONK_DOONA_DIR=$(ci/fetch-doona.sh) cargo build -p honk-core --features native-ui`，并设置 `ui: embedded` 或 `ui: embedded-lite`；`native-ui` 隐含 `native-api`，不要求 Clash。没有 `native-ui` 时启用内嵌托管会启动失败。静态资源不注入凭据；客户端通过公共 discovery 选择静态 token 输入或密码 setup/login。产物/源码身份、对应源码分发和管理契约见 [API 参考](./api.md#内嵌-doona-来源)。
 
 配置文件中的 geodata 来源由管理员配置、需重启，不能通过源写入修改。启用状态数据库时，下载还可使用已认证的 URL 覆盖或内置来源；拒绝 userinfo、fragment、redirect 与 content encoding。直连的域名来源要求 `global.bootstrap_resolver`，不回退系统 DNS。`assets.geodata.route` 或已存储的路由可改为遵循路由规则或经过组下载；路由无法承载请求时不会回退到直连。更新使用适用的配置文件、已存储或内置来源。[主文件条目与 geodata 契约](./api.md#主文件条目与-geodata-管理)区分网络期限、已验证字节激活及部分耐久替换，不承诺回滚。
 

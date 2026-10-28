@@ -128,7 +128,7 @@ flowchart TB
 | `ebpf` | no | Pulls in `aya`, `aya-obj`, `aya-log`, and optional `honk-nfqueue`; `build.rs` embeds the static `honk-ebpf` object, and userspace compiles policy extensions at runtime. Requires Linux kernel 6.12+ at runtime. |
 | `clash-api` | yes | Pulls in optional `axum` and `tower-http` for the Clash-compatible REST/WebSocket service. |
 | `native-api` | no | Independent HTTP/1.1 native observations, opt-in accepted-source administration and local-directory UI, with owned bounded connections, strict bearer/Host/Origin checks, and no dependency on Clash. |
-| `native-ui` | no | Includes `native-api` and embeds assets from the pinned doona distribution for `ui: embedded`; no runtime extraction, download or frontend build. |
+| `native-ui` | no | Includes `native-api` and embeds assets from the pinned doona distribution for `ui: embedded`; `ui: embedded-lite` selects the lighter doona lite edition (preview) with the same feature requirement. No runtime extraction, download or frontend build. |
 | `mimalloc` | yes | Pulls in `mimalloc` and `libmimalloc-sys` and installs mimalloc as the `honk-core` binary allocator. On Linux, startup disables transparent huge pages for the process before starting Tokio, and sets mimalloc's purge delay to 100 ms unless `MIMALLOC_PURGE_DELAY` says otherwise. |
 | `rprx` | yes | Enables `honk-outbound/rprx`, which registers the VLESS and VMess handlers, including the supported VLESS Encryption and `xtls-rprx-vision` paths. |
 

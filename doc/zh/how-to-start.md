@@ -100,7 +100,7 @@ bpf /sys/fs/bpf bpf defaults 0 0
 
 musl 包是静态二进制，适合网关部署。无 `-stock` 后缀的包使用 mimalloc，优先考虑吞吐（标签 `mimalloc`）；`-stock` 包使用系统 allocator，更适合关注内存峰值的小内存设备（标签 `stockalloc`）。每个 release 的 Downloads 一节按 `{allocator}-{API}-{arch}-{libc}` 标签列出全部归档。
 
-精简变体按 fail-closed 处理：在 `-clash-api` 上启用 `experimental.native_api`，或没有 `native-ui` 却设置 `ui: embedded`，都会启动失败。`--store db` 与原生配置管理需要 `native-api`。
+精简变体按 fail-closed 处理：在 `-clash-api` 上启用 `experimental.native_api`，或没有 `native-ui` 却设置 `ui: embedded` 或 `ui: embedded-lite`，都会启动失败。`--store db` 与原生配置管理需要 `native-api`。`embedded-lite` 选择更轻量的 doona lite 预览版。
 
 ```shell
 pkg=honk-core-<version>-<target>-full   # 或按下载的包改为 -stock-full、-clash-api、-stock-native-api 等

@@ -262,17 +262,19 @@ jobs:
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/honk-core" "dist/$name/"
           cp LICENSE README.md "dist/$name/"
-          # The embedded doona UI keeps its notices and the licences of the icons
-          # and fonts it bundles; lean variants do not embed it and carry no doona
-          # directory. Both projects are GPL-3.0-only, so the top-level LICENSE
-          # covers doona too, and the build stops if doona's text ever differs.
+          # Both editions keep their own notices. Their GPL-3.0-only license must
+          # match the top-level LICENSE; lean variants embed neither edition.
           if [[ "${{ matrix.variant }}" == full ]]; then
-            if ! cmp -s LICENSE "$HONK_DOONA_DIR/LICENSE"; then
-              echo "::error::doona's LICENSE differs from honk's; ship it under doona/ again"
-              exit 1
-            fi
-            mkdir "dist/$name/doona"
-            cp -r "$HONK_DOONA_DIR"/{LICENSES,NOTICE,THIRD-PARTY-NOTICES.txt} "dist/$name/doona/"
+            for edition in doona doona-lite; do
+              ui_dir="$HONK_DOONA_DIR"
+              [[ "$edition" != doona-lite ]] || ui_dir="${HONK_DOONA_DIR%/}-lite"
+              if ! cmp -s LICENSE "$ui_dir/LICENSE"; then
+                echo "::error::$edition's LICENSE differs from honk's; ship it under $edition/ again"
+                exit 1
+              fi
+              mkdir "dist/$name/$edition"
+              cp -r "$ui_dir"/{LICENSES,NOTICE,THIRD-PARTY-NOTICES.txt} "dist/$name/$edition/"
+            done
           fi
           tar -czf "$name.tar.gz" -C dist "$name"
 
@@ -326,8 +328,7 @@ jobs:
             bash release-source/.github/ci/check-release-artifacts.sh "$GITHUB_REF_NAME"
           fi
 
-      # GPL-3.0 section 6: the binaries embed doona, so its corresponding
-      # source is published next to them.
+      # GPL-3.0 section 6: both embedded editions share this corresponding source.
       - name: Add doona corresponding source
         run: bash release-source/ci/fetch-doona.sh --source dist
 

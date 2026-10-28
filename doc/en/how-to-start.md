@@ -100,7 +100,7 @@ Download the package matching the device architecture from [GitHub Releases](htt
 
 The musl packages are static binaries intended for gateways. Packages without the `-stock` suffix use mimalloc for throughput (label `mimalloc`); `-stock` packages use the system allocator and suit small devices where the RSS high-water mark matters more (label `stockalloc`). The Downloads section of each release lists every archive with its `{allocator}-{API}-{arch}-{libc}` label.
 
-The lean variants fail closed: enabling `experimental.native_api` on `-clash-api`, or `ui: embedded` without `native-ui`, fails startup. `--store db` and native configuration administration require `native-api`.
+The lean variants fail closed: enabling `experimental.native_api` on `-clash-api`, or `ui: embedded` or `ui: embedded-lite` without `native-ui`, fails startup. `--store db` and native configuration administration require `native-api`. `embedded-lite` selects the lighter doona lite edition (preview).
 
 ```shell
 pkg=honk-core-<version>-<target>-full   # or -stock-full, -clash-api, -stock-native-api, as downloaded
