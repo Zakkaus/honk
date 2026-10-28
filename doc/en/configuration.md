@@ -250,7 +250,7 @@ Build a group in this order:
 
 1. Select members with `filter: name(...)` for static names, `filter: subtag(...)` for subscription provenance, or `filter: group(...)` for nested groups.
 2. Combine predicates with `&&` for AND and `!` to negate one predicate. Separate `filter:` lines mean OR. With neither filters nor nested groups, a group includes all nodes; nested groups alone do not include all nodes.
-3. Choose `selector`/`fixed`, `urltest`/`min_moving_avg`, `loadbalance`/`roundrobin`, or `fallback`. Set `final` for an empty policy selection.
+3. Choose `selector`/`fixed`, `urltest`/`min_moving_avg`, `loadbalance`/`roundrobin`, `fallback`, or `score`. Set `final` for an empty policy selection.
 
 Selector TCP and UDP follow the chosen member and never switch to a sibling because of health. The same-leaf TCP last resort does not bypass nested Selector choices. Group dials always resolve to one leaf node.
 

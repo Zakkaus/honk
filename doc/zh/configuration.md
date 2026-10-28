@@ -250,7 +250,7 @@ experimental {
 
 1. 选择成员：静态名称使用 `filter: name(...)`，订阅来源使用 `filter: subtag(...)`，嵌套组使用 `filter: group(...)`。
 2. 组合条件：`&&` 表示 AND，`!` 对单个谓词取反，不同 `filter:` 行表示 OR。没有过滤条件且没有嵌套组时包含全部节点；仅有嵌套组时不会自动包含全部节点。
-3. 选择策略：可用 `selector`/`fixed`、`urltest`/`min_moving_avg`、`loadbalance`/`roundrobin` 或 `fallback`。用 `final` 指定策略选择为空时的结果。
+3. 选择策略：可用 `selector`/`fixed`、`urltest`/`min_moving_avg`、`loadbalance`/`roundrobin`、`fallback` 或 `score`。用 `final` 指定策略选择为空时的结果。
 
 Selector 的 TCP 与 UDP 都遵循已选成员，不会因健康状态切换到兄弟成员。同一叶节点的 TCP 最后尝试也不能绕过嵌套 Selector 的选择。组拨号最终总会解析到一个叶节点。
 
