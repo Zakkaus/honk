@@ -55,7 +55,7 @@ honk 可配合以下两类网页界面使用：
 
 ![doona lite 节点页](https://doona.daeuniverse.org/images/lite-nodes-light.webp)
 
-启用 doona 需使用 `full` 构建，在 `experimental.native_api` 中将 `ui` 设为 `'embedded'`；启用 doona lite 则设为 `'embedded-lite'`。配置步骤见 [doona 快速入门](https://doona.daeuniverse.org/zh-CN/quick-start.html)。启用 Clash 面板需配置 `experimental.clash_api`，honk 首次启动时自动下载 zashboard。各设置项的说明见 [experimental 设置](doc/zh/reference/experimental.md)。
+使用 `full` 构建时，在 `experimental.native_api` 中将 `ui` 设为 `'embedded'` 即可启用 doona，设为 `'embedded-lite'` 则启用 doona lite。`native-api` 构建可将 `ui` 设为另行[安装的 doona](https://doona.daeuniverse.org/zh-CN/install.html) 所在目录。配置步骤见 [doona 快速入门](https://doona.daeuniverse.org/zh-CN/quick-start.html)。启用 Clash 面板需配置 `experimental.clash_api`，honk 首次启动时自动下载 zashboard。各设置项的说明见 [experimental 设置](doc/zh/reference/experimental.md)。
 
 ## 文档
 
@@ -64,7 +64,7 @@ honk 可配合以下两类网页界面使用：
 ## 版本与兼容性
 
 - 自 `v0.1.0` 起，发布遵循 [SemVer](https://semver.org/lang/zh-CN/)；带 `-alpha.N`、`-beta.N` 或 `-rc.N` 后缀的标签为预发布。`1.0` 之前，次版本可能改变配置或行为，升级前应阅读发布说明。
-- 透明代理需要 root 权限、Linux 6.12+、所需内核选项和 bpffs。发布目标为 `x86_64` 与 `aarch64`，支持 gnu 或 musl，详见上方链接的启动指南。
+- 透明代理需要 root 权限、Linux 6.12+、所需内核选项和 bpffs。详见上方链接的启动指南。
 - 配置使用 [dae 语法](doc/zh/configuration.md)。修改已有部署前，请查阅 [NFQUEUE 运行说明](doc/zh/design/nfqueue.md)和 [VLESS 迁移指南](doc/zh/reference/nodes.md#从-vless_mode-迁移)。
 - 原生 API 使用 `/api/v1`，其契约在 `1.0` 之前可能随次版本变化。`GET /api/v1/version` 返回契约标识。
 
