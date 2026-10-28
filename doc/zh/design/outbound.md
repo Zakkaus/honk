@@ -368,7 +368,7 @@ Basic Authorization header，显式配置的 Authorization 优先。同源重定
 
 `bootstrap.rs` 避免代理主机名解析依赖 honk 自己拦截的 DNS 路径。节点
 拨号点经 `connect_marked` 或 QUIC 建立调用 `bootstrap::resolve`，绝不
-直接调用裸 `lookup_host`。配置的 bootstrap resolver 通过带 bypass mark
+直接调用裸 `lookup_host`，否则代理主机名解析会与 honk 自己拦截的 DNS 路径形成死锁。配置的 bootstrap resolver 通过带 bypass mark
 的 UDP/TCP 查询；失败时回退 `/etc/hosts` 及 `/etc/resolv.conf` 中第一个
 数字 nameserver，DNS socket 同样带 mark，不调用 libc NSS 或追加搜索后缀。
 A 与 AAAA 并发查询，各自拥有独立的 3 s 预算；只接受与随机查询 ID 及原问题
@@ -957,7 +957,7 @@ IPv4 `0`、IPv6 `1`、域名 `2`（不同于 request 地址的 SOCKS5 编号）�
 服务端可用同一个未 connect 的 socket 承载它们。`recv_packet` 在消耗 frame 之前先解码地址：
 数值源地址直接返回（IPv4-mapped IPv6 归一为 IPv4），打开时捕获的域名加端口投影回捕获的 target，
 其他任何域名 frame 都被整体丢弃（释放其头部与 payload 的全部 credit，不做域名解析）；
-未知 ATYP 是终止错误。逐包目的地址的写法遵循上述 UoT v2 规则。每条 flow 的首次发送等待物理 flush（`confirmed`），稳态发送只入队，
+未知 ATYP 是终止错误。发送时，逐包目的地址只有与拨号域名相同才写为域名，其他目的地址使用数值形式。每条 flow 的首次发送等待物理 flush（`confirmed`），稳态发送只入队，
 `admitted` 在 frame 入 session writer 队列时设置。队列与 credit 上限仍是单个 transport 的上限，
 因此队列饱和或 EOF 会退役共享该 SID 的所有目的地。域名目标流（`RewriteTo`）仍按原始目的地各自成 scope。
 

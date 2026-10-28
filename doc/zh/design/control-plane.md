@@ -237,7 +237,9 @@ NFQUEUE 冷 cell 重建在同一读锁 guard 内保留 conn-state 快照，并�
 
 真实 relay 完成后，TCP owner 先按实际结果结算一次 Score 与 relay-error 统计，再传播退役失败。退役失败不会把成功 relay 证据改成取消。TCP 补池仍要求 relay 成功且退役已确认；主动取消保留独立的中性路径。
 
-`splice.rs` 的 `relay_splice` 与 `vision.rs` 共用双向引擎。**不得恢复单向 splice**，它曾导致超时；空闲排空期限可防止无数据传输的对端使任务和套接字长期停留在 CLOSE-WAIT。
+`splice.rs` 的 `relay_splice` 在普通 `TcpStream` 之间使用双向零拷贝 `splice(2)`，并传播半关闭。每个方向的首次 splice 都会探测能力。在任何字节进入管道前，EINVAL/ENOSYS/EXDEV/EPERM 会触发无损 copy 回退，并设置进程级禁用标志；创建管道失败也会回退到 copy，但不设置该标志。**不得恢复单向 splice**，它曾导致超时。
+
+`relay_auto` 对 TLS 或协议封装的流使用同一个基于 select 的 copy loop。`vision.rs` 将 Direct Vision carrier 的 socket 借给同一个双向引擎。两条路径都会在首次 EOF 时半关闭对端，剩余排空时间只受空闲期限 `DRAIN_DEADLINE` 限制：连续 30 秒没有字节进展才结束，不会截断仍在传输的另一方向。这样可防止无数据传输的对端使任务和套接字长期停留在 CLOSE-WAIT。UDP 使用 `UdpEndpointPool`。
 
 ## Reload 与运行时 generation
 

@@ -411,6 +411,7 @@ raises the corresponding maxima at startup.
 `bootstrap.rs` prevents proxy-hostname resolution from depending on honk's own
 intercepted DNS path. Node dial sites must use `bootstrap::resolve` through
 `connect_marked` (`util::connect_marked`) or the QUIC setup in `quic.rs`, never bare `lookup_host`.
+Otherwise proxy-hostname resolution can deadlock against honk's own intercepted DNS path.
 The implementation in `crates/honk-outbound/src/bootstrap.rs` provides dae
 `bootstrap_resolver` parity with a process-wide resolver and a hand-rolled wire codec.
 It queries the configured bootstrap resolver over bypass-marked UDP/TCP. On failure,

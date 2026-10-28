@@ -134,7 +134,7 @@ scp target/x86_64-unknown-linux-musl/release/honk-tool root@GATEWAY:/tmp/
 | `geosite` | 列出、检查和反向搜索 `geosite.dat`。 |
 | `geoip` | 列出、检查和最长前缀搜索 `geoip.dat`。 |
 
-每个命令族与操作也有帮助信息。构建版本与 `honk-core` 一致。
+二进制提供 `-h`/`--help` 和 `-v`/`--version`。每个命令族与操作也有帮助信息。构建版本与 `honk-core` 一致。
 
 ### `sub`
 

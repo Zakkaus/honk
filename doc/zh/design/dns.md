@@ -103,6 +103,8 @@ Honk 的独立 bind 可以是 `:53530`、其他空闲端口或关闭；它不是
 
 生产路径中的 `DnsService` 调用方在发布缓存前要求严格校验查询和响应的报文格式。原始 `DnsForwarder::resolve*` 兼容接口仍供旧内部调用方使用。
 
+生产路径顺序如下：
+
 | 阶段 | 不变量 |
 | --- | --- |
 | 1. 准入与 generation | `DnsController` 固定一个 runtime，取得该代的 owned query permit；UDP 入口同时取得该代的 UDP permit。每代 2,048 查询的 permit 一直保留到应答完成；饱和时降级为 `REFUSED`。 |

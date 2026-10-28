@@ -85,7 +85,7 @@ predicate ID within one policy.
   Startup uses one captured Geo source set for both traffic and DNS compilation
   and drops it after both routers are built; compiled matchers and fingerprints
   remain owned by the routers.
-- [`crates/honk-core/src/control/routing_matcher.rs`](../../../crates/honk-core/src/control/routing_matcher.rs)
+- [`crates/honk-core/src/control/routing_matcher.rs`](../../../crates/honk-core/src/control/routing_matcher.rs):
   compiles the IR into `RoutingPushPlan` and has no map side effects.
   [`crates/honk-core/src/ebpf/real/routing.rs`](../../../crates/honk-core/src/ebpf/real/routing.rs)
   owns generation maps, extension loading, target attachment, and publication.

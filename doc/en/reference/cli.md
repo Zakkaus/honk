@@ -32,7 +32,7 @@ Use matching `honk-core`, `honk-tool`, and BPF object versions; incompatible obj
 
 ### Log-level precedence
 
-A valid `RUST_LOG` wins over the other log-level settings. The executable chooses the debug/config default, then calls `EnvFilter::try_from_default_env()`. The source comment instead describes the intended order as `--debug` → `RUST_LOG` → `global.log_level` → `info`:
+A valid `RUST_LOG` currently wins over the other log-level settings. The executable chooses the debug/config default, then calls `EnvFilter::try_from_default_env()`. The source comment instead describes the intended order as `--debug` → `RUST_LOG` → `global.log_level` → `info`:
 
 | Current priority | Source | Behavior |
 | --- | --- | --- |
@@ -134,7 +134,7 @@ The current `just build-musl` and `just deploy-vyos` recipes build and deploy on
 | `geosite` | List, inspect, and reverse-search `geosite.dat`. |
 | `geoip` | List, inspect, and longest-prefix search `geoip.dat`. |
 
-Each command family and action has its own help. The build version matches `honk-core`.
+The binary provides `-h`/`--help` and `-v`/`--version`. Each command family and action has its own help. The build version matches `honk-core`.
 
 ### `sub`
 

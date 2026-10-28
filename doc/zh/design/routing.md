@@ -71,7 +71,7 @@ LAN/WAN TCP/UDP 目的端口 `53` 在既有入口与控制平面排除后，
   `@` 处分隔，并以不区分大小写的方式筛选属性键。
   启动时，流量路由与 DNS 路由共用同一份 Geo 资源快照；两者完成编译后即释放
   原始资源快照，已编译的 matcher 与指纹仍由各自的 router 持有。
-- [`crates/honk-core/src/control/routing_matcher.rs`](../../../crates/honk-core/src/control/routing_matcher.rs)
+- [`crates/honk-core/src/control/routing_matcher.rs`](../../../crates/honk-core/src/control/routing_matcher.rs)：
   把 IR 编译为 `RoutingPushPlan`，不修改 map。
   [`crates/honk-core/src/ebpf/real/routing.rs`](../../../crates/honk-core/src/ebpf/real/routing.rs)
   负责 generation map、扩展加载、目标挂接与发布。

@@ -205,7 +205,7 @@ Start honk in the foreground:
 sudo /usr/local/bin/honk-core --config /etc/honk/config.dae
 ```
 
-After `honk-core is running` appears, verify connectivity from a real LAN client before adding nodes, subscriptions, groups, routing, and DNS. To use the smallest proxy structure below, add its `node` and `group` sections to the direct-only configuration and replace the existing `routing` section. Replace the example address and credentials with a real node:
+After `honk-core is running` appears, verify connectivity from a real LAN client before adding nodes, subscriptions, groups, routing, and DNS. To use the smallest proxy structure below, keep the direct-only configuration's `global` section and add the `node` and `group` sections shown below. Replace its entire `routing { fallback: direct }` section with the `routing { fallback: proxy }` section below; do not append a second `routing` section. Replace the example address and credentials with a real node:
 
 ```dae
 node {

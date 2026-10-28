@@ -253,7 +253,9 @@ Cold NFQUEUE cell reconstruction retains its conn-state snapshot and invokes bac
 
 After a real relay completes, the TCP owner settles its actual Score outcome and relay-error statistics once before propagating any retirement failure. Successful relay evidence is not changed to cancellation by failed retirement. TCP pool replenishment still requires both relay success and confirmed retirement; intentional cancellation retains its separate neutral path.
 
-`splice.rs` owns the bidirectional splice engine; `vision.rs` lends it a Direct Vision carrier's socket. **Never restore unidirectional splice** (caused timeouts). UDP uses `UdpEndpointPool`.
+`splice.rs`: `relay_splice` uses bidirectional zero-copy `splice(2)` and half-close propagation between plain `TcpStream`s. The first splice in each direction probes capability. EINVAL/ENOSYS/EXDEV/EPERM before any bytes are staged trigger lossless copy fallback and set the process-wide latch. Pipe creation failure falls back to copying without setting the latch. **Never restore unidirectional splice** (caused timeouts).
+
+`relay_auto` uses the same select-based copy loop for TLS/protocol-wrapped streams. `vision.rs` lends a Direct Vision carrier's socket to the same bidirectional engine. Both paths half-close the peer at first EOF and bound remaining drain by **idle** `DRAIN_DEADLINE`: 30s without byte progress, never cutting an active survivor. This prevents silent peers pinning tasks/sockets in CLOSE-WAIT. UDP uses `UdpEndpointPool`.
 
 ## Reload and runtime generations
 

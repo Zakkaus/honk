@@ -205,7 +205,7 @@ sudo install -m 0600 /path/to/config.dae /etc/honk/config.dae
 sudo /usr/local/bin/honk-core --config /etc/honk/config.dae
 ```
 
-看到 `honk-core is running` 后，先从真实 LAN 客户端确认联网，再加入节点、订阅、组、路由和 DNS。使用下方最小代理配置时，把 `node` 和 `group` 加入仅直连的配置，并替换原有 `routing` 小节。示例地址和凭据必须换成真实节点的信息：
+看到 `honk-core is running` 后，先从真实 LAN 客户端确认联网，再加入节点、订阅、组、路由和 DNS。使用下方最小代理配置时，保留仅直连配置的 `global` 小节，加入下方的 `node` 和 `group` 小节。将原有的整个 `routing { fallback: direct }` 小节替换为下方的 `routing { fallback: proxy }` 小节，不要追加第二个 `routing` 小节。示例地址和凭据必须换成真实节点的信息：
 
 ```dae
 node {

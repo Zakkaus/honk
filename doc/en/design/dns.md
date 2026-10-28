@@ -102,6 +102,8 @@ Honk's optional bind may be `:53530`, another free port, or disabled; it is not 
 
 Production `DnsService` callers require strict query/response wire validation before cache publication. The raw `DnsForwarder::resolve*` compatibility surface remains for legacy internal callers.
 
+The production path is ordered as follows:
+
 | Stage | Invariant |
 | --- | --- |
 | 1. Admission and generation | `DnsController` pins one runtime and acquires its owned query permit plus a UDP permit for UDP ingress. The generation's 2,048-query permit remains held through reply completion; saturation degrades to `REFUSED`. |
