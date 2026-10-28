@@ -28,7 +28,15 @@ honk 的 eBPF 数据面和配置语法参考 dae 的设计，出站组与 Clash 
 
 ## 安装
 
-从 [Releases](https://github.com/daeuniverse/honk/releases) 下载适合目标平台的归档：`full` 包含两种 API 和内嵌的 doona；`native-api` 与 `clash-api` 仅包含对应的 API，不含网页界面。`stock` 表示使用系统分配器而非 mimalloc。每个版本的 Downloads 一节说明各构建、校验和及构建来源证明。
+从 [Releases](https://github.com/daeuniverse/honk/releases) 下载适合目标平台的归档。提供 x86_64 与 aarch64 Linux 版本；不确定时选 `full`。
+
+| 构建 | 原生 API | Clash API | 内嵌 doona 与 doona lite |
+| --- | --- | --- | --- |
+| `full` | 是 | 是 | 是 |
+| `native-api` | 是 | 否 | 否 |
+| `clash-api` | 否 | 是 | 否 |
+
+每种构建都有静态链接的 musl 版本，`full` 另有链接 glibc 的 `gnu` 版本。名称含 `stock` 的归档使用系统分配器而非 mimalloc。每个版本的 Downloads 一节列出校验和及构建来源证明。
 
 OpenWrt 用户可使用 [daeuniverse 软件源](https://openwrt.daeuniverse.org/zh-cn/)。
 
@@ -97,3 +105,4 @@ Copyright (c) 2025, glassyiris <honk@catmint.cc> and honk contributors
 - [ ] 评估 AF_XDP 与 XDP 路径以进一步提升性能
 - [ ] 在 Clash 兼容 API 之外添加 honk 专用 REST API
 - [ ] 添加入站支持
+- [ ] 探索 macOS 与 Windows 支持；数据面基于 Linux eBPF，这两个平台需要另一种接管流量的方式

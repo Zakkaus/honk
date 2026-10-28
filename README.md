@@ -28,7 +28,15 @@ There is no FakeIP engine, full mihomo parity, or Windows/macOS datapath.
 
 ## Install
 
-Download an archive for your platform from [Releases](https://github.com/daeuniverse/honk/releases): `full` includes both APIs and embedded doona; `native-api` and `clash-api` include only the named API, without the UI. `stock` selects the system allocator instead of mimalloc. Each release's Downloads section explains its builds, checksums, and provenance.
+Download an archive for your platform from [Releases](https://github.com/daeuniverse/honk/releases). Builds exist for x86_64 and aarch64 Linux; pick `full` if unsure.
+
+| Build | Native API | Clash API | Embedded doona and doona lite |
+| --- | --- | --- | --- |
+| `full` | Yes | Yes | Yes |
+| `native-api` | Yes | No | No |
+| `clash-api` | No | Yes | No |
+
+Every build comes as a static musl binary; `full` also comes linked against glibc (`gnu`). Archives with `stock` in the name use the system allocator instead of mimalloc. Each release's Downloads section lists checksums and provenance.
 
 For OpenWrt, use the [daeuniverse package feed](https://openwrt.daeuniverse.org/en/).
 
@@ -97,3 +105,4 @@ The development-only [dae parser oracle](tools/dae-parse/README.md) links dae (A
 - [ ] Evaluate AF_XDP and XDP paths for further performance gains
 - [ ] Add a honk-specific REST API beyond Clash compatibility
 - [ ] Add inbound support
+- [ ] Explore macOS and Windows support; the datapath is Linux eBPF, so these platforms need another way to capture traffic
