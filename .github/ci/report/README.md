@@ -4,6 +4,10 @@ The `changes` job writes `ci-report-selection`; `lint`, `test`, `parser`, `smoke
 
 The reporter handles pull-request runs only. It reads per-attempt job conclusions and bounded artefact files as data, never imports, sources, evaluates, or executes artefact or pull-request content, and upserts the marker-bearing comment authored by `github-actions[bot]` on every matching open base-repository pull request.
 
+The reload comparator gates allocation count and allocated-byte growth at the existing 20% threshold, requires at least ten candidate samples, and rejects any no-op flag writes, DNS publications, slow-path entries or eBPF writes. Wall/CPU ratios are advisory on shared runners: a timing ratio alone does not fail the benchmark, while a candidate reload of one second or more still does. All four ratios remain in the step summary and JSON. The renderer retains its 1.20× timing warnings as advisory measurements; those warnings do not fail the job or set the reload report's `gate_passed` field. Pure timing regressions therefore require review rather than an automatic failure.
+
+Run `python3 ci/test-compare-reload-benchmark.py` for the comparator's dependency-free regression checks.
+
 The renderer interface is:
 
 ```text
