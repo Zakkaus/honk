@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::io::Read as _;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -50,6 +52,8 @@ struct GeoAsset {
     size_bytes: String,
     modified_at: Option<String>,
     source_redacted: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    missing_codes: Option<Vec<String>>,
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     origin: Option<Origin>,
 }
@@ -68,6 +72,71 @@ impl std::fmt::Debug for GeoData {
             .field("observed_at", &self.observed_at)
             .field("asset_count", &self.assets.len())
             .finish_non_exhaustive()
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct MissingCodesCache {
+    entries: parking_lot::Mutex<HashMap<MissingCodesKey, Vec<String>>>,
+}
+
+#[derive(Hash, PartialEq, Eq)]
+struct MissingCodesKey {
+    kind: &'static str,
+    sha256: String,
+    required_codes: Vec<String>,
+}
+
+impl MissingCodesCache {
+    fn get(
+        &self,
+        asset: &GeoAssetSnapshot,
+        requirements: &GeoRequirements,
+    ) -> std::io::Result<Vec<String>> {
+        let required_codes = requirements.codes(asset.kind);
+        if required_codes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let key = MissingCodesKey {
+            kind: asset.kind,
+            sha256: asset.sha256.clone(),
+            required_codes,
+        };
+        // Serialize cold reads on the blocking pool; concurrent GETs parse once.
+        let mut entries = self.entries.lock();
+        if let Some(missing) = entries.get(&key) {
+            return Ok(missing.clone());
+        }
+        let path = std::fs::canonicalize(asset.path.as_ref().ok_or(std::io::ErrorKind::NotFound)?)?;
+        let descriptor = nix::fcntl::open(
+            &path,
+            nix::fcntl::OFlag::O_RDONLY
+                | nix::fcntl::OFlag::O_NOFOLLOW
+                | nix::fcntl::OFlag::O_NONBLOCK
+                | nix::fcntl::OFlag::O_CLOEXEC,
+            nix::sys::stat::Mode::empty(),
+        )
+        .map_err(std::io::Error::from)?;
+        let file = std::fs::File::from(descriptor);
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.len() != asset.size_bytes
+            || metadata.len() > super::offline::MAX_ASSET_BYTES as u64
+        {
+            return Err(std::io::ErrorKind::InvalidData.into());
+        }
+        let bytes =
+            super::offline::read_sized(file.take(asset.size_bytes + 1), asset.size_bytes as usize)?;
+        if crate::configuration::digest(&bytes) != asset.sha256 {
+            return Err(std::io::ErrorKind::InvalidData.into());
+        }
+        let missing = requirements.missing_codes(asset.kind, &bytes)?;
+        // Retain a few recent generations without growing on every config edit.
+        if entries.len() >= 8 {
+            entries.clear();
+        }
+        entries.insert(key, missing.clone());
+        Ok(missing)
     }
 }
 
@@ -254,6 +323,7 @@ pub(crate) fn project(
     active: &honk_config::Config,
     sources: &config::ConfigService,
     group_id: impl Fn(&str) -> Option<String>,
+    mut missing_codes: HashMap<&'static str, Vec<String>>,
 ) -> GeoData {
     let secrets = sources.secrets_with(active);
     let status = geodata.map(|geodata| {
@@ -295,6 +365,7 @@ pub(crate) fn project(
                     size_bytes: asset.size_bytes.to_string(),
                     modified_at: asset.modified_at.map(timestamp),
                     source_redacted,
+                    missing_codes: missing_codes.remove(asset.kind),
                     origin,
                 }
             })
@@ -345,12 +416,27 @@ pub(super) async fn get(
 ) -> Result<Response, ApiError> {
     parse_query(uri, &[], id)?;
     let (assets, active) = capture(state).await?;
+    let requirements = Arc::new(GeoRequirements::for_traffic(&active.routing.rules).union(
+        &crate::dns::routing::DnsRouter::geo_requirements(&active.dns),
+    ));
+    let mut missing_codes = HashMap::new();
+    for asset in &assets {
+        let cache = Arc::clone(&state.geodata_missing_codes);
+        let requirements = Arc::clone(&requirements);
+        let snapshot = asset.clone();
+        if let Ok(Ok(codes)) =
+            tokio::task::spawn_blocking(move || cache.get(&snapshot, &requirements)).await
+        {
+            missing_codes.insert(asset.kind, codes);
+        }
+    }
     Ok(axum::Json(project(
         assets,
         state.geodata.as_deref(),
         &active,
         &state.observation.configuration,
         |name| group_id(&state.observation.core.catalog, name),
+        missing_codes,
     ))
     .into_response())
 }

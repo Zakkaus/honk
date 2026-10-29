@@ -3134,7 +3134,10 @@ paths:
         resources.geodata.configurable_sources is true, the response also reports
         where each loaded file was downloaded from and through which route, whether
         its checksum was verified, the update schedule and outcome, and
-        required_codes. Reading never touches the network.
+        required_codes. GET reports missing_codes independently of the state
+        database. Reading never touches the network. Missing-category checks
+        verify the recorded file against the loaded digest on a cache miss;
+        unavailable loaded bytes omit that asset's field without failing GET.
       x-permission: observe
       security:
         - bearerAuth: []
@@ -3161,6 +3164,7 @@ paths:
                         size_bytes: '4404019'
                         modified_at: '2026-08-14T03:00:00Z'
                         source_redacted: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/geosite.dat
+                        missing_codes: []
                         fetched_url_redacted: https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat
                         verified: true
                         download_route:
@@ -3171,6 +3175,7 @@ paths:
                         size_bytes: '17406771'
                         modified_at: '2026-08-14T03:00:00Z'
                         source_redacted: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/geoip.dat
+                        missing_codes: []
                         fetched_url_redacted: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/geoip.dat
                         verified: true
                         download_route:
@@ -3203,6 +3208,8 @@ paths:
                         size_bytes: '4404019'
                         modified_at: '2026-08-01T00:00:00Z'
                         source_redacted: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/geosite.dat
+                        missing_codes:
+                          - geolocation-!cn
                         fetched_url_redacted: null
                         verified: false
                         download_route: null
@@ -3211,6 +3218,7 @@ paths:
                         size_bytes: '17406771'
                         modified_at: '2026-08-01T00:00:00Z'
                         source_redacted: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/geoip.dat
+                        missing_codes: []
                         fetched_url_redacted: null
                         verified: false
                         download_route: null
@@ -3241,6 +3249,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '413':
           $ref: '#/components/responses/TooLarge'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /api/v1/geodata/update:
     post:
       operationId: updateGeoData
@@ -9858,6 +9868,13 @@ components:
             - 'null'
           minLength: 1
           description: Display-only download source, in the display form described in Geodata; query removed and credential-shaped path segments replaced with [redacted]. With several configured URLs, the first. Null when no source is configured or the URL does not parse, including a URL with userinfo or a fragment.
+        missing_codes:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+          description: Sorted lowercase required categories absent from the loaded asset, without attribute suffixes and independent of the state database. Empty when none are missing. Returned by GET /api/v1/geodata; omitted when the loaded file can no longer be read to check and absent from update responses. A rule whose category is missing never matches.
         fetched_url_redacted:
           type:
             - string

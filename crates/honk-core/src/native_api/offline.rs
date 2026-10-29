@@ -326,7 +326,7 @@ fn capture_inner(
 /// Reads `reader` to its end into one buffer of the `expected` length, so a
 /// large asset is neither grown in steps nor copied once more into an `Arc`.
 /// A file whose length changed after it was measured is read as it is now.
-fn read_sized(mut reader: impl io::Read, expected: usize) -> io::Result<Arc<[u8]>> {
+pub(super) fn read_sized(mut reader: impl io::Read, expected: usize) -> io::Result<Arc<[u8]>> {
     let mut buffer: Arc<[u8]> = std::iter::repeat_n(0, expected).collect();
     let slots = Arc::get_mut(&mut buffer).expect("a new buffer is unshared");
     let mut filled = 0;

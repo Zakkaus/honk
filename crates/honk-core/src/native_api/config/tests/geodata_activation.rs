@@ -97,7 +97,11 @@ async fn rejected_activation_records_failed_last_reload() {
 async fn identical_bytes_keep_the_loaded_files_and_generation() {
     let server = AssetServer::new(geosite("old.example"), geoip(198), false).await;
     let fixture = fixture(server.address, false).await;
-    let old = fixture.get(GEO).await;
+    let mut old = fixture.get(GEO).await;
+    // The update result omits `missing_codes`, which only GET reports.
+    for asset in old["assets"].as_array_mut().unwrap() {
+        asset.as_object_mut().unwrap().remove("missing_codes");
+    }
     let inode = |name: &str| std::fs::metadata(fixture.path(name)).unwrap().ino();
     let before = [inode("state/geosite.dat"), inode("state/geoip.dat")];
     let operation = accepted(fixture.request(Method::POST, UPDATE).send().await.unwrap()).await;

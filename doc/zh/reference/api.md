@@ -922,7 +922,7 @@ DELETE 不接受 body/query：带有任一项时返回 `400 invalid_request`，�
 
 `--store db` 在激活前不写入，被拒绝时报告 written false。提交后降级报告 committed true 并带上 `active_generation_id`，无法确认时为 null，不承诺回滚。源 PUT 仍使用独立磁盘哈希 If-Match，旧编辑器会在管理修改后得到冲突。
 
-获准访问的匿名回环请求与 Bearer 认证请求读取相同的 geodata。Geodata GET 按既有 router-before-config 锁序读取流量/DNS 保留元数据，不扫描磁盘、不联网。hash/大小属于已加载字节，不属于后来的磁盘外部编辑。
+获准访问的匿名回环请求与 Bearer 认证请求读取相同的 geodata。Geodata GET 按既有 router-before-config 锁序读取流量/DNS 保留元数据，不联网。hash/大小属于已加载字节，不属于后来的磁盘外部编辑。缺失类别检查在缓存未命中时读取记录的文件并校验已加载的 hash。
 
 未记录或不一致的修改时间为 null。`source_redacted` 保留字段名，在 GET 与成功操作结果中返回第一个下载 URL，去掉用户信息、查询和片段，可能含凭据的路径段替换为 `[redacted]`，并遮蔽监听凭据。没有 URL 的资产或无法安全显示的 URL 为 null。
 
@@ -1022,12 +1022,15 @@ ID 不对应当前任何组时返回 `409 state_conflict`。已存储的组被�
 | 每个资产 | `download_route.group_id` | 请求经过的组，包括规则选中的组；否则为 null |
 | 顶层 | `last_checked_at`、`last_updated_at`、`next_check_at`、`last_error` | 更新状态与计划 |
 | 顶层 | `required_codes` | 当前配置为每个已加载资产引用的分类，按顺序排列 |
+| 每个资产 | `missing_codes` | 当前流量/DNS 配置引用但已加载资产中缺失的类别，以小写排序，不含属性后缀；没有缺失时为 `[]`，不依赖状态数据库 |
+
+`GET /api/v1/geodata` 返回 `missing_codes`，若无法再读取已加载文件进行检查，则省略该资产的此字段，响应仍为 200。更新响应不含此字段，客户端需重新读取 GET。类别缺失的规则永不匹配。
 
 `last_error.code` 表示失败阶段，例如 `http_status_rejected`、`checksum_mismatch` 或 `asset_validation_failed`。
 
 `last_checked_at`、`last_updated_at`、`last_error` 与连续失败次数保存在状态数据库的严格表 `geodata_status` 中。每次启动根据这些状态重新计算 `next_check_at`，并重新抽取随机延迟；该字段不存储。
 
-每个资产的字段只保存在内存中。重启后，在下一次尝试前这些字段为 null，`verified` 为 false。
+下载来源字段只保存在内存中。重启后，在下一次尝试前这些字段为 null，`verified` 为 false。
 
 自动更新默认开启，间隔 24 小时。将 `auto_update.enabled` 设为 `false` 即关闭。启动后从上次记录的检查时间继续计时。
 

@@ -64,6 +64,27 @@ impl GeoRequirements {
         codes
     }
 
+    /// Required base categories absent from the asset, sorted and lowercased.
+    /// Attribute selectors require the category, not a matching attribute.
+    #[cfg(feature = "native-api")]
+    pub(crate) fn missing_codes(&self, kind: &str, bytes: &[u8]) -> std::io::Result<Vec<String>> {
+        let invalid = |_| std::io::Error::from(std::io::ErrorKind::InvalidData);
+        let mut missing = self.codes(kind);
+        match kind {
+            "geosite" => {
+                let index =
+                    parse_geosite_index_inner(bytes, &self.geosite_codes, true).map_err(invalid)?;
+                missing.retain(|code| !index.contains_key(code));
+            }
+            "geoip" => {
+                let index = parse_geoip_index(bytes, &self.geoip_codes).map_err(invalid)?;
+                missing.retain(|code| !index.contains_key(code));
+            }
+            _ => {}
+        }
+        Ok(missing)
+    }
+
     pub(crate) fn union(&self, other: &Self) -> Self {
         let mut union = self.clone();
         union
@@ -262,27 +283,11 @@ impl GeoSourceSet {
     /// a missing one would silently turn its rules into never-matching ones.
     #[cfg(feature = "native-api")]
     fn contain(&self, requirements: &GeoRequirements) -> std::io::Result<()> {
-        let missing = || std::io::Error::from(std::io::ErrorKind::InvalidData);
-        if let Some(bytes) = self.geosite.bytes() {
-            let index = parse_geosite_index_inner(bytes, &requirements.geosite_codes, true)
-                .map_err(|_| missing())?;
-            if requirements
-                .codes("geosite")
-                .iter()
-                .any(|code| !index.contains_key(code))
+        for (kind, source) in [("geosite", &self.geosite), ("geoip", &self.geoip)] {
+            if let Some(bytes) = source.bytes()
+                && !requirements.missing_codes(kind, bytes)?.is_empty()
             {
-                return Err(missing());
-            }
-        }
-        if let Some(bytes) = self.geoip.bytes() {
-            let index =
-                parse_geoip_index(bytes, &requirements.geoip_codes).map_err(|_| missing())?;
-            if requirements
-                .geoip_codes
-                .iter()
-                .any(|code| !index.contains_key(code))
-            {
-                return Err(missing());
+                return Err(std::io::ErrorKind::InvalidData.into());
             }
         }
         Ok(())
@@ -1379,6 +1384,133 @@ fn validate_downloaded_asset(kind: &str, bytes: &[u8]) -> anyhow::Result<()> {
 #[cfg(test)]
 mod scan_tests {
     use super::*;
+
+    #[cfg(feature = "native-api")]
+    #[test]
+    fn missing_geosite_codes_are_sorted_lowercase_base_categories() {
+        let mut requirements = GeoRequirements::default();
+        for code in [" ZULU@ads ", "ALPHA", "zulu@other", "Present"] {
+            requirements.add_geosite(code);
+        }
+        let dat = geosite_dat(&[("PRESENT", Vec::new())]);
+        assert_eq!(
+            requirements.missing_codes("geosite", &dat).unwrap(),
+            vec!["alpha", "zulu"]
+        );
+        let complete = geosite_dat(&[
+            ("PRESENT", Vec::new()),
+            ("ALPHA", Vec::new()),
+            ("ZULU", Vec::new()),
+        ]);
+        assert!(
+            requirements
+                .missing_codes("geosite", &complete)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[cfg(feature = "native-api")]
+    #[test]
+    fn missing_geosite_attribute_requires_category_not_attribute() {
+        let mut requirements = GeoRequirements::default();
+        requirements.add_geosite("TEST@nonexistent");
+        let dat = geosite_dat(&[("TEST", vec![domain_msg(3, "example.org", &[])])]);
+        assert!(
+            requirements
+                .missing_codes("geosite", &dat)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            GeoSourceSet::from_bytes(dat, Vec::new())
+                .contain(&requirements)
+                .is_ok()
+        );
+        assert_eq!(
+            requirements.missing_codes("geosite", &[]).unwrap(),
+            vec!["test"]
+        );
+        assert_eq!(
+            GeoSourceSet::from_bytes(Vec::new(), Vec::new())
+                .contain(&requirements)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidData
+        );
+    }
+
+    #[cfg(feature = "native-api")]
+    #[test]
+    fn missing_geoip_codes_are_sorted_lowercase_and_exclude_private() {
+        let mut requirements = GeoRequirements::default();
+        for code in [" ZULU ", "ALPHA", "Present", " PRIVATE "] {
+            requirements.add_geoip(code);
+        }
+        let dat = geoip_dat(&[("PRESENT", vec![(&[1, 2, 3, 0], 24)])]);
+        assert_eq!(
+            requirements.missing_codes("geoip", &dat).unwrap(),
+            vec!["alpha", "zulu"]
+        );
+        let complete = geoip_dat(&[
+            ("PRESENT", Vec::new()),
+            ("ALPHA", Vec::new()),
+            ("ZULU", Vec::new()),
+        ]);
+        assert!(
+            requirements
+                .missing_codes("geoip", &complete)
+                .unwrap()
+                .is_empty()
+        );
+        let mut private = GeoRequirements::default();
+        private.add_geoip("PRIVATE");
+        assert!(private.missing_codes("geoip", &[]).unwrap().is_empty());
+        assert!(
+            GeoSourceSet::from_bytes(Vec::new(), complete)
+                .contain(&requirements)
+                .is_ok()
+        );
+        assert_eq!(
+            GeoSourceSet::from_bytes(Vec::new(), dat)
+                .contain(&requirements)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidData
+        );
+    }
+
+    #[cfg(feature = "native-api")]
+    #[test]
+    fn missing_codes_preserve_strict_parse_errors_and_absent_source_semantics() {
+        let mut requirements = GeoRequirements::default();
+        requirements.add_geosite("TEST");
+        requirements.add_geoip("TEST");
+        for kind in ["geosite", "geoip"] {
+            assert_eq!(requirements.missing_codes(kind, &[]).unwrap(), vec!["test"]);
+            assert_eq!(
+                requirements
+                    .missing_codes(kind, &[0x0a, 0xff])
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::InvalidData
+            );
+        }
+        let malformed_domain = geosite_dat(&[("TEST", vec![domain_msg(1, "[", &[])])]);
+        assert_eq!(
+            requirements
+                .missing_codes("geosite", &malformed_domain)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        let absent = GeoSourceSet::from_sources(GeoSource::Missing, GeoSource::Missing);
+        assert!(absent.contain(&requirements).is_ok());
+        assert_eq!(
+            absent.validate(&requirements).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+    }
 
     #[cfg(feature = "native-api")]
     #[test]

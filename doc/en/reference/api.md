@@ -979,7 +979,7 @@ DELETE still maps other validation failures to 503. A durable write followed by 
 
 Committed degradation reports committed true with `active_generation_id` set, null when unknown. No rollback is promised. Source PUT retains its independent disk-hash If-Match contract, so a stale editor conflicts after a managed mutation.
 
-Admitted anonymous loopback requests read the same geodata as bearer-authenticated requests. Geodata GET joins retained traffic/DNS metadata under the existing router-before-config publication order. It never scans disk or downloads.
+Admitted anonymous loopback requests read the same geodata as bearer-authenticated requests. Geodata GET joins retained traffic/DNS metadata under the existing router-before-config publication order. It never downloads. Missing-category checks read the recorded file on a cache miss and verify its loaded hash.
 
 Hash and size describe loaded bytes, not later disk edits. Unrecorded or differing modification times are null.
 
@@ -1101,12 +1101,15 @@ A failure with `checksum_unavailable` or `checksum_mismatch` logs a warning that
 | Per asset | `download_route.group_id` | Group traversed by the request, including one chosen by rules; otherwise null |
 | Top level | `last_checked_at`, `last_updated_at`, `next_check_at`, `last_error` | Update status and schedule |
 | Top level | `required_codes` | Sorted categories referenced by the active configuration for each loaded asset |
+| Per asset | `missing_codes` | Sorted lowercase categories referenced by the active traffic/DNS configuration but absent from the loaded asset, without attribute suffixes; `[]` when none are missing, independent of the state database |
+
+`GET /api/v1/geodata` returns `missing_codes`, omitting it for an asset when the loaded file can no longer be read to check; the response remains 200. Update responses omit it; clients re-read GET. A rule whose category is missing never matches.
 
 `last_error.code` identifies the failed stage, such as `http_status_rejected`, `checksum_mismatch` or `asset_validation_failed`.
 
 `last_checked_at`, `last_updated_at`, `last_error` and the consecutive failure count persist in the state database's strict `geodata_status` row. Each startup recomputes `next_check_at` from that state and draws a new random delay. It is not stored.
 
-Per-asset fields remain in memory only. After restart they are null, and `verified` is false, until the next attempt.
+Download-origin fields remain in memory only. After restart they are null, and `verified` is false, until the next attempt.
 
 Automatic updates are on by default, every 24 hours. `auto_update.enabled: false` stops them. After startup the schedule continues from the last recorded check.
 

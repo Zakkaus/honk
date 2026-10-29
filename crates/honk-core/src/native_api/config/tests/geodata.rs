@@ -2,6 +2,96 @@ use super::*;
 use crate::native_api::geodata::download_direct;
 
 #[tokio::test]
+async fn missing_codes_include_dns_without_requiring_a_state_database() {
+    for state_db in [false, true] {
+        let fixture = Fixture::build(
+            Access::Admin,
+            false,
+            |root, files| {
+                setup_rules(root, files);
+                let main = files.get_mut("main.dae").unwrap();
+                *main = main.replace(
+                    " fallback: direct",
+                    " domain(geosite: ZULU@cn, geosite: ALPHA) -> block\n dip(geoip: TELEGRAM, geoip: private) -> block\n fallback: direct",
+                );
+                main.push_str("dns {\n routing {\n request {\n qname(geosite: GOOGLE@cn, geosite: test@cn) -> reject\n fallback: asis\n }\n }\n}\n");
+            },
+            false,
+            state_db,
+        )
+        .await;
+        let data = fixture.get(GEO).await;
+        assert_eq!(data["assets"][0]["kind"], "geosite");
+        assert_eq!(
+            data["assets"][0]["missing_codes"],
+            json!(["alpha", "google", "zulu"])
+        );
+        assert_eq!(data["assets"][1]["kind"], "geoip");
+        assert_eq!(data["assets"][1]["missing_codes"], json!(["telegram"]));
+        assert_eq!(data.get("required_codes").is_some(), state_db);
+        assert_eq!(
+            route(&fixture, "unlisted.example", "8.8.8.8").await,
+            "direct"
+        );
+        // Once observed, the loaded digest's result survives disk removal.
+        for name in ["geosite.dat", "geoip.dat"] {
+            std::fs::remove_file(fixture.path(&format!("state/{name}"))).unwrap();
+        }
+        assert_eq!(fixture.get(GEO).await["assets"], data["assets"]);
+        fixture.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn missing_codes_cache_tracks_requirements_and_loaded_digest() {
+    if crate::native_api::logs::tests::run_isolated(
+        "native_api::config::tests::geodata::missing_codes_cache_tracks_requirements_and_loaded_digest",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new_custom(Access::Admin, false, |root, files| {
+        honk_config::paths::set_data_dir(root.join("state")).unwrap();
+        setup_rules(root, files);
+    })
+    .await;
+    let path = fixture.path("state/geosite.dat");
+    // A different category with the same byte length must not describe the
+    // loaded digest, and a failed observation must not poison the cache.
+    std::fs::write(&path, geosite_code(b"else", "old.example")).unwrap();
+    let unavailable = fixture.get(GEO).await;
+    assert!(unavailable["assets"][0].get("missing_codes").is_none());
+    assert_eq!(unavailable["assets"][1]["missing_codes"], json!([]));
+    std::fs::write(&path, geosite("old.example")).unwrap();
+    let before = fixture.get(GEO).await;
+    assert_eq!(before["assets"][0]["missing_codes"], json!([]));
+    assert_eq!(before["assets"][1]["missing_codes"], json!([]));
+    let config = fixture.get(CONFIG).await;
+    let main = source(&config, &fixture.originals["main.dae"]);
+    let candidate =
+        fixture.originals["main.dae"].replace("geosite: test", "geosite: test, geosite: google@cn");
+    let operation = accepted(fixture.replace(main, &candidate).send().await.unwrap()).await;
+    assert_eq!(fixture.terminal(&operation).await["status"], "succeeded");
+    let changed = fixture.get(GEO).await;
+    assert_eq!(
+        changed["assets"][0]["sha256"],
+        before["assets"][0]["sha256"]
+    );
+    assert_eq!(changed["assets"][0]["missing_codes"], json!(["google"]));
+    let mut complete = geosite("old.example");
+    complete.extend(geosite_code(b"google", "google.example"));
+    std::fs::write(&path, complete).unwrap();
+    let operation = accepted(fixture.request(Method::POST, RELOAD).send().await.unwrap()).await;
+    assert_eq!(fixture.terminal(&operation).await["status"], "succeeded");
+    let reloaded = fixture.get(GEO).await;
+    assert_ne!(
+        reloaded["assets"][0]["sha256"],
+        changed["assets"][0]["sha256"]
+    );
+    assert_eq!(reloaded["assets"][0]["missing_codes"], json!([]));
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn trace_displays_configured_values_in_compiled_condition_order() {
     let fixture = Fixture::new_custom(Access::Metadata, false, |root, files| {
         let directory = root.join("state");

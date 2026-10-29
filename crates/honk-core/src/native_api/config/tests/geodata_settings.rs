@@ -109,7 +109,12 @@ async fn custom_port_override_verifies_and_activates_after_failed_mirrors() {
     assert_eq!(std::fs::read(fixture.path("state/geoip.dat")).unwrap(), ip);
     assert_eq!(route(&fixture, "new.example", "192.0.2.5").await, "block");
     let data = fixture.get(GEO).await;
-    assert_eq!(data["assets"], terminal["result"]["assets"]);
+    let mut compared = data.clone();
+    // The update result omits `missing_codes`, which only GET reports.
+    for asset in compared["assets"].as_array_mut().unwrap() {
+        asset.as_object_mut().unwrap().remove("missing_codes");
+    }
+    assert_eq!(compared["assets"], terminal["result"]["assets"]);
     let assets = &data["assets"];
     assert_eq!(
         assets[0]["source_redacted"],

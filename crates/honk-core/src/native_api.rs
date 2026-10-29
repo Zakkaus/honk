@@ -64,6 +64,7 @@ pub struct NativeState {
     pub(crate) auth: Option<Arc<auth::Auth>>,
     /// Stored geodata sources and the update schedule; absent without a state db.
     pub(crate) geodata: Option<Arc<geodata::Sources>>,
+    geodata_missing_codes: Arc<geodata::MissingCodesCache>,
     ui: Option<ui::Ui>,
     instance_id: String,
     started_at: SystemTime,
@@ -173,6 +174,7 @@ impl NativeState {
             security: security::Security::new(&settings, listen),
             auth,
             geodata,
+            geodata_missing_codes: Arc::new(geodata::MissingCodesCache::default()),
             ui: ui::load(&settings.ui).await?,
             settings,
             instance_id: observation.core.instance_id.clone(),

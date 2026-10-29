@@ -304,6 +304,7 @@ impl Worker {
             published,
             &self.service,
             |name| geodata::group_id(&plan.catalog, name),
+            HashMap::new(),
         )
     }
 }
