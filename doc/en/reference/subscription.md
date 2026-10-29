@@ -165,6 +165,30 @@ The last valid body is the last body accepted by the current import policy, not 
 
 Changing `global.store_subscribe` through SIGHUP is rejected as restart-required.
 
+## First start when the subscription URL is blocked
+
+If the subscription URL is blocked or its domain is poisoned, add a reachable static proxy node and set the subscription's `route` to a group containing only that node.
+This group is available on first start without nodes from any subscription.
+Replace the SOCKS5 address below with a proxy that can reach the provider, and replace the subscription URL with your own.
+
+```dae
+node {
+    bootstrap: 'socks5://192.168.1.2:1080'
+}
+
+group {
+    Bootstrap {
+        filter: name(bootstrap)
+    }
+}
+
+subscription {
+    provider: 'https://example.com/sub' {
+        route: Bootstrap
+    }
+}
+```
+
 ## Subscription body formats
 
 All accepted nodes receive the subscription ID. Duplicate derived node IDs retain the first usable occurrence; rejected entries do not reserve an identity. Later duplicates report both original indices. Array indices are one-based before normalization; URI and record indices are physical lines, including blanks and comments. Decoded Base64 has a child source referring to its original body, not fabricated encoded-byte offsets. Importing a full client profile extracts its nodes, not its DNS, routing, groups, or remote-provider configuration.
