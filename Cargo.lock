@@ -1700,6 +1700,7 @@ dependencies = [
  "lru",
  "md-5",
  "parking_lot 0.13.0",
+ "percent-encoding",
  "quinn",
  "quinn-proto",
  "rand 0.10.3",

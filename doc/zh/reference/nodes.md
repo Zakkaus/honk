@@ -300,6 +300,8 @@ Shadowsocks UDP（传统 AEAD 与 2022）为每个客户端源的所有目的地
 
 所有已提供的别名须在赋值前比较，包括兼容的 `obfs` 声明和重复查询键。不一致则拒绝链接。`h2`、`kcp` 等不支持的名称在解析时被拒绝。`sni` 独立生效。除 XHTTP 外，分享链接的 `alpn` 仍只为兼容而接受，不会存储。
 
+WebSocket 路径和 gRPC 服务名中不能直接放进 URI 的字符（如空格和非 ASCII 文字）会进行百分号编码；已有的 `%XX` 转义和查询串（如 `?ed=2048`）保持不变。XHTTP 沿用下文的转义规则。
+
 ```dae
 node {
     trojan_ws: 'trojan://secret@example.com:443?type=ws&sni=example.com&host=example.com&path=/path#trojan_ws'

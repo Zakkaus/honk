@@ -303,6 +303,8 @@ Stream-capable share links select transport with `type=` or its `network=` alias
 
 All supplied aliases must agree before assignment, including compatible `obfs` declarations and repeated query keys. Unsupported names such as `h2` and `kcp` reject the link during parsing. `sni` is independent. Outside XHTTP, share-link `alpn` remains compatibility-only and is not stored.
 
+WebSocket paths and gRPC service names are percent-encoded where a URI cannot carry a character as is, such as a space or non-ASCII text. Existing `%XX` escapes and the query, for example `?ed=2048`, stay unchanged. XHTTP keeps its own escaping rules below.
+
 ```dae
 node {
     trojan_ws: 'trojan://secret@example.com:443?type=ws&sni=example.com&host=example.com&path=/path#trojan_ws'
