@@ -6,6 +6,34 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Entries live in [changes/](changes/) until release.
 
+## [0.1.0-beta.4] - 2026-10-30
+
+### Added
+
+- `ui: 'embedded-lite'` serves doona lite from the binary, and full builds embed doona 0.1.0-rc.3 with both editions. (#363)
+
+### Changed
+
+- Negative cache-hit outcome expiry uses the stored deadline, excluding preferred-family waits without reconstructing the deadline from a rounded TTL. Wire TTLs and routing behavior are unchanged. (#390)
+- Clash `/stats.dns` reports DNS socket admission refusals and timeouts, proxy admission timeouts, and idle resources selected for pressure retirement, without per-query warnings. (#390)
+- DNS UDP client admission now shares one process-wide budget across reloads; requests in retiring generations keep their permits until they finish instead of receiving a fresh quota each generation. (#390)
+- Tests that replace the process-global bootstrap resolver run in an isolated child process. (#390)
+- The lint gates compile the DNS benchmarks. (#390)
+
+### Fixed
+
+- WebSocket and gRPC nodes whose path or service name contains a space now connect instead of failing with "invalid uri character"; non-ASCII text is now normalized to percent-encoded UTF-8 ([#378](https://github.com/daeuniverse/honk/issues/378)). (#382)
+- The standalone `dns.bind` UDP listener handles much higher concurrent query load. Up to four supervisors, bounded by the Tokio worker count, receive datagrams in batches of up to eight, and an answer that is ready on its first poll is sent without spawning a task. A recent cache hit with an unchanged address set skips the route-projection locks for up to one second, so its route may expire up to one second later than the cache entry. (#381)
+- Sockets owned by upstream DNS use one bounded budget that persists across reloads. Under pressure, idle transports are reclaimed and a busy direct UDP upstream spreads over up to four sockets per address. A query whose upstream cannot obtain a socket is answered with `SERVFAIL`. (#381)
+- Concurrent UDP DNS client queries per DNS generation are capped at `min(1536, MemTotal / 4 / 256 KiB)`, replacing the previous cap of at most 256, with a fallback of 1536 when `MemTotal` is unreadable. Above the cap, `dns.bind` answers `REFUSED` and transparent port-53 UDP drops the query. (#381)
+- The startup descriptor-budget log replaces `dns_slow` with `dns_sockets` and `dns_udp_queries`. (#381)
+
+### Internal
+
+- Changelog entries come from per-PR fragments in `changes/`, and release notes list the released CHANGELOG section with the embedded doona version. (#364)
+- The README follows the doona README layout, with a table of release builds and both kinds of web UI. (#364)
+- CI path filters list only the files each lane reads, the release-script tests run on every PR, and the CI report shows unfinished runs as pending. (#364)
+
 ## [0.1.0-beta.3] - 2026-10-27
 
 Summarised from the [release notes](https://github.com/daeuniverse/honk/releases/tag/v0.1.0-beta.3), which list every change. Interface and VLAN handling changed for existing configurations: see the [migration guide](doc/migration/en/v0.1.0-beta.3.md).
@@ -57,7 +85,8 @@ Summarised from the [release notes](https://github.com/daeuniverse/honk/releases
 - Shared UDP sources survive malformed SOCKS5, Trojan and Juicity datagrams.
 - QUIC session tickets honour `skip_cert_verify`, and a reload restores warm carriers and probes.
 
-[Unreleased]: https://github.com/daeuniverse/honk/compare/v0.1.0-beta.3...HEAD
+[Unreleased]: https://github.com/daeuniverse/honk/compare/v0.1.0-beta.4...HEAD
+[0.1.0-beta.4]: https://github.com/daeuniverse/honk/compare/v0.1.0-beta.3...v0.1.0-beta.4
 [0.1.0-beta.3]: https://github.com/daeuniverse/honk/compare/v0.1.0-beta.2...v0.1.0-beta.3
 [0.1.0-beta.2]: https://github.com/daeuniverse/honk/compare/v0.1.0-beta.1...v0.1.0-beta.2
 [0.1.0-beta.1]: https://github.com/daeuniverse/honk/compare/v0.0.1.beta.84...v0.1.0-beta.1
