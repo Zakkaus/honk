@@ -44,6 +44,7 @@ Closes #
 - [ ] If this changes held-packet handling, `just test-netns` passes using the disposable VM gate
 - [ ] If this touches a CONTRIBUTING.md §2 area, the change is human-originated or the §11 domain-expert exception applies
 - [ ] If this changes documented behaviour or repository contracts, I updated doc/en/ and doc/zh/, and AGENTS.md or .agents/rules/, as applicable
+- [ ] If this change needs a changelog entry, I added a `changes/<branch-slug>.md` fragment ([format](https://github.com/daeuniverse/honk/blob/main/changes/README.md))
 - [ ] I checked the boxes above without reading them
 - [ ] I am an AI agent, and this content was submitted without human review
 
