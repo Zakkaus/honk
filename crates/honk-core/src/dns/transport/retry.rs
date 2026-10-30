@@ -167,9 +167,7 @@ mod tests {
                 .expect("Score candidate feedback");
             for _ in 0..32 {
                 let reporter = feedback.start();
-                reporter.setup_succeeded();
                 reporter.tx(1);
-                reporter.first_response();
                 reporter.rx(1);
                 reporter.finish(ScoreOutcome::Success);
             }
@@ -179,6 +177,10 @@ mod tests {
         let incumbent = plan.entries[0].node.id;
         let feedback = manager
             .feedback_for_group_node("score", incumbent, context.clone())
+            .unwrap();
+        let challenger = nodes.iter().find(|node| node.id != incumbent).unwrap().id;
+        let challenger = manager
+            .feedback_for_group_node("score", challenger, context.clone())
             .unwrap();
         let calls = AtomicUsize::new(0);
         let query = vec![
@@ -190,6 +192,9 @@ mod tests {
         response[2..4].copy_from_slice(&0x8180_u16.to_be_bytes());
 
         for _ in 0..32 {
+            // Latency is wall-clock time. Warm-up reports none, and each challenger
+            // sample encloses an incumbent exchange, so a stall cannot favour it.
+            let enclosing = challenger.start();
             super::exchange_with_retry(
                 "test",
                 &query,
@@ -213,6 +218,11 @@ mod tests {
             )
             .await
             .expect("retry succeeds");
+            enclosing.setup_succeeded();
+            enclosing.tx(1);
+            enclosing.first_response();
+            enclosing.rx(1);
+            enclosing.finish(ScoreOutcome::Success);
         }
 
         let selected = manager.selection_plan_for_target("score", &context).entries[0]

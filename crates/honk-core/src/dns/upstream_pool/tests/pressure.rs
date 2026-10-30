@@ -245,13 +245,18 @@ async fn borrowed_udp_completion_releases_blocked_query() {
     .await;
 }
 
+// One thread fixes the order: the receive task's yield_now resumes only after the
+// query it woke dropped its Arc, and its exit completes before the creator runs.
 #[cfg(target_os = "linux")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn receive_task_last_arc_releases_blocked_creator() {
     stall_guard(async {
+        // A dropped socket frees its port for any concurrent process to bind. A
+        // socket connected to itself keeps the port and still lets the kernel
+        // answer other senders with port unreachable.
         let a_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let a_address = a_socket.local_addr().unwrap();
-        drop(a_socket);
+        a_socket.connect(a_address).await.unwrap();
         let (b_address, b_server) = spawn_udp_echo(1).await;
         let budget = DnsSocketBudget::new(1);
         let pool = Arc::new(
