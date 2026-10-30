@@ -9,11 +9,13 @@ understand='I understand this change and answer for every line'
 main='This branch is based on the current main'
 gates="I ran the repository's gates and recorded the results in Verified"
 commits='Each commit is one coherent change'
+ai_yes='AI helped write this change'
+ai_no='No AI was used for this change'
 
 check_body() {
     jq -Rs --arg kind "$1" --arg search "$search" --arg trap "$trap_box" \
         --arg agent "$agent_box" --arg understand "$understand" --arg main "$main" \
-        --arg gates "$gates" --arg commits "$commits" '
+        --arg gates "$gates" --arg commits "$commits" --arg ai_yes "$ai_yes" --arg ai_no "$ai_no" '
         def trim: gsub("^\\s+|\\s+$"; "");
         def boxes($text): [split("\n")[] |
             capture("^\\s*[-*] \\[(?<mark>[ x])\\] " + $text + "(?:\\s*/[^\\n]*)?\\s*$"; "i") | .mark | ascii_downcase];
@@ -35,6 +37,8 @@ check_body() {
             {test: ($kind == "pr" and ([$understand, $main, $gates, $commits] |
                 any(. as $box | $body | kept($box) | not))),
                 en: "Keep and check all four unconditional PR boxes.", zh: "请保留并勾选 PR 的四项必选选项。"},
+            {test: ($kind == "pr" and (checked($ai_yes) == checked($ai_no))),
+                en: "Check exactly one of the two AI boxes.", zh: "请在两个 AI 选项中勾选一项，且只能勾选一项。"},
             {test: ($kind == "issue" and (kept($search) | not)),
                 en: "Keep and check the existing-issue search box.", zh: "请保留并勾选“我已搜索过现有 issue”。"}
         ] | map(select(.test) | {en, zh}) end'

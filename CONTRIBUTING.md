@@ -42,7 +42,7 @@ LLM-generated code is welcome in:
 **Conditions (all mandatory):**
 
 1. **Pre-arranged.** The change fits an agreed division of labor, not a drive-by PR.
-2. **Disclosed.** The PR description must state which files/areas are LLM-generated (see §5). Undisclosed LLM authorship is grounds for closing.
+2. **Disclosed.** The PR description states whether AI was used (see §5). Undisclosed AI use is grounds for closing.
 3. **Tested.** Any LLM-created production-adjacent code (fixtures, mocks that other tests depend on) must itself be exercised by CI. Benchmarks must carry their contract assertions in-tree.
 4. **Human-reviewed.** A human maintainer has read the diff. LLM review never substitutes for human review or self-review.
 5. **Invariants respected.** LLM-created code must obey every contract in `AGENTS.md` (e.g. never call `clear_routes` on the push path; generation-bound ownership; no new lock edges). Reviewers should assume the generator generalized the contract imperfectly and check the seams.
@@ -57,9 +57,9 @@ LLM-generated code is welcome in:
 
 ## 5. Responsibility for AI-assisted work
 
-AI may help with writing, analysis and review. Before submitting, the submitter must have read and tested everything, understand every line, and answer for it. No per-file AI disclosure is required.
+AI may help with writing, analysis and review. Before submitting, the submitter must have read and tested everything, understand every line, and answer for it. State in the pull request whether AI helped write it; which files it wrote need not be listed.
 
-Start the pull request body from `.github/pull_request_template.md`, also when you open it with `gh pr create --body` or the API, which do not fill it in. Keep its checklist and check only true boxes. For an outside contributor, `template-check` closes a pull request that drops a required box or checks the unread or AI-agent box, and reopens it once the body is fixed.
+Start the pull request body from `.github/pull_request_template.md`, also when you open it with `gh pr create --body` or the API, which do not fill it in. Keep its checklist and check only true boxes. For an outside contributor, `template-check` closes a pull request that drops a required box, does not check exactly one of the two AI boxes, or checks the unread or AI-agent box, and reopens it once the body is fixed.
 
 ## 6. Adversarial deep review
 

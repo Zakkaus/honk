@@ -38,6 +38,8 @@ Closes #
 - [ ] This branch is based on the current main
 - [ ] I ran the repository's gates and recorded the results in Verified
 - [ ] Each commit is one coherent change
+- [ ] AI helped write this change
+- [ ] No AI was used for this change
 - [ ] If I changed code, `just fmt`, `just lint` and `just test-ci` pass
 - [ ] If this changes held-packet handling, `just test-netns` passes using the disposable VM gate
 - [ ] If this touches a CONTRIBUTING.md §2 area, the change is human-originated or the §11 domain-expert exception applies
