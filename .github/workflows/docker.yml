@@ -4,7 +4,7 @@ name: Docker
 # release is published, not when the tag creates the draft.
 on:
   release:
-    types: [prereleased, released]
+    types: [published]
   workflow_dispatch:
     inputs:
       version:
