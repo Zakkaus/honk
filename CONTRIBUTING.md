@@ -59,6 +59,8 @@ LLM-generated code is welcome in:
 
 AI may help with writing, analysis and review. Before submitting, the submitter must have read and tested everything, understand every line, and answer for it. No per-file AI disclosure is required.
 
+Start the pull request body from `.github/pull_request_template.md`, also when you open it with `gh pr create --body` or the API, which do not fill it in. Keep its checklist and check only true boxes. For an outside contributor, `template-check` closes a pull request that drops a required box or checks the unread or AI-agent box, and reopens it once the body is fixed.
+
 ## 6. Adversarial deep review
 
 PRs touching §2 areas, or modifying any invariant named in `AGENTS.md`, require a deep review pass in addition to normal review. The deep review must:
