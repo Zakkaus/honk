@@ -411,6 +411,32 @@ sudo journalctl -xefu honk-core
 
 Do not add strict capability bounding, a read-only `/proc/sys`, or `NoNewPrivileges=yes` before validating it. Startup needs BPF, network administration, network namespace, mount, sysctl, and transparent-socket privileges.
 
+## Run with Docker
+
+The `daeuniverse/honk` image contains the musl `full` release binary and the GeoIP and Geosite files pinned by the repository; the build checks every download against its SHA-256 checksum. Each release is tagged with its version without the `v`; `latest` follows formal releases only, never pre-releases.
+
+The container runs privileged in the host's network and PID namespaces, because honk loads and attaches eBPF programs, creates `dae0` and the `daens` namespace, changes sysctls and pins maps on the host's bpffs. It therefore changes the host exactly as a native installation does and provides no isolation. The host must meet the [kernel requirements](#linux-kernel-requirements), including Linux 6.12+ and a mounted bpffs.
+
+Prepare `/etc/honk/config.dae` and `/var/lib/honk` as in [Minimal configuration](#minimal-configuration), then start the repository's `docker-compose.yml` with the release version in `.env`:
+
+```shell
+curl -fLO https://raw.githubusercontent.com/daeuniverse/honk/main/docker-compose.yml
+echo 'HONK_VERSION=<version>' > .env   # for example 0.1.0-beta.4
+sudo docker compose up -d
+sudo docker compose logs -f
+```
+
+The file mounts `/sys`, `/etc/honk` and `/var/lib/honk` from the host. The configuration mount replaces the image's direct-only default, and `/var/lib/honk` keeps the runtime state, such as the native API administrator account, across restarts and upgrades. Reload the configuration with `sudo docker compose exec honk honk-core reload`.
+
+To upgrade, change `HONK_VERSION` in `.env` and recreate the container:
+
+```shell
+sudo docker compose pull
+sudo docker compose up -d
+```
+
+In a repository checkout, `sudo docker compose build` builds the same image from the published release instead of pulling it.
+
 ## Check runtime status
 
 A running process does not prove that the datapath is usable. The logs should show that the real eBPF backend, interface hooks, listeners, and control plane are all ready.
@@ -494,7 +520,7 @@ cargo run --release -p honk-core -- \
 - `direct` and `block` are built-in nodes and must not be redeclared.
 - `nfqueue_enable` defaults to enabled, always uses queue 320, and exclusively owns `inet honk_nfqueue` / `udp_decision`. Firewall managers in the same network namespace must not modify those objects.
 - Mock builds and builds without the Cargo `ebpf` feature do not provide transparent proxying. Plain `cargo build --release` omits the real datapath; use `--features ebpf`.
-- VMess UDP, a rootless datapath, Dockerfile/docker-compose definitions, and non-Linux platforms are not currently supported.
+- VMess UDP, a rootless datapath, and non-Linux platforms are not currently supported.
 
 ## Troubleshooting
 
