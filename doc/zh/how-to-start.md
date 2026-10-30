@@ -422,11 +422,21 @@ honk 需要加载并挂载 eBPF 程序、创建 `dae0` 和 `daens` 命名空间�
 ```shell
 curl -fLO https://raw.githubusercontent.com/daeuniverse/honk/main/docker-compose.yml
 echo 'HONK_VERSION=<version>' > .env   # 例如 0.1.0-beta.4
+sudo touch /run/honk-core.lock
 sudo docker compose up -d
 sudo docker compose logs -f
 ```
 
 该文件从宿主机挂载 `/sys`、`/etc/honk` 和 `/var/lib/honk`。配置目录的挂载会覆盖镜像内仅直连的默认配置；`/var/lib/honk` 保存运行时状态，例如原生 API 的管理员账户，重启或升级后仍然保留。重载配置使用 `sudo docker compose exec honk honk-core reload`。
+
+锁文件挂载让容器与原生实例共享 `/run/honk-core.lock`，防止容器接管正在运行的数据路径。停止后也应保留此文件；不要删除、替换或截断仍可能被实例持有的锁。每次开机后，必须先创建锁文件，再自动启动容器。使用 systemd 的宿主机可配置不截断已有文件的开机创建规则：
+
+```shell
+echo 'f /run/honk-core.lock 0600 root root -' | sudo tee /etc/tmpfiles.d/honk-container.conf
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/honk-container.conf
+```
+
+其他 init 系统也须在开机启动容器前，以不截断的方式创建该文件。直接使用 `docker run` 或 `podman run` 部署时，同样必须挂载此锁文件。
 
 升级时修改 `.env` 中的 `HONK_VERSION`，然后重新创建容器：
 

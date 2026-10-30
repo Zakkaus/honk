@@ -422,11 +422,21 @@ Prepare `/etc/honk/config.dae` and `/var/lib/honk` as in [Minimal configuration]
 ```shell
 curl -fLO https://raw.githubusercontent.com/daeuniverse/honk/main/docker-compose.yml
 echo 'HONK_VERSION=<version>' > .env   # for example 0.1.0-beta.4
+sudo touch /run/honk-core.lock
 sudo docker compose up -d
 sudo docker compose logs -f
 ```
 
 The file mounts `/sys`, `/etc/honk` and `/var/lib/honk` from the host. The configuration mount replaces the image's direct-only default, and `/var/lib/honk` keeps the runtime state, such as the native API administrator account, across restarts and upgrades. Reload the configuration with `sudo docker compose exec honk honk-core reload`.
+
+The lock-file bind shares the native instance's `/run/honk-core.lock`, preventing containers from taking over an active datapath. Leave this file in place after stopping; never delete, replace or truncate an active lock. It must exist before automatic container startup on every boot. On systemd hosts, arrange non-truncating boot-time creation:
+
+```shell
+echo 'f /run/honk-core.lock 0600 root root -' | sudo tee /etc/tmpfiles.d/honk-container.conf
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/honk-container.conf
+```
+
+On other init systems, create the file without truncation before the container's boot-time start. Direct `docker run` or `podman run` deployments must bind the same lock file too.
 
 To upgrade, change `HONK_VERSION` in `.env` and recreate the container:
 

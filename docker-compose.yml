@@ -14,3 +14,8 @@ services:
       - /sys:/sys
       - /etc/honk:/etc/honk
       - /var/lib/honk:/var/lib/honk
+      - type: bind
+        source: /run/honk-core.lock
+        target: /run/honk-core.lock
+        bind:
+          create_host_path: false
