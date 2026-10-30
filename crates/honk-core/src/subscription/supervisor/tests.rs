@@ -763,41 +763,49 @@ async fn startup_rejects_a_cached_provider_whose_node_duplicates_an_inline_node(
 }
 
 #[tokio::test]
-async fn startup_rejects_a_provider_whose_node_duplicates_another_provider() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = SubscriptionStore::in_dir(temp.path());
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let first = authorized(uuid::Uuid::new_v4(), 1, format!("{url}/first"));
-    let second = authorized(uuid::Uuid::new_v4(), 1, format!("{url}/second"));
-    for (provider, body) in [
-        (&first, "socks5://127.0.0.1:1080#first"),
-        (&second, "socks5://127.0.0.1:1080#second"),
+async fn startup_drops_provider_nodes_another_provider_published() {
+    for (second_body, expected) in [
+        (
+            "socks5://127.0.0.1:1080#second\nsocks5://127.0.0.1:1082#second-own",
+            &["kept", "first", "second-own"][..],
+        ),
+        ("socks5://127.0.0.1:1080#second", &["kept", "first"][..]),
     ] {
-        store
-            .store_content(&provider.subscription, body.into())
-            .await
-            .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let store = SubscriptionStore::in_dir(temp.path());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let first = authorized(uuid::Uuid::new_v4(), 1, format!("{url}/first"));
+        let second = authorized(uuid::Uuid::new_v4(), 1, format!("{url}/second"));
+        for (provider, body) in [
+            (&first, "socks5://127.0.0.1:1080#first"),
+            (&second, second_body),
+        ] {
+            store
+                .store_content(&provider.subscription, body.into())
+                .await
+                .unwrap();
+        }
+        let mut config = Config {
+            nodes: inline("socks5://127.0.0.1:1081#kept"),
+            subscriptions: vec![first.subscription.clone(), second.subscription.clone()],
+            ..Default::default()
+        };
+        let mut state =
+            SupervisorState::new(Arc::new(SubscriptionManager::new().unwrap()), Some(store));
+        state.reconcile(vec![first.clone(), second.clone()]);
+
+        state.prepare_startup(&mut config, Vec::new()).await;
+
+        config.validate_assembled().unwrap();
+        assert_eq!(node_names(&config), expected);
+        for provider in [&first, &second] {
+            let load = state.observations.read()[&provider.subscription.id].load;
+            assert!(load.updated_at.is_some() && load.cached);
+            assert_eq!((load.error, load.rejection), (None, None));
+        }
+        state.shutdown().await.unwrap();
     }
-    let mut config = Config {
-        nodes: inline("socks5://127.0.0.1:1081#kept"),
-        subscriptions: vec![first.subscription.clone(), second.subscription.clone()],
-        ..Default::default()
-    };
-    let mut state =
-        SupervisorState::new(Arc::new(SubscriptionManager::new().unwrap()), Some(store));
-    state.reconcile(vec![first.clone(), second.clone()]);
-
-    state.prepare_startup(&mut config, Vec::new()).await;
-
-    config.validate_assembled().unwrap();
-    assert_eq!(node_names(&config), ["kept", "first"]);
-    assert_eq!(
-        state.observations.read()[&first.subscription.id].load.error,
-        None
-    );
-    assert_rejected(&state, second.subscription.id);
-    state.shutdown().await.unwrap();
 }
 
 #[tokio::test]

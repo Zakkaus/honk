@@ -149,7 +149,7 @@ Startup restores nodes before refreshing subscriptions:
 
 A later accepted refresh replaces the SQLite body row, not a legacy file.
 
-If a restored or first-fetched body contains a node ID already used by an inline node or another subscription, startup excludes that subscription instead of failing. Runtime publication rejects the same collision. A body may still replace its own subscription's nodes.
+If a restored or first-fetched body contains a node ID already used by an inline node, startup excludes that subscription instead of failing, and runtime publication rejects the same collision. A node whose ID another subscription already published is dropped from this subscription with a warning, and its other nodes are published; the first subscription keeps the node. A body may still replace its own subscription's nodes.
 
 The native API provider reports `last_error.code` as `publication_rejected` and `last_error.details.diagnostic_code` as `duplicate-node-id`. A restored body rejected this way still counts as restored: it skips the first-fetch wait. Background refresh still runs and repeats the check.
 

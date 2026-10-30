@@ -178,6 +178,49 @@ pub(crate) fn validate_subscription_ids(subscriptions: &[Subscription]) -> anyho
     Ok(())
 }
 
+/// Drops the nodes whose IDs another provider already published, so an
+/// endpoint served by two providers stays with the first one instead of
+/// rejecting the whole publication of the second.
+pub(crate) fn drop_nodes_published_elsewhere(
+    published: &[Node],
+    subscriptions: &[Subscription],
+    provider: uuid::Uuid,
+    nodes: &mut Vec<Node>,
+) {
+    let owners: HashMap<_, _> = published
+        .iter()
+        .filter_map(|node| Some((node.id, node.subscription_id.filter(|id| *id != provider)?)))
+        .collect();
+    let mut dropped = Vec::new();
+    let mut dropped_owners = Vec::new();
+    nodes.retain(|node| {
+        let Some(owner) = owners.get(&node.id) else {
+            return true;
+        };
+        dropped.push(node.name.clone());
+        if !dropped_owners.contains(owner) {
+            dropped_owners.push(*owner);
+        }
+        false
+    });
+    if dropped.is_empty() {
+        return;
+    }
+    let name = |id: uuid::Uuid| {
+        subscriptions
+            .iter()
+            .find(|subscription| subscription.id == id)
+            .map_or("", |subscription| subscription.name.as_str())
+    };
+    let owners: Vec<_> = dropped_owners.into_iter().map(name).collect();
+    warn!(
+        provider = %name(provider),
+        nodes = %dropped.join(", "),
+        owners = %owners.join(", "),
+        "Subscription nodes already published by another provider; keeping the first copy"
+    );
+}
+
 struct FetchCompletion {
     authorized: AuthorizedSubscription,
     result: Option<anyhow::Result<(Vec<Node>, SubscriptionUserinfo)>>,
