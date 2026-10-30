@@ -438,6 +438,22 @@ sudo systemd-tmpfiles --create /etc/tmpfiles.d/honk-container.conf
 
 其他 init 系统也须在开机启动容器前，以不截断的方式创建该文件。直接使用 `docker run` 或 `podman run` 部署时，同样必须挂载此锁文件。
 
+如果宿主机使用外部原始 BTF 文件，而不是 `/sys/kernel/btf/vmlinux`，将以下内容保存为 `docker-compose.yml` 同目录的 `docker-compose.override.yml`。Compose 的每个命令（包括升级）都会加载它。将 `source` 改为宿主机的原始 BTF 文件路径；环境变量填写容器内的挂载路径：
+
+```yaml
+services:
+  honk:
+    environment:
+      HONK_VMLINUX_BTF: /run/honk-vmlinux
+    volumes:
+      - type: bind
+        source: /usr/lib/debug/boot/vmlinux
+        target: /run/honk-vmlinux
+        read_only: true
+        bind:
+          create_host_path: false
+```
+
 升级时修改 `.env` 中的 `HONK_VERSION`，然后重新创建容器：
 
 ```shell

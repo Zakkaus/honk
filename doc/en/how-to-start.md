@@ -438,6 +438,22 @@ sudo systemd-tmpfiles --create /etc/tmpfiles.d/honk-container.conf
 
 On other init systems, create the file without truncation before the container's boot-time start. Direct `docker run` or `podman run` deployments must bind the same lock file too.
 
+If the host uses an external raw BTF file instead of `/sys/kernel/btf/vmlinux`, save this as `docker-compose.override.yml` beside `docker-compose.yml`. Compose loads it for every command, including upgrades. Adjust `source` to the host's raw BTF file; the environment variable names the mounted path inside the container:
+
+```yaml
+services:
+  honk:
+    environment:
+      HONK_VMLINUX_BTF: /run/honk-vmlinux
+    volumes:
+      - type: bind
+        source: /usr/lib/debug/boot/vmlinux
+        target: /run/honk-vmlinux
+        read_only: true
+        bind:
+          create_host_path: false
+```
+
 To upgrade, change `HONK_VERSION` in `.env` and recreate the container:
 
 ```shell
