@@ -7,7 +7,7 @@ FROM --platform=$BUILDPLATFORM alpine:3.24 AS fetch
 ARG HONK_VERSION
 ARG TARGETARCH
 
-# The geodata pins live in .github/ci/pins.env alone; the CI geosite tests use the same files.
+# The geodata pins live in .github/ci/pins.env alone.
 RUN --mount=type=bind,source=.github/ci/pins.env,target=/tmp/pins.env \
     set -eux; \
     test -n "$HONK_VERSION"; \

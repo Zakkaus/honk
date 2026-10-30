@@ -49,7 +49,6 @@ jobs:
             PRERELEASE=true
           fi
           tags="$image:$version"
-          # Pre-releases never get latest.
           [[ "$PRERELEASE" == true ]] || tags+=$'\n'"$image:latest"
           {
             echo "version=$version"
