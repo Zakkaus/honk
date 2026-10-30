@@ -401,6 +401,27 @@ async fn restart_only_change_is_refused_before_writing() {
 }
 
 #[tokio::test]
+async fn nfqueue_disabled_at_startup_is_written_and_stays_disabled() {
+    let fixture = Fixture::new(Access::Admin, false).await;
+    fixture.startup_downgrades.record_nfqueue_unavailable();
+    let before = fixture.get(CONFIG).await;
+    let main = source(&before, &fixture.originals["main.dae"]);
+    let candidate = fixture.originals["main.dae"]
+        .replace("nfqueue_enable: false", "nfqueue_enable: true")
+        .replace("fallback: direct", "fallback: block");
+
+    let checked = ok(fixture.validate("full", &candidate).send().await.unwrap()).await;
+    assert_eq!(checked["valid"], true, "{checked}");
+    restart_rows(&checked["diagnostics"], "candidate", "warning", &[]);
+    let operation = accepted(fixture.replace(main, &candidate).send().await.unwrap()).await;
+    assert_eq!(fixture.terminal(&operation).await["status"], "succeeded");
+    let active = fixture.active.read().await.clone();
+    assert!(!active.global.nfqueue_enable);
+    assert_eq!(active.routing.default_outbound, "block");
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn dependency_change_before_rename_rejects_without_overwriting_external_content() {
     let fixture = Fixture::new(Access::Admin, false).await;
     let before = fixture.get(CONFIG).await;
