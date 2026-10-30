@@ -55,15 +55,9 @@ LLM-generated code is welcome in:
 4. **Tests must attack, not mirror.** Reviewers of LLM-written tests should sample whether assertions are independently derived semantic claims (e.g. "old-generation entries survive one transition") or restatements of the implementation. Mirror tests are rejected regardless of coverage numbers.
 5. **Reviewers may close non-compliant PRs** with a pointer to this document, no questions asked.
 
-## 5. Disclosure
+## 5. Responsibility for AI-assisted work
 
-Every PR must answer, in its description or the PR template:
-
-- Which parts (by file or area) are LLM-generated?
-- Which LLM tools/agents were used, if any, for analysis or review?
-- If LLM-written tests cover human-written core code: what did the author verify beyond the tests?
-
-Disclosure calibrates reviewer trust. Hidden LLM involvement is treated as a breach of trust between author and reviewer, independent of code quality.
+AI may help with writing, analysis and review. Before submitting, the submitter must have read and tested everything, understand every line, and answer for it. No per-file AI disclosure is required.
 
 ## 6. Adversarial deep review
 
