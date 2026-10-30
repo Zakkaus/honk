@@ -10,7 +10,7 @@ Entries live in [changes/](changes/) until release.
 
 ### Added
 
-- `ui: 'embedded-lite'` serves doona lite from the binary, and full builds embed doona 0.1.0-rc.3 with both editions. (#363)
+- `ui: 'embedded-lite'` serves doona lite from the binary, and full builds embed doona 0.1.0-rc.4 with both editions. (#363)
 
 ### Changed
 
