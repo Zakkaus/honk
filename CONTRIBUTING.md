@@ -78,13 +78,13 @@ An unbroken streak of "no findings" from any single reviewer — human or LLM �
 - CI regression gates that turn performance/correctness claims into executable checks
 - Keeping `AGENTS.md` and `.agents/rules/` synchronized with code changes
 - First-pass review, evidence audit, and adversarial second-pass review under human direction
-- Analysis, translation, summarization — without posting raw output where maintainers are expected to read it unmarked
+- Analysis, translation, summarization — with the pull request stating that AI helped, as §5 requires; individual passages need not be marked
 
 ## 8. What LLMs are not for here
 
 - Originating changes in §2 areas unless the domain-expert exception in §11 applies
 - Substituting for the author's mental model of merged code
-- Producing PR descriptions, issue text, or review replies posted without disclosure
+- Producing PR descriptions, issue text, or review replies posted without saying whether AI helped write them; one statement per pull request, issue or reply is enough, and the parts need not be listed
 - Lowering any existing bar: clippy clean, passing the applicable CI and documented validation gates, and `AGENTS.md`/`.agents/rules/` synchronization are required of LLM-assisted PRs exactly as of human ones. Use the gates in [CI](.github/workflows/ci.yml), the [Justfile](Justfile), `AGENTS.md` and `.agents/rules/`, including only their explicitly documented temporary test exclusions. Disclosure and human review remain mandatory; LLM assistance is never a reason to skip required validation.
 
 ## 9. Enforcement and scope notes
