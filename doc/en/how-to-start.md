@@ -254,6 +254,8 @@ See the [configuration guide](configuration.md) for the complete configuration f
 
 ### Single-arm gateways
 
+This setup is not supported; questions and bug reports about it are not answered.
+
 On a single-arm gateway, also called a bypass router, `lan_interface` and the WAN are the same interface or bridge: clients use the honk host as their gateway, and the host sends their traffic back out through that interface to the upstream router. Set the three kernel parameters below on such a host. honk does not set these three, and `auto_config_kernel_parameter` does not change that (see the [global reference](reference/global.md)).
 
 - With `send_redirects` on, the kernel sends clients ICMP redirects that point them at the upstream router, and their traffic then bypasses honk. The kernel sends redirects when either the `all` or the interface value is `1`, so set both to `0`.
