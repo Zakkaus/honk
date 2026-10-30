@@ -5,7 +5,6 @@
 FROM --platform=$BUILDPLATFORM alpine:3.24 AS fetch
 
 ARG HONK_VERSION
-ARG HONK_REPOSITORY=daeuniverse/honk
 ARG TARGETARCH
 
 # The geodata pins live in .github/ci/pins.env alone; the CI geosite tests use the same files.
@@ -19,7 +18,7 @@ RUN --mount=type=bind,source=.github/ci/pins.env,target=/tmp/pins.env \
     esac; \
     . /tmp/pins.env; \
     pkg="honk-core-v${HONK_VERSION}-${arch}-unknown-linux-musl-full"; \
-    release="https://github.com/${HONK_REPOSITORY}/releases/download/v${HONK_VERSION}"; \
+    release="https://github.com/daeuniverse/honk/releases/download/v${HONK_VERSION}"; \
     mkdir /work /out; \
     cd /work; \
     wget -q "$release/SHA256SUMS" "$release/$pkg.tar.gz"; \
