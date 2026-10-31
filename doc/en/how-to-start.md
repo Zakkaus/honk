@@ -141,7 +141,7 @@ sudo cp /etc/honk/example.dae /etc/honk/config.dae      # then edit it
 sudo systemctl enable --now honk-core
 ```
 
-Upgrading the package restarts a running `honk-core.service`; removing it stops and disables the service.
+Upgrading the package restarts a running `honk-core.service`; removing it stops and disables the service. honk and dae attach to the same interfaces and cannot run at the same time: the unit declares `Conflicts=dae.service`, so starting either service stops the other. When switching from dae, also run `sudo systemctl disable dae` so that dae does not start at boot.
 
 ### Build from source
 
@@ -381,6 +381,7 @@ Create `/etc/systemd/system/honk-core.service`:
 Description=honk transparent proxy engine
 Wants=network-online.target
 After=network-online.target
+Conflicts=dae.service
 
 [Service]
 Type=notify

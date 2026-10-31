@@ -141,7 +141,7 @@ sudo cp /etc/honk/example.dae /etc/honk/config.dae      # 然后按需修改
 sudo systemctl enable --now honk-core
 ```
 
-升级软件包会重启正在运行的 `honk-core.service`，卸载软件包会停止并禁用该服务。
+升级软件包会重启正在运行的 `honk-core.service`，卸载软件包会停止并禁用该服务。honk 与 dae 挂载在同一批网卡上，不能同时运行：该服务声明了 `Conflicts=dae.service`，启动其中一个就会停止另一个。从 dae 切换过来时，还要执行 `sudo systemctl disable dae`，避免 dae 开机自启。
 
 ### 从源码构建
 
@@ -381,6 +381,7 @@ sudo curl -fL --retry 3 -o /var/lib/honk/geoip.dat \
 Description=honk transparent proxy engine
 Wants=network-online.target
 After=network-online.target
+Conflicts=dae.service
 
 [Service]
 Type=notify
