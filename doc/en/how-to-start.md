@@ -129,6 +129,20 @@ With the GitHub CLI installed, `gh attestation verify "$pkg.tar.gz" -R daeuniver
 
 Release binaries embed the eBPF object, so `honk-ebpf` does not need to be installed separately. At runtime, the engine does not invoke `ip`, `nft`, `iptables`, or `nsenter` subprocesses.
 
+### Distribution packages
+
+Formal releases also attach packages of the static musl full build for `x86_64` and `aarch64`: `.deb` for Debian and Ubuntu, `.rpm` for Fedora and RHEL, and `.pkg.tar.zst` for Arch Linux. Each installs `/usr/bin/honk-core`, the `honk-core.service` unit and `/etc/honk/example.dae`, so [Run with systemd](#run-with-systemd) does not apply.
+
+```shell
+sudo apt install ./honk-core-<version>-x86_64.deb       # Debian, Ubuntu
+sudo dnf install ./honk-core-<version>-x86_64.rpm       # Fedora, RHEL
+sudo pacman -U ./honk-core-<version>-x86_64.pkg.tar.zst # Arch Linux
+sudo cp /etc/honk/example.dae /etc/honk/config.dae      # then edit it
+sudo systemctl enable --now honk-core
+```
+
+Upgrading the package restarts a running `honk-core.service`; removing it stops and disables the service.
+
 ### Build from source
 
 The real-eBPF source build below uses:
