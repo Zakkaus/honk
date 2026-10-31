@@ -427,7 +427,7 @@ sudo docker compose up -d
 sudo docker compose logs -f
 ```
 
-The file mounts `/sys`, `/etc/honk` and `/var/lib/honk` from the host. The configuration mount replaces the image's direct-only default, and `/var/lib/honk` keeps the runtime state, such as the native API administrator account, across restarts and upgrades. Reload the configuration with `sudo docker compose exec honk honk-core reload`.
+The file mounts `/sys`, `/etc/honk` and `/var/lib/honk` from the host. The configuration mount replaces the image's direct-only default, and `/var/lib/honk` keeps the runtime state, such as the native API administrator account, across restarts and upgrades. Reload the configuration with `sudo docker compose exec honk honk-core reload`. The image ships iproute2 and nftables, and the container shares the host's network namespace, so `sudo docker compose exec honk ip rule`, `ip route show table all`, `tc filter show dev <interface> ingress` and `nft list ruleset` show the host's state.
 
 The lock-file bind shares the native instance's `/run/honk-core.lock`, preventing containers from taking over an active datapath. Leave this file in place after stopping; never delete, replace or truncate an active lock. It must exist before automatic container startup on every boot. On systemd hosts, arrange non-truncating boot-time creation:
 

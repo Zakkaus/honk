@@ -39,6 +39,10 @@ RUN --mount=type=bind,source=.github/ci/pins.env,target=/tmp/pins.env \
 # the CA bundle that the platform certificate verifier reads.
 FROM alpine:3.24
 
+# Full iproute2 (ip, tc, ss) and nft for inspecting routes, rules, tc filters and the
+# NFQUEUE table from inside the container; busybox ip lacks most of that.
+RUN apk add --no-cache iproute2 nftables
+
 COPY --from=fetch /out/ /
 COPY --chmod=0600 install/docker.dae /etc/honk/config.dae
 
