@@ -413,7 +413,7 @@ Do not add strict capability bounding, a read-only `/proc/sys`, or `NoNewPrivile
 
 ## Run with Docker
 
-The `daeuniverse/honk` image contains the musl `full` release binary and the GeoIP and Geosite files pinned by the repository; the build checks every download against its SHA-256 checksum. Each release is tagged with its version without the `v`; `latest` follows formal releases only, never pre-releases.
+The image `ghcr.io/daeuniverse/honk` on [GitHub Container Registry](https://github.com/daeuniverse/honk/pkgs/container/honk) contains the musl `full` release binary and the GeoIP and Geosite files pinned by the repository; the build checks every download against its SHA-256 checksum. Each release is tagged with its version without the `v`, for example `ghcr.io/daeuniverse/honk:0.1.0-beta.4`; `latest` follows formal releases only, never pre-releases. Images are published for linux/amd64 and linux/arm64, and pulling needs no login.
 
 The container runs privileged in the host's network and PID namespaces, because honk loads and attaches eBPF programs, creates `dae0` and the `daens` namespace, changes sysctls and pins maps on the host's bpffs. It therefore changes the host exactly as a native installation does and provides no isolation. The host must meet the [kernel requirements](#linux-kernel-requirements), including Linux 6.12+ and a mounted bpffs.
 

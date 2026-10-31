@@ -413,7 +413,7 @@ sudo journalctl -xefu honk-core
 
 ## 使用 Docker 运行
 
-镜像 `daeuniverse/honk` 包含 musl `full` 发布版二进制以及仓库固定版本的 GeoIP 和 Geosite 文件；构建时会用 SHA-256 校验每个下载文件。每个发布版以去掉 `v` 的版本号作为镜像标签；`latest` 只指向正式版，不包含预发布版。
+[GitHub Container Registry](https://github.com/daeuniverse/honk/pkgs/container/honk) 上的镜像 `ghcr.io/daeuniverse/honk` 包含 musl `full` 发布版二进制以及仓库固定版本的 GeoIP 和 Geosite 文件；构建时会用 SHA-256 校验每个下载文件。每个发布版以去掉 `v` 的版本号作为镜像标签，例如 `ghcr.io/daeuniverse/honk:0.1.0-beta.4`；`latest` 只指向正式版，不包含预发布版。镜像提供 linux/amd64 和 linux/arm64 两种架构，拉取时无需登录。
 
 honk 需要加载并挂载 eBPF 程序、创建 `dae0` 和 `daens` 命名空间、修改 sysctl，并在宿主机的 bpffs 上固定 map，因此容器以特权模式运行，并共享宿主机的网络和 PID 命名空间。它对宿主机的改动与直接安装相同，不提供任何隔离。宿主机必须满足[内核要求](#linux-内核要求)，包括 Linux 6.12+ 和已挂载的 bpffs。
 
