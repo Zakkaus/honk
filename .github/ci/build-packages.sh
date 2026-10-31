@@ -33,8 +33,8 @@ for arch in x86_64 aarch64; do
   for target in deb rpm pkg.tar.zst; do
     # A prerelease sorts below its release: `~` does that for dpkg and rpm, and
     # pacman, which forbids `-` and `~`, sorts a letter after the last number lower.
-    packager=$target PKG_VERSION=${version/-/\~} PKG_DESCRIPTION="$summary"$'\n'"$details"
-    [[ $target != pkg.tar.zst ]] || packager=archlinux PKG_VERSION=${version/-/} PKG_DESCRIPTION=$summary
+    packager=$target PKG_VERSION=${version//-/\~} PKG_DESCRIPTION="$summary"$'\n'"$details"
+    [[ $target != pkg.tar.zst ]] || packager=archlinux PKG_VERSION=${version//-/} PKG_DESCRIPTION=$summary
     export PKG_VERSION PKG_DESCRIPTION
     # dpkg and rpm want a changelog entry for this exact version; it points at the release notes.
     cat > "$work/$name/changelog.yml" <<YAML
