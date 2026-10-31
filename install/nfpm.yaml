@@ -24,6 +24,15 @@ scripts:
 archlinux:
   scripts:
     postupgrade: ./package-after-install.sh
+# The daeuniverse apt and dnf repository shipped this binary as package honk, so
+# honk-core takes its place there. Arch's honk is an unrelated ActivityPub server.
+overrides:
+  deb:
+    conflicts: [honk]
+    replaces: [honk]
+  rpm:
+    conflicts: [honk]
+    replaces: [honk]
 # build-packages.sh appends each embedded doona edition's notices as further entries.
 contents:
   - src: ./honk-core
