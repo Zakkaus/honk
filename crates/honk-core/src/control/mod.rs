@@ -40,6 +40,7 @@ use udp_ingress::{
 mod retirement_worker;
 pub mod routing_matcher;
 mod sockets;
+mod subscription_refresh;
 pub mod tcp_sniff;
 mod udp_dial;
 pub mod udp_endpoint;
@@ -100,6 +101,9 @@ use reload::*;
 pub(crate) use reload::{LogFiles, StartupDowngrades};
 pub(crate) use resource_budget::{MAX_EFFECTIVE_NOFILE, ResourceBudget};
 use sockets::*;
+pub use subscription_refresh::{
+    SubscriptionPublication, SubscriptionRefresh, SubscriptionRefreshError,
+};
 #[cfg(all(test, feature = "native-api"))]
 pub(crate) use tests::reload_harness::ReloadBehavior;
 

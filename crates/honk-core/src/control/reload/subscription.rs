@@ -173,6 +173,56 @@ impl ControlPlane {
             .await
     }
 
+    /// Publish nodes fetched for `fetched` through the daemon's merge, unless
+    /// a reload has since replaced, disabled or removed that provider. The
+    /// check runs under `reload_lock`, the window in which the daemon checks
+    /// a worker revision. A `None` result means the provider was replaced.
+    /// The count is the provider's active nodes afterwards.
+    pub(in crate::control) async fn merge_fetched_subscription_nodes(
+        &self,
+        fetched: &honk_config::subscription::Subscription,
+        nodes: Vec<Node>,
+        diagnostics: Vec<honk_config::diagnostic::DetailedDiagnostic>,
+    ) -> (
+        Option<Result<ReloadOutcome, honk_config::error::DetailedConfigError>>,
+        usize,
+    ) {
+        let drain = Arc::clone(&self.drain_tracker);
+        let _reload = self.reload_lock.lock().await;
+        let current = self
+            .config
+            .read()
+            .await
+            .subscriptions
+            .iter()
+            .any(|subscription| {
+                subscription.id == fetched.id
+                    && subscription.enabled
+                    && crate::subscription::same_subscription_source_spec(subscription, fetched)
+            });
+        let result = if current {
+            Some(
+                self.merge_subscription_nodes_locked(fetched.id, nodes, diagnostics, &drain)
+                    .await,
+            )
+        } else {
+            debug!(
+                subscription_id = %fetched.id,
+                "discarding subscription refresh for a replaced provider"
+            );
+            None
+        };
+        let node_count = self
+            .config
+            .read()
+            .await
+            .nodes
+            .iter()
+            .filter(|node| node.subscription_id == Some(fetched.id))
+            .count();
+        (result, node_count)
+    }
+
     /// Publish a programmatic provider candidate and its diagnostics.
     /// An empty node set leaves active nodes and diagnostics untouched.
     pub async fn merge_subscription_nodes(
