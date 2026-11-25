@@ -13,11 +13,12 @@ Read with: `AGENTS.md` (Technology stack, Current validation guidance); `datapat
 
 The proxy engine (library `honk_core` + `honk-core` binary). Cargo features:
 
-- `default = ["clash-api", "jemalloc", "rprx"]`
+- `default = ["clash-api", "daemon", "jemalloc", "rprx"]`
+- `daemon` — owns the `honk-core` binary (`required-features`), the `clap` derives on `Cli`/`ConfigStore`, the subcommands and `handle_clash_command`, both `sd_notify` calls, and the `clap`/`libsystemd` dependencies. Without it the library still exports `run` and `Cli`, which callers fill directly. Every `--no-default-features` build of the binary lists it.
 - `ebpf` — aya real backend + `honk-nfqueue`, requires Linux kernel 6.12+; otherwise `MockEbpfBackend`. NFQUEUE activation follows `configuration.md`.
 - `clash-api` — Clash-compatible REST/WS API (pulls in optional axum/tower-http).
 - `native-api` — independent, opt-in native HTTP observations/control with a default-off listener; build with `--features native-api` (or `native-ui`); the full and `-native-api` release artifacts include it. It can run with mock or real eBPF and without Clash; real-kernel CI enables it for lifecycle regression coverage.
-- `jemalloc` — shipped binary allocates through jemalloc (see Technology stack in `AGENTS.md`); build with `--no-default-features --features "clash-api,ebpf,rprx,native-ui"` for the release capabilities with stock malloc. `native-ui` embeds both pinned doona editions and requires the absolute standard directory `HONK_DOONA_DIR` plus its `-lite` sibling (`export HONK_DOONA_DIR=$(ci/fetch-doona.sh)`); use `native-api` instead only when embedded hosting (`ui: embedded` or `ui: embedded-lite`, the lighter doona lite preview edition; both need `native-ui`) is not needed.
+- `jemalloc` — shipped binary allocates through jemalloc (see Technology stack in `AGENTS.md`); build with `--no-default-features --features "clash-api,daemon,ebpf,rprx,native-ui"` for the release capabilities with stock malloc. `native-ui` embeds both pinned doona editions and requires the absolute standard directory `HONK_DOONA_DIR` plus its `-lite` sibling (`export HONK_DOONA_DIR=$(ci/fetch-doona.sh)`); use `native-api` instead only when embedded hosting (`ui: embedded` or `ui: embedded-lite`, the lighter doona lite preview edition; both need `native-ui`) is not needed.
 - `rprx` — forwards to `honk-outbound/rprx`: registers VLESS (VLESS Encryption and xtls-rprx-vision) and VMess handlers; without it VLESS/VMess nodes parse fine but fail at dial with "No handler for protocol".
 
 Score is always compiled, without a Cargo feature; omitted policy selects Selector.

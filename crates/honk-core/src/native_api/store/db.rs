@@ -623,6 +623,8 @@ impl DbStore {
 
 /// The active revision as one runnable document, read without writing the db
 /// whether or not a daemon holds it open.
+// Only the `honk-core config export` subcommand calls this outside tests.
+#[cfg_attr(not(feature = "daemon"), allow(dead_code))]
 pub(crate) fn export(data_dir: &Path, with_secrets: bool) -> Result<String, StoreError> {
     let (_directory, mut connection) = crate::state::open_read_only(data_dir)?;
     let (root, revision, secrets) = {
@@ -658,6 +660,7 @@ pub(crate) fn export(data_dir: &Path, with_secrets: bool) -> Result<String, Stor
 }
 
 /// Writes `export` to a new 0600 file; an existing `out` is never replaced.
+#[cfg_attr(not(feature = "daemon"), allow(dead_code))]
 pub(crate) fn export_to(data_dir: &Path, out: &Path, with_secrets: bool) -> anyhow::Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
@@ -689,6 +692,7 @@ pub(crate) fn export_to(data_dir: &Path, out: &Path, with_secrets: bool) -> anyh
 }
 
 /// A bare relative `out` has an empty parent, which names the current directory.
+#[cfg_attr(not(feature = "daemon"), allow(dead_code))]
 fn publication_dir(out: &Path) -> &Path {
     out.parent()
         .filter(|parent| !parent.as_os_str().is_empty())

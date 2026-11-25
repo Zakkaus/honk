@@ -4,7 +4,7 @@
 
 ## 原生 API
 
-原生 API 不是預設功能，建置時要明確啟用 `native-api` feature：加上 `--features native-api`，或改用 `native-ui`。不需要 Clash API 時，用 `--no-default-features --features native-api` 單獨建置。發行產物依包含的介面區分：
+原生 API 不是預設功能，建置時要明確啟用 `native-api` feature：加上 `--features native-api`，或改用 `native-ui`。不需要 Clash API 時，用 `--no-default-features --features daemon,native-api` 單獨建置。發行產物依包含的介面區分：
 
 | 發行產物 | 原生 API | 內嵌 UI | Clash API |
 | --- | --- | --- | --- |

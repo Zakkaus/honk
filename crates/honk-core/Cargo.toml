@@ -13,6 +13,7 @@ path = "src/lib.rs"
 name = "honk-core"
 path = "src/main.rs"
 bench = false
+required-features = ["daemon"]
 
 [dependencies]
 honk-config.workspace = true
@@ -44,7 +45,7 @@ thiserror.workspace = true
 anyhow.workspace = true
 
 # CLI
-clap.workspace = true
+clap = { workspace = true, optional = true }
 
 # Config
 toml.workspace = true
@@ -111,10 +112,13 @@ flate2 = { workspace = true, optional = true }
 zip = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libsystemd.workspace = true
+libsystemd = { workspace = true, optional = true }
 
 [features]
-default = ["clash-api", "jemalloc", "rprx"]
+default = ["clash-api", "daemon", "jemalloc", "rprx"]
+# The `honk-core` binary: CLI, instance lock, signal handling and systemd
+# notification. Without it the crate builds as a library only.
+daemon = ["dep:clap", "dep:libsystemd"]
 # Enable real eBPF support (requires Linux kernel 6.12+)
 ebpf = ["aya", "aya-obj", "aya-log", "dep:honk-nfqueue"]
 # Enable the Clash-compatible REST API (experimental.clash_api)

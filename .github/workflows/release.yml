@@ -218,7 +218,7 @@ jobs:
             native-api) features=native-api ;;
             *) printf 'unknown variant: %s\n' "${{ matrix.variant }}" >&2; exit 1 ;;
           esac
-          features="ebpf,rprx,$features"
+          features="daemon,ebpf,rprx,$features"
           if [[ "${{ matrix.suffix }}" != "-stock" ]]; then
             features+=,jemalloc
           fi
