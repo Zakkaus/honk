@@ -314,6 +314,7 @@ fn restart_fields_resolve_the_candidate_log_file_through_the_cli_override() {
     let plain = super::LogFiles {
         cli_override: None,
         effective: crate::resolved_log_file_path(&current, None),
+        root: honk_config::paths::DataRoot::process(),
     };
     assert_eq!(
         super::restart_required_fields(&current, &replacement, &plain, &Default::default()),
@@ -326,6 +327,7 @@ fn restart_fields_resolve_the_candidate_log_file_through_the_cli_override() {
     let overridden = super::LogFiles {
         effective: crate::resolved_log_file_path(&current, Some(&cli_override)),
         cli_override: Some(cli_override),
+        root: honk_config::paths::DataRoot::process(),
     };
     assert!(
         super::restart_required_fields(&current, &replacement, &overridden, &Default::default())
@@ -5674,4 +5676,170 @@ fn connectivity_leaf_sets_are_unchanged_on_a_cyclic_config() {
             ..Default::default()
         });
     }
+}
+
+/// A one-entry `geosite.dat`: code `test`, full domain `explicit.example`.
+fn explicit_root_geosite() -> Vec<u8> {
+    fn delimited(tag: u8, value: &[u8]) -> Vec<u8> {
+        let mut field = vec![tag << 3 | 2, u8::try_from(value.len()).unwrap()];
+        field.extend_from_slice(value);
+        field
+    }
+    let mut rule = vec![8, 3];
+    rule.extend(delimited(2, b"explicit.example"));
+    let mut entry = delimited(1, b"test");
+    entry.extend(delimited(2, &rule));
+    delimited(1, &entry)
+}
+
+const EXPLICIT_ROOT_HOSTS: &str = "honk-reload-explicit-root.hosts";
+
+/// An engine whose explicit root holds `geosite.dat` and a hosts file that the
+/// process root does not, and whose relative log file resolves below it.
+async fn explicit_root_engine() -> (
+    tempfile::TempDir,
+    honk_config::paths::DataRoot,
+    ControlPlane,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("geosite.dat"), explicit_root_geosite()).unwrap();
+    std::fs::write(
+        dir.path().join(EXPLICIT_ROOT_HOSTS),
+        "full:explicit.example 192.0.2.1\n",
+    )
+    .unwrap();
+    let root = honk_config::paths::DataRoot::explicit(dir.path());
+    let mut config = Config::default();
+    config.global.log_file = "honk-reload-explicit-root.log".into();
+    let proxy_registry = Arc::new(ProxyRegistry::default_resolver().unwrap());
+    let dns_forwarder = test_dns_forwarder();
+    let dns_upstream_pool = Arc::new(
+        crate::dns::upstream_pool::UpstreamPool::new_with_proxy_and_bootstrap(
+            &config.dns.upstream,
+            dns_forwarder.routing_snapshot(),
+            Some(Arc::clone(&proxy_registry)),
+            config.nodes.clone(),
+            config.groups.clone(),
+            honk_outbound::bootstrap::BootstrapResolver::parse(&config.global.bootstrap_resolver),
+            config.dns.strategy,
+        )
+        .unwrap()
+        .with_socket_budget(dns_forwarder.socket_budget().clone()),
+    );
+    let mut control_plane = ControlPlane::new_with_upstream_pool_and_budget(
+        config,
+        Box::new(MockEbpfBackend::new()),
+        Router::new(&[], "direct").unwrap(),
+        proxy_registry,
+        dns_forwarder,
+        dns_upstream_pool,
+        ResourceBudget::for_nofile(MAX_EFFECTIVE_NOFILE),
+        Arc::default(),
+        root.clone(),
+    )
+    .unwrap();
+    control_plane.set_mode_state(Arc::new(parking_lot::RwLock::new(
+        crate::mode::ModeState::new("Rule", "Proxy"),
+    )));
+    control_plane.start_datapath_flags_coordinator().unwrap();
+    control_plane
+        .initialize_datapath_flags(false, false)
+        .await
+        .unwrap();
+    (dir, root, control_plane)
+}
+
+fn explicit_root_candidate(current: &Config) -> Config {
+    let mut config = current.clone();
+    config
+        .routing
+        .rules
+        .push(honk_config::routing::RoutingRule {
+            name: "explicit-root-geosite".into(),
+            condition: honk_config::routing::RoutingCondition {
+                geosite: vec!["test".into()],
+                ..Default::default()
+            },
+            outbound: honk_config::routing::RoutingOutbound::Simple("direct".into()),
+            priority: 0,
+            must: false,
+            mark: 0,
+        });
+    config.dns.hosts = vec![EXPLICIT_ROOT_HOSTS.into()];
+    config
+}
+
+/// What the engine root holds now, as the reload fingerprints it.
+fn explicit_root_fingerprints(
+    config: &Config,
+    root: &honk_config::paths::DataRoot,
+) -> ([u8; 32], [u8; 32]) {
+    let traffic = crate::routing::GeoRequirements::for_traffic(&config.routing.rules);
+    let geo = crate::routing::GeoSourceSet::load_in(&traffic, root).fingerprint_for(&traffic);
+    let hosts = crate::dns::forwarder::HostsSourceSet::load_in(&config.dns, root)
+        .unwrap()
+        .fingerprint();
+    (geo, hosts)
+}
+
+async fn active_fingerprints(cp: &ControlPlane) -> ([u8; 32], [u8; 32]) {
+    (
+        cp.router.read().await.geo_fingerprint(),
+        cp.dns_controller.forwarder().hosts_snapshot().fingerprint(),
+    )
+}
+
+#[tokio::test]
+async fn reload_loads_geodata_hosts_and_log_path_from_an_explicit_root() {
+    let (_dir, root, cp) = explicit_root_engine().await;
+    let candidate = explicit_root_candidate(&cp.config.read().await.as_ref().clone());
+
+    let outcome = cp
+        .apply_runtime_config(candidate.clone(), Default::default(), &DrainTracker::new())
+        .await;
+
+    assert!(
+        matches!(outcome, ReloadOutcome::Committed { .. }),
+        "a reload under an explicit root must find its geodata, hosts and log file there: \
+         {outcome:?}"
+    );
+    assert_eq!(
+        active_fingerprints(&cp).await,
+        explicit_root_fingerprints(&candidate, &root),
+        "the committed router and hosts came from another root"
+    );
+}
+
+#[tokio::test]
+async fn unchanged_reload_probes_the_explicit_root() {
+    let (dir, root, cp) = explicit_root_engine().await;
+    let candidate = explicit_root_candidate(&cp.config.read().await.as_ref().clone());
+    let first = cp
+        .apply_runtime_config(candidate.clone(), Default::default(), &DrainTracker::new())
+        .await;
+    let generation = first.generation().expect("first reload commits");
+
+    assert_eq!(
+        cp.apply_runtime_config(candidate.clone(), Default::default(), &DrainTracker::new())
+            .await,
+        ReloadOutcome::Noop { generation },
+        "the fast path must probe the same root the slow path loaded"
+    );
+
+    std::fs::write(
+        dir.path().join(EXPLICIT_ROOT_HOSTS),
+        "full:explicit.example 192.0.2.2\n",
+    )
+    .unwrap();
+    let edited = cp
+        .apply_runtime_config(candidate.clone(), Default::default(), &DrainTracker::new())
+        .await;
+    assert!(
+        matches!(edited, ReloadOutcome::Committed { generation: next } if next > generation),
+        "an edit inside the explicit root must be seen by the probe: {edited:?}"
+    );
+    assert_eq!(
+        active_fingerprints(&cp).await,
+        explicit_root_fingerprints(&candidate, &root)
+    );
 }

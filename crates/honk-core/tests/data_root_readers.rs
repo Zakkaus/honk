@@ -42,7 +42,6 @@ const READERS: &[&str] = &[
 /// The implementation of the search order itself.
 const EXCLUDED: &[&str] = &["crates/honk-config/src/paths.rs"];
 
-const RELOAD_05B: &str = "CONTRIBUTING §2: reload threading is PR 05b, originated by a human";
 const ECH_05C: &str = "ECH config path threading through honk-outbound is follow-up 05c";
 const WRAPPER: &str = "process-default wrapper for tests, benches and honk-tool; the engine \
                        path in lib.rs loads from its own DataRoot";
@@ -50,36 +49,6 @@ const NO_FILE: &str = "empty requirements read no file";
 
 /// `(file, text, reason)`: every hit in `file` whose line contains `text`.
 const ALLOWED: &[(&str, &str, &str)] = &[
-    (
-        "crates/honk-core/src/control/reload/transaction.rs",
-        "GeoSourceSet::probe_union(traffic_geo, dns_geo)",
-        RELOAD_05B,
-    ),
-    (
-        "crates/honk-core/src/control/reload/transaction.rs",
-        "HostsSourceSet::probe_fingerprint(&new_config.dns)",
-        RELOAD_05B,
-    ),
-    (
-        "crates/honk-core/src/control/reload/transaction.rs",
-        "GeoSourceSet::load(&traffic_geo.union(&dns_geo))",
-        RELOAD_05B,
-    ),
-    (
-        "crates/honk-core/src/control/reload/transaction.rs",
-        "GeoSourceSet::load(&geo_requirements)",
-        RELOAD_05B,
-    ),
-    (
-        "crates/honk-core/src/control/reload/dns.rs",
-        "HostsSourceSet::load(&config.dns)",
-        RELOAD_05B,
-    ),
-    (
-        "crates/honk-core/src/control/reload/policy.rs",
-        "resolved_log_file_path(candidate, log_files.cli_override",
-        RELOAD_05B,
-    ),
     (
         "crates/honk-outbound/src/tls.rs",
         "resolve_dependency_path(path)",
@@ -89,11 +58,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "crates/honk-core/src/lib.rs",
         "honk_config::paths::data_dir().display()",
         "names the installed root in the refusal",
-    ),
-    (
-        "crates/honk-core/src/logging.rs",
-        "DataRoot::process()",
-        WRAPPER,
     ),
     (
         "crates/honk-core/src/routing/geo.rs",
@@ -119,11 +83,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "crates/honk-core/src/native_api/offline/admission.rs",
         "GeoSourceSet::load(&GeoRequirements::default())",
         NO_FILE,
-    ),
-    (
-        "crates/honk-core/src/dns/forwarder/hosts.rs",
-        "DataRoot::process()",
-        WRAPPER,
     ),
     (
         "crates/honk-core/src/dns/forwarder.rs",

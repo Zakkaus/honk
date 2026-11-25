@@ -327,11 +327,6 @@ impl GeoSourceSet {
         .collect()
     }
 
-    /// Probe the process data root; an engine uses [`Self::probe_union_in`].
-    pub(crate) fn probe_union(first: &GeoRequirements, second: &GeoRequirements) -> Self {
-        Self::probe_union_in(first, second, &honk_config::paths::DataRoot::process())
-    }
-
     pub(crate) fn probe_union_in(
         first: &GeoRequirements,
         second: &GeoRequirements,

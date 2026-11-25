@@ -159,9 +159,11 @@ use honk_config::diagnostic::{
     DetailedDiagnostic, DiagnosticSources, SettingPath, finish_attempt, report_detailed_diagnostics,
 };
 use honk_config::error::{DetailedConfigError, ErrorCategory};
+#[cfg(test)]
+use logging::resolved_log_file_path;
 use logging::{
     LOG_FILE_LIMIT, LocalTime, QUIET_LOG_TARGETS, RotatingLogFile, console_ansi, console_log_layer,
-    resolved_log_file_path, resolved_log_file_path_in,
+    resolved_log_file_path_in,
 };
 use state::startup::{claim_state, open_state_db};
 use std::path::PathBuf;
