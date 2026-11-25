@@ -328,17 +328,27 @@ impl ControlPlane {
             let geo_probe = match supplied_geo_sources {
                 Some(sources) => sources,
                 None => {
-                    probed_geo_sources =
-                        crate::routing::GeoSourceSet::probe_union(traffic_geo, dns_geo);
+                    probed_geo_sources = crate::routing::GeoSourceSet::probe_union_in(
+                        traffic_geo,
+                        dns_geo,
+                        self.data_root(),
+                    );
                     &probed_geo_sources
                 }
             };
             #[cfg(not(feature = "native-api"))]
-            let geo_probe = crate::routing::GeoSourceSet::probe_union(traffic_geo, dns_geo);
+            let geo_probe = crate::routing::GeoSourceSet::probe_union_in(
+                traffic_geo,
+                dns_geo,
+                self.data_root(),
+            );
             let traffic_geo_fingerprint = geo_probe.fingerprint_for(traffic_geo);
             let dns_geo_fingerprint = geo_probe.fingerprint_for(dns_geo);
             let hosts_fingerprint =
-                match crate::dns::forwarder::HostsSourceSet::probe_fingerprint(&new_config.dns) {
+                match crate::dns::forwarder::HostsSourceSet::probe_fingerprint_in(
+                    &new_config.dns,
+                    self.data_root(),
+                ) {
                     Ok(fingerprint) => fingerprint,
                     Err(error) => {
                         warn!(%error, "Failed to fingerprint DNS hosts snapshot");
@@ -477,19 +487,22 @@ impl ControlPlane {
         let geo_sources = match supplied_geo_sources {
             Some(sources) => sources,
             None => {
-                loaded_geo_sources =
-                    crate::routing::GeoSourceSet::load(&traffic_geo.union(&dns_geo));
+                loaded_geo_sources = crate::routing::GeoSourceSet::load_in(
+                    &traffic_geo.union(&dns_geo),
+                    self.data_root(),
+                );
                 &loaded_geo_sources
             }
         };
         #[cfg(not(feature = "native-api"))]
         let geo_requirements = traffic_geo.union(&dns_geo);
         #[cfg(not(feature = "native-api"))]
-        let geo_sources = &crate::routing::GeoSourceSet::load(&geo_requirements);
+        let geo_sources =
+            &crate::routing::GeoSourceSet::load_in(&geo_requirements, self.data_root());
         let traffic_geo_fingerprint = geo_sources.fingerprint_for(&traffic_geo);
         let dns_geo_fingerprint = geo_sources.fingerprint_for(&dns_geo);
         let Some((hosts_sources, candidate_dns_policy)) =
-            super::dns::load_hosts_and_policy(&new_config, &dns_geo_fingerprint)
+            super::dns::load_hosts_and_policy(&new_config, &dns_geo_fingerprint, self.data_root())
         else {
             self.stop_reload_rejection_if_healthy(drain);
             return Ok(ReloadOutcome::Rejected);

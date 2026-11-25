@@ -314,6 +314,7 @@ fn restart_fields_resolve_the_candidate_log_file_through_the_cli_override() {
     let plain = super::LogFiles {
         cli_override: None,
         effective: crate::resolved_log_file_path(&current, None),
+        root: honk_config::paths::DataRoot::process(),
     };
     assert_eq!(
         super::restart_required_fields(&current, &replacement, &plain, &Default::default()),
@@ -326,6 +327,7 @@ fn restart_fields_resolve_the_candidate_log_file_through_the_cli_override() {
     let overridden = super::LogFiles {
         effective: crate::resolved_log_file_path(&current, Some(&cli_override)),
         cli_override: Some(cli_override),
+        root: honk_config::paths::DataRoot::process(),
     };
     assert!(
         super::restart_required_fields(&current, &replacement, &overridden, &Default::default())
