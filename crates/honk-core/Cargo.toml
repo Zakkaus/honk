@@ -51,9 +51,9 @@ clap = { workspace = true, optional = true }
 toml.workspace = true
 
 # Networking
-reqwest.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
+url.workspace = true
 tokio-rustls.workspace = true
 rustls-platform-verifier.workspace = true
 socket2.workspace = true
@@ -77,8 +77,8 @@ h2.workspace = true
 http.workspace = true
 quinn.workspace = true
 # Distinguish endpoint loss from H3 response errors without parsing error text.
-h3 = { workspace = true, features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes"] }
-h3-quinn.workspace = true
+h3 = { workspace = true, optional = true, features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes"] }
+h3-quinn = { workspace = true, optional = true }
 
 # Persistence (state database)
 rusqlite.workspace = true
@@ -118,7 +118,10 @@ libsystemd = { workspace = true, optional = true }
 default = ["clash-api", "daemon", "jemalloc", "rprx"]
 # The `honk-core` binary: CLI, instance lock, signal handling and systemd
 # notification. Without it the crate builds as a library only.
-daemon = ["dep:clap", "dep:libsystemd"]
+daemon = ["dep:clap", "dep:libsystemd", "doh3"]
+# DNS-over-HTTP/3 upstreams (`h3://`). Without it such an upstream fails to
+# build its transport.
+doh3 = ["dep:h3", "dep:h3-quinn"]
 # Enable real eBPF support (requires Linux kernel 6.12+)
 ebpf = ["aya", "aya-obj", "aya-log", "dep:honk-nfqueue"]
 # Enable the Clash-compatible REST API (experimental.clash_api)
@@ -154,6 +157,7 @@ tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 tokio-tungstenite.workspace = true
 rcgen.workspace = true
+reqwest.workspace = true
 boring.workspace = true
 tokio-boring.workspace = true
 rustls-pemfile.workspace = true

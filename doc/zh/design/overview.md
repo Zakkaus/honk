@@ -133,6 +133,7 @@ flowchart TB
 | `native-api` | 否 | 独立的 HTTP/1.1 原生观测、可选历史、管理已接受来源的 reload API，以及本地目录 UI。连接有界并由它管理生命周期，严格校验 bearer/Host/Origin，不依赖 Clash。 |
 | `native-ui` | 否 | 隐含 `native-api`，让 `ui: embedded` 内嵌固定版本的 doona 发行资产；`ui: embedded-lite` 选择更轻量的 doona lite 预览版，同样需要这个 feature。运行时不解压、不下载、不构建前端。 |
 | `daemon` | 是 | 构建 `honk-core` 二进制及其命令行解析与子命令，并发送 systemd 通知。引入 `clap` 与 `libsystemd`。不启用时只构建 `honk_core` 库，所以带 `--no-default-features` 又需要二进制的构建必须列出 `daemon`。 |
+| `doh3` | 随 `daemon` | DNS-over-HTTP/3 上游（`h3://`）。引入 `h3` 与 `h3-quinn`。不启用时这类上游无法建立传输。 |
 | `jemalloc` | 是 | 引入 `tikv-jemallocator`，把 jemalloc 安装为 `honk-core` 二进制的 allocator；该 crate 从 C 源码构建 jemalloc。在 Linux 上，程序会在启动 Tokio 之前对当前进程禁用透明大页。运行期选项使用 `_RJEM_MALLOC_CONF`，不用 `MALLOC_CONF`：crate 以 `_rjem_` 前缀构建 jemalloc，环境变量名也被加上该前缀。 |
 | `rprx` | 是 | 启用 `honk-outbound/rprx`，注册 VLESS 与 VMess handler，包括受支持的 VLESS Encryption 和 `xtls-rprx-vision` 路径。 |
 

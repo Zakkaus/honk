@@ -117,11 +117,13 @@ fn endpoint_lost(mut error: &(dyn std::error::Error + 'static)) -> bool {
             return error.code == quinn::TransportErrorCode::INTERNAL_ERROR
                 && error.frame.is_none();
         }
+        #[cfg(feature = "doh3")]
         if let Some(h3::error::StreamError::ConnectionError(connection, ..)) = error.downcast_ref()
         {
             error = connection;
             continue;
         }
+        #[cfg(feature = "doh3")]
         if let Some(h3::error::ConnectionError::Remote(
             h3::quic::ConnectionErrorIncoming::Undefined(connection),
             ..,
@@ -530,29 +532,32 @@ mod packet_cause_tests {
             &endpoint
         ));
         assert_eq!(ScoreOutcome::from_error(&failure), endpoint_loss);
-        let h3_loss = h3::error::StreamError::ConnectionError(h3::error::ConnectionError::Remote(
-            h3::quic::ConnectionErrorIncoming::Undefined(Arc::new(
-                connection_error.lock().take().unwrap(),
-            )),
-        ));
-        assert_eq!(
-            ScoreOutcome::from_error(&with_packet_cause(Some(&endpoint), h3_loss.into())),
-            endpoint_loss,
-            "every query lost with one packet endpoint reports its one terminal episode"
-        );
-        for error in [
-            h3::error::StreamError::StreamError {
-                code: h3::error::Code::H3_MESSAGE_ERROR,
-                reason: "malformed response headers".into(),
-            },
-            h3::error::StreamError::RemoteTerminate {
-                code: h3::error::Code::H3_REQUEST_CANCELLED,
-            },
-        ] {
-            assert_eq!(
-                ScoreOutcome::from_error(&with_packet_cause(Some(&endpoint), error.into())),
-                ScoreOutcome::Other
+        #[cfg(feature = "doh3")]
+        {
+            let h3_loss = h3::error::StreamError::ConnectionError(
+                h3::error::ConnectionError::Remote(h3::quic::ConnectionErrorIncoming::Undefined(
+                    Arc::new(connection_error.lock().take().unwrap()),
+                )),
             );
+            assert_eq!(
+                ScoreOutcome::from_error(&with_packet_cause(Some(&endpoint), h3_loss.into())),
+                endpoint_loss,
+                "every query lost with one packet endpoint reports its one terminal episode"
+            );
+            for error in [
+                h3::error::StreamError::StreamError {
+                    code: h3::error::Code::H3_MESSAGE_ERROR,
+                    reason: "malformed response headers".into(),
+                },
+                h3::error::StreamError::RemoteTerminate {
+                    code: h3::error::Code::H3_REQUEST_CANCELLED,
+                },
+            ] {
+                assert_eq!(
+                    ScoreOutcome::from_error(&with_packet_cause(Some(&endpoint), error.into())),
+                    ScoreOutcome::Other
+                );
+            }
         }
 
         for error in [

@@ -8,8 +8,7 @@ use honk_outbound::group::{DialKey, ExitCollapse, OwnedTarget, ScoreBusinessGuar
 use super::UpstreamPool;
 use super::entries::UpstreamEntry;
 use crate::dns::transport::{
-    DialContext, Doh3Client, DohClient, DoqClient, DotPool, LifecycleSlot, ProxyDial,
-    RouteExchange, TcpPool,
+    DialContext, DohClient, DoqClient, DotPool, LifecycleSlot, ProxyDial, RouteExchange, TcpPool,
 };
 
 impl super::DnsIdleResources {
@@ -139,7 +138,8 @@ pub(super) enum PooledTransport {
     Dot(Arc<DotPool>),
     Doh(Arc<DohClient>),
     Doq(Arc<DoqClient>),
-    Doh3(Arc<Doh3Client>),
+    #[cfg(feature = "doh3")]
+    Doh3(Arc<crate::dns::transport::Doh3Client>),
 }
 
 impl PooledTransport {
@@ -149,6 +149,7 @@ impl PooledTransport {
             Self::Dot(transport) => transport.is_empty(),
             Self::Doh(transport) => transport.is_empty(),
             Self::Doq(transport) => transport.is_empty(),
+            #[cfg(feature = "doh3")]
             Self::Doh3(transport) => transport.is_empty(),
         }
     }
@@ -171,6 +172,7 @@ impl PooledTransport {
                 transport.close().await;
                 transport.tasks_failed()
             }
+            #[cfg(feature = "doh3")]
             Self::Doh3(transport) => {
                 transport.close().await;
                 transport.tasks_failed()
@@ -192,6 +194,7 @@ impl PooledTransport {
             Self::Dot(_) => ("dot", "tcp"),
             Self::Doh(_) => ("doh", "tcp"),
             Self::Doq(_) => ("doq", "udp"),
+            #[cfg(feature = "doh3")]
             Self::Doh3(_) => ("doh3", "udp"),
         };
         crate::observe::flows::dns::transport(upstream, carrier);
@@ -200,6 +203,7 @@ impl PooledTransport {
             Self::Dot(transport) => transport.exchange_routed(raw_query, feedback, route).await,
             Self::Doh(transport) => transport.exchange_routed(raw_query, feedback, route).await,
             Self::Doq(transport) => transport.exchange_routed(raw_query, feedback, route).await,
+            #[cfg(feature = "doh3")]
             Self::Doh3(transport) => transport.exchange_routed(raw_query, feedback, route).await,
         }
     }
@@ -250,9 +254,16 @@ impl UpstreamPool {
                 Arc::clone(&self.active_transport_tasks),
             )?),
             DnsProtocol::Quic => PooledTransport::Doq(DoqClient::new(dial).await?),
+            #[cfg(feature = "doh3")]
             DnsProtocol::H3 => PooledTransport::Doh3(
-                Doh3Client::new_tracked(dial, Arc::clone(&self.active_transport_tasks)).await?,
+                crate::dns::transport::Doh3Client::new_tracked(
+                    dial,
+                    Arc::clone(&self.active_transport_tasks),
+                )
+                .await?,
             ),
+            #[cfg(not(feature = "doh3"))]
+            DnsProtocol::H3 => anyhow::bail!("DoH3 upstreams need honk-core's doh3 feature"),
         })
     }
 

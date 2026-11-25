@@ -58,7 +58,7 @@ impl From<&'static str> for Error {
 /// The existing GET inputs after its connection and any TLS are ready.
 pub(crate) struct Prepared<'a> {
     stream: Stream,
-    url: std::borrow::Cow<'a, reqwest::Url>,
+    url: std::borrow::Cow<'a, url::Url>,
     target: http::Uri,
     headers: http::HeaderMap,
 }
@@ -174,7 +174,7 @@ impl Client {
     /// Execute one GET; the caller owns redirects and the whole-body deadline.
     pub(crate) async fn get(
         &self,
-        url: &reqwest::Url,
+        url: &url::Url,
         headers: &http::HeaderMap,
         timeout: Duration,
     ) -> anyhow::Result<Response> {
@@ -186,7 +186,7 @@ impl Client {
     /// Prepare the direct GET, including environment proxy CONNECT and TLS.
     pub(crate) async fn prepare(
         &self,
-        url: &reqwest::Url,
+        url: &url::Url,
         headers: &http::HeaderMap,
         timeout: Duration,
     ) -> anyhow::Result<Prepared<'static>> {
@@ -256,7 +256,7 @@ impl Client {
     pub(crate) async fn prepare_over<'a>(
         &self,
         stream: Stream,
-        url: &'a reqwest::Url,
+        url: &'a url::Url,
         headers: &http::HeaderMap,
         by: Instant,
     ) -> Result<Prepared<'a>, Error> {
@@ -448,7 +448,7 @@ pub(crate) fn followed_redirect(status: http::StatusCode) -> bool {
 
 /// Move initial URL credentials into headers before a caller follows redirects.
 pub(crate) fn normalize_url(
-    url: &mut reqwest::Url,
+    url: &mut url::Url,
     headers: &mut http::HeaderMap,
 ) -> anyhow::Result<()> {
     if (!url.username().is_empty() || url.password().is_some())

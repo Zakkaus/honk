@@ -131,3 +131,29 @@ fn test_group(
         created_at: chrono::Utc::now(),
     }
 }
+
+/// An `h3://` upstream gets a DoH3 transport only in builds with the `doh3`
+/// feature; without it, building the transport names the missing feature.
+#[tokio::test]
+async fn an_h3_upstream_builds_a_transport_only_with_doh3() {
+    let pool = UpstreamPool::new(
+        &[make_upstream("h3", "192.0.2.53:443", DnsProtocol::H3)],
+        make_router(),
+    )
+    .unwrap();
+    let entry = pool.entries.get("h3").unwrap();
+    let built = pool
+        .get_transport(entry, None, "192.0.2.53:443".parse().unwrap())
+        .await;
+    #[cfg(feature = "doh3")]
+    assert!(matches!(
+        built.as_deref(),
+        Ok(transports::PooledTransport::Doh3(_))
+    ));
+    #[cfg(not(feature = "doh3"))]
+    assert_eq!(
+        built.err().unwrap().to_string(),
+        "DoH3 upstreams need honk-core's doh3 feature"
+    );
+    pool.close().await;
+}

@@ -163,6 +163,7 @@ pub(crate) async fn trojan_peer(mut stream: TcpStream, targets: &[SocketAddr], d
 }
 
 /// Relay a QUIC connection over one plaintext Trojan UDP association.
+#[cfg(feature = "doh3")]
 pub(crate) async fn trojan_quic_peer(stream: TcpStream, target: SocketAddr) {
     let (mut reader, mut writer) = stream.into_split();
     assert_eq!(read_trojan_request(&mut reader).await, target);

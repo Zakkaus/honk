@@ -15,6 +15,7 @@ The proxy engine (library `honk_core` + `honk-core` binary). Cargo features:
 
 - `default = ["clash-api", "daemon", "jemalloc", "rprx"]`
 - `daemon` — owns the `honk-core` binary (`required-features`), the `clap` derives on `Cli`/`ConfigStore`, the subcommands and `handle_clash_command`, both `sd_notify` calls, and the `clap`/`libsystemd` dependencies. Without it the library still exports `run` and `Cli`, which callers fill directly. Every `--no-default-features` build of the binary lists it.
+- `doh3` — DoH3 upstreams (`h3`, `h3-quinn`); `daemon` enables it. Without it an `h3://` upstream fails to build its transport (`dns/upstream_pool/transports.rs`).
 - `ebpf` — aya real backend + `honk-nfqueue`, requires Linux kernel 6.12+; otherwise `MockEbpfBackend`. NFQUEUE activation follows `configuration.md`.
 - `clash-api` — Clash-compatible REST/WS API (pulls in optional axum/tower-http).
 - `native-api` — independent, opt-in native HTTP observations/control with a default-off listener; build with `--features native-api` (or `native-ui`); the full and `-native-api` release artifacts include it. It can run with mock or real eBPF and without Clash; real-kernel CI enables it for lifecycle regression coverage.
