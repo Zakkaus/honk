@@ -1951,13 +1951,17 @@ carrier 观测由控制心跳接入，和选路调用相互独立。
 
 ## 嵌入式路由引擎
 
-默认关闭的 `embedded` Cargo feature 提供库 API `honk_core::embedded::Engine`。应用自行捕获流量（例如从 TUN 设备读取）时，可以用它得到守护进程对每条流会做出的路由决定。它不启动 listener、HTTP 栈或数据面，也不发起连接。用 `--features embedded` 构建；`--no-default-features --features embedded` 同样可用。
+默认关闭的 `embedded` Cargo feature 提供库 API `honk_core::embedded::Engine`。应用自行捕获流量（例如从 TUN 设备读取）时，可以用它得到守护进程对每条流会做出的路由决定。它不启动 listener、HTTP 栈或数据面；只有健康检查和延迟测试会发起连接。用 `--features embedded` 构建；`--no-default-features --features embedded` 同样可用。
 
 - `Engine::new(config, data_root)` 接收解析后的配置，按守护进程启动时的方式组装。订阅节点须事先合并进配置。geodata 只从 `data_root/geosite.dat` 和 `data_root/geoip.dat` 读取。规则需要的文件缺失、无法解析或缺少规则用到的类别时，构建失败。守护进程在这种情况下只记录警告并使用空的匹配数据，这会放宽取反规则。
 - `Engine::decide(&Flow)` 接收传输协议、源地址和目的地址、嗅探到的服务器名及 reality check 是否信任它，以及已知时的进程名、MAC 地址和 DSCP。它返回命中的规则（配置中的序号、名称以及 Clash 风格的类型和 payload；适用 `fallback` 时为空）、规则选出的出站及其 `must` 修饰符、模式处理结果和模式处理后的出站、direct fwmark、按顺序排列的候选节点及其 group 链，以及守护进程是否会对冷启动的 URLTest group 并发尝试前几个候选。
 - `global.dial_mode` 的处理与守护进程相同：`dial_mode: ip` 下忽略传入的服务器名；`dial_mode: domain` 下丢弃 reality check 不信任的服务器名。没有进程名的流不会命中 `pname` 规则。
 - 新建的引擎处于 Rule 模式，没有 GLOBAL 目标，也不读取 `experimental.clash_api.default_mode`。`set_mode` 选择 Rule、Global 或 Direct。`set_global_target` 接收配置中的节点 id 或 group 名；如果另一个节点与该节点同名，则拒绝。没有目标的 GLOBAL 阻断所有非 `must` 的流；任何模式都不改变 `must` 或 `block` 的结果。
-- 引擎不保存健康状态、探测结果或运行时的 group 选择，因此所有节点都视为可用，第一个候选可能是不可达的节点。一个引擎只对应一份配置；要应用新配置，需构建新的引擎。
+- `Engine::start_health(Outbounds)` 启动守护进程的健康检查：`global.tcp_check_url` 的 HTTP 检查、UDP DNS 检查和 QUIC 检查，周期为 `global.check_interval`，单次探测超时与守护进程相同，为 5 秒。节点探测通过应用传入的 `ProxyRegistry` 和 `SharedRuntimeRegistry` 发起连接。此后 URLTest、Fallback、LoadBalance 和 Score group 按探测结果选择节点，与守护进程一致。调用之前所有节点都视为可用，第一个候选可能是不可达的节点。该调用需要 Tokio 运行时；引擎被丢弃时检查随之停止。
+- `Engine::select(group, member)` 设置 Selector group 在 TCP 和 UDP 上使用的成员，无需重载配置，效果与 `PUT /proxies/{group}` 相同；下一次 `decide` 即使用该成员。引擎不持有连接，因此 `interrupt_connections` 由应用自行处理。
+- `Engine::test_node(id, url, timeout)` 和 `Engine::test_group(name, url, timeout)` 执行 Clash API 的延迟测试（`/proxies/{name}/delay` 和 `/group/{name}/delay`），返回节点或每个成员的延迟。子 group 通过其当前选中的叶节点测量，测试结束后 URLTest group 重新选择。测量结果计入健康数据。
+- `Engine::groups()` 列出每个 group 的策略、成员、显示为已选的成员（即 Clash API 的 `now`，不含 Score 校验结果），以及每个成员的节点 id、存活状态和最近一次 TCP 延迟。在守护进程的宽限期内，探测失败不会把新注册的节点标记为不可用，但 URLTest 已把它排在最后。
+- 一个引擎只对应一份配置及其运行时选择。要应用新配置，需构建新的引擎，再重新设置模式、GLOBAL 目标和 Selector 选择。
 
 ## Related docs
 

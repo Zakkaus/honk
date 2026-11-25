@@ -134,7 +134,12 @@ themselves. It calls the daemon's router, typed mode override and group plan
 resolver; its parity test (`--features embedded,native-api`)
 compares every decision and score context with the control plane's. The typed
 mode override in `mode.rs` compiles for `embedded` and for `native-api` with
-`clash-api`. `just lint`, `just test-ci` and the CI `lint` and `test` jobs
+`clash-api`. Its health state and probers come from `control/health.rs`, which
+the daemon's bootstrap and health loop also call; its delay tests and group
+display come from `group_view.rs`, shared with the Clash API. Change those
+shared functions rather than copying them into the engine, and keep
+`--no-default-features --features embedded` free of `clash-api`, `native-api`,
+`axum` and `flow-observation` in `cargo tree -e features`. `just lint`, `just test-ci` and the CI `lint` and `test` jobs
 enable `honk-core/embedded`. User docs: [embedded routing engine](doc/en/reference/api.md#embedded-routing-engine).
 
 `just test-ci` requires `cargo-nextest` and selects `.config/nextest.toml`'s `ci` profile: no retries, a three-minute per-test timeout and no fail-fast. JUnit is written to `target/nextest/ci/junit.xml`; CI uploads it on failure. Plain `cargo test` remains supported.
