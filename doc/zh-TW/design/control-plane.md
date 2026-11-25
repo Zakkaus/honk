@@ -277,6 +277,8 @@ SIGHUP 為每次嘗試單獨收集診斷。不管載入和設定驗證成功與�
 
 共用 reload 交易在指紋比較、no-op 判斷和重啟檢查之前，先正規化候選設定的 NFQUEUE 生效值，並保留已經記錄的、較早或較晚的資料路徑 admission 前啟動降級。原生 API 的寫入前檢查和完整驗證共用這套重啟策略，不改寫請求的來源文字；參見[啟動例外](../reference/global.md)和[原生設定 API](../reference/api.md)。
 
+交易還會在正規化之前記下候選設定請求、而本行程不予執行的設定；目前只有記錄過降級後的 `global.nfqueue_enable`。這份清單隨候選設定的診斷更新一起傳遞，與解析診斷在同一次 `ActiveDiagnostics` 寫入中發布：提交時隨新的 generation 寫入，no-op 時沿用目前的 generation，所以 `ControlPlane::activation_report` 始終描述當前 generation。替換整份文件的更新（共用 reload、SIGHUP、原生寫入）會替換清單；訂閱合併和 ECS 重新整理保留清單；被拒絕的候選設定不會改動它。`reload_runtime_config_from_sources` 接收載入得到的來源快照，回傳的報告中每個項目都指向生效宣告（來源序號、位元組範圍、從 1 開始的行號和位元組欄號）。啟動時安裝的設定和不帶原生 API 的 SIGHUP 都不保留來源文字，項目沒有位置。現有日誌保持不變。
+
 `apply_runtime_config` 先建構替代的 Router、GroupManager、出站 registry、DNS 執行時和路由計劃，不動 live state。提交順序是：
 
 1. fence NFQUEUE readiness，並完成同步的核心 grace barrier。
