@@ -97,7 +97,7 @@ impl NativeRuntime {
             .start(
                 store,
                 sources,
-                honk_config::paths::data_dir().to_path_buf(),
+                honk_config::paths::DataRoot::process(),
                 control_plane.config_handle(),
                 control_plane.log_files(),
                 control_plane.startup_downgrades(),

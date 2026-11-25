@@ -17,6 +17,7 @@ use crate::configuration::{Activation, ActivationRequest};
 use crate::control::{ControlCommand, LogFiles, StartupDowngrades};
 use crate::subscription::SubscriptionSupervisorHandle;
 use honk_config::parser::LoadedConfig;
+use honk_config::paths::DataRoot;
 use tokio::sync::watch;
 use validation::{config_error, not_included};
 
@@ -29,7 +30,7 @@ pub(crate) struct ConfigCoordinator {
 struct Worker {
     service: Arc<ConfigService>,
     store: SourceStore,
-    data_dir: PathBuf,
+    data_root: DataRoot,
     source_managed: bool,
     active: Arc<tokio::sync::RwLock<Arc<Config>>>,
     log_files: LogFiles,
@@ -46,7 +47,7 @@ impl ConfigService {
         self: &Arc<Self>,
         store: SourceStore,
         initial: Option<SourceUpdate>,
-        data_dir: PathBuf,
+        data_root: DataRoot,
         active: Arc<tokio::sync::RwLock<Arc<Config>>>,
         log_files: LogFiles,
         startup_downgrades: StartupDowngrades,
@@ -72,7 +73,7 @@ impl ConfigService {
             let mut worker = Worker {
                 service,
                 store,
-                data_dir,
+                data_root,
                 source_managed: initial.is_some(),
                 active,
                 log_files,
@@ -411,7 +412,7 @@ impl Worker {
                 .deferred_subscriptions()
                 .await
                 .map_err(|_| unavailable())?;
-            Some((active, self.data_dir.clone(), deferred))
+            Some((active, self.data_root.clone(), deferred))
         } else {
             None
         };
@@ -438,12 +439,12 @@ impl Worker {
             // Reload admission permits unavailable geo assets; failed fingerprint capture
             // must not tighten that contract or retain a stale dependency baseline.
             let dependencies = capture
-                .and_then(|(active, data_dir, deferred)| {
+                .and_then(|(active, data_root, deferred)| {
                     offline::capture_for_coordinator(
                         loaded.clone(),
                         store.dependency_root(),
                         &active,
-                        &data_dir,
+                        &data_root,
                         SourceLimits::DEFAULT,
                         &mut Vec::new(),
                         &deferred,

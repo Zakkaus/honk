@@ -110,7 +110,7 @@ fn candidate_secret_refusals_precede_listener_settings_changes() {
         active: Arc::new(loaded.config),
         log_files: LogFiles::default(),
         startup_downgrades: Default::default(),
-        data_dir: directory.path().to_path_buf(),
+        data_root: honk_config::paths::DataRoot::daemon(directory.path()),
         deferred: vec![],
     };
     for (extra, drift, reason) in [

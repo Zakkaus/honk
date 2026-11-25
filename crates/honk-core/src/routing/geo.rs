@@ -186,19 +186,27 @@ impl std::fmt::Debug for GeoSourceSet {
 }
 
 impl GeoSourceSet {
+    /// Load from the process data root; an engine uses [`Self::load_in`].
     pub(crate) fn load(requirements: &GeoRequirements) -> Self {
-        let geosite = capture_source(!requirements.geosite_codes.is_empty(), "geosite.dat");
-        let geoip = capture_source(!requirements.geoip_codes.is_empty(), "geoip.dat");
+        Self::load_in(requirements, &honk_config::paths::DataRoot::process())
+    }
+
+    pub(crate) fn load_in(
+        requirements: &GeoRequirements,
+        root: &honk_config::paths::DataRoot,
+    ) -> Self {
+        let geosite = capture_source(!requirements.geosite_codes.is_empty(), "geosite.dat", root);
+        let geoip = capture_source(!requirements.geoip_codes.is_empty(), "geoip.dat", root);
         Self::from_sources(geosite, geoip)
     }
 
     #[cfg(all(feature = "native-api", test))]
     pub(crate) fn load_captured(
         requirements: &GeoRequirements,
-        data_dir: &std::path::Path,
+        root: &honk_config::paths::DataRoot,
         mut read: impl FnMut(&std::path::Path) -> std::io::Result<Arc<[u8]>>,
     ) -> std::io::Result<Self> {
-        let sources = Self::capture_for_admission(requirements, data_dir, |_, path| read(path))?;
+        let sources = Self::capture_for_admission(requirements, root, |_, path| read(path))?;
         sources.validate(requirements)?;
         Ok(sources)
     }
@@ -206,14 +214,15 @@ impl GeoSourceSet {
     #[cfg(feature = "native-api")]
     pub(crate) fn capture_for_admission(
         requirements: &GeoRequirements,
-        data_dir: &std::path::Path,
+        root: &honk_config::paths::DataRoot,
         mut read: impl FnMut(&'static str, &std::path::Path) -> std::io::Result<Arc<[u8]>>,
     ) -> std::io::Result<Self> {
         let mut capture = |required: bool, kind: &'static str, name: &str| {
             if !required {
                 return Ok(GeoSource::Unused);
             }
-            let path = find_dat_from(name, data_dir)
+            let path = root
+                .find_asset(name)
                 .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
             read(kind, &path)
                 .map(|bytes| GeoSource::captured(bytes).with_metadata(Some(path), None))
@@ -318,14 +327,23 @@ impl GeoSourceSet {
         .collect()
     }
 
+    /// Probe the process data root; an engine uses [`Self::probe_union_in`].
     pub(crate) fn probe_union(first: &GeoRequirements, second: &GeoRequirements) -> Self {
+        Self::probe_union_in(first, second, &honk_config::paths::DataRoot::process())
+    }
+
+    pub(crate) fn probe_union_in(
+        first: &GeoRequirements,
+        second: &GeoRequirements,
+        root: &honk_config::paths::DataRoot,
+    ) -> Self {
         let geosite = probe_source_digest(
             !first.geosite_codes.is_empty() || !second.geosite_codes.is_empty(),
-            find_geosite_dat,
+            || root.find_asset("geosite.dat"),
         );
         let geoip = probe_source_digest(
             !first.geoip_codes.is_empty() || !second.geoip_codes.is_empty(),
-            find_geoip_dat,
+            || root.find_asset("geoip.dat"),
         );
         Self::from_sources(geosite, geoip)
     }
@@ -363,11 +381,11 @@ impl GeoSourceSet {
     }
 }
 
-fn capture_source(required: bool, name: &str) -> GeoSource {
+fn capture_source(required: bool, name: &str, root: &honk_config::paths::DataRoot) -> GeoSource {
     if !required {
         return GeoSource::Unused;
     }
-    let Some(path) = find_dat(name) else {
+    let Some(path) = root.find_asset(name) else {
         tracing::warn!(
             asset = name,
             "required geo asset not found; dependent geo matchers are unavailable"
@@ -405,7 +423,10 @@ fn capture_file(path: &std::path::Path) -> std::io::Result<GeoSource> {
         .with_metadata(Some(std::path::absolute(path)?), modified_at))
 }
 
-fn probe_source_digest(required: bool, find: fn() -> Option<std::path::PathBuf>) -> GeoSource {
+fn probe_source_digest(
+    required: bool,
+    find: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> GeoSource {
     if !required {
         return GeoSource::Unused;
     }
@@ -654,42 +675,13 @@ fn load_geosite_index(
 /// Locate geosite.dat for tooling queries (`honk-tool geosite`): an explicit
 /// `--file` path wins at the call site; otherwise the runtime data directory
 /// precedes the old data directory, working directory, honk shares, and dae's legacy locations.
+/// This is the daemon's search; an engine finds assets through its `DataRoot`.
 pub fn find_geosite_dat() -> Option<std::path::PathBuf> {
     find_dat("geosite.dat")
 }
 
 fn find_dat(name: &str) -> Option<std::path::PathBuf> {
-    find_dat_from(name, honk_config::paths::data_dir())
-}
-
-fn find_dat_from(name: &str, data_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    if let Ok(asset) = std::env::var("DAE_LOCATION_ASSET") {
-        let path = std::path::Path::new(&asset).join(name);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    let mut path = data_dir.join(name);
-    if path.is_file() {
-        return Some(path);
-    }
-    for directory in [
-        honk_config::paths::LEGACY_DATA_DIR,
-        ".",
-        "/usr/local/share/honk",
-        "/usr/share/honk",
-        "/usr/local/share/dae",
-        "/usr/share/dae",
-        "/etc/dae",
-    ] {
-        path.clear();
-        path.push(directory);
-        path.push(name);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    None
+    honk_config::paths::DataRoot::process().find_asset(name)
 }
 
 /// Parse geosite.dat once into a per-code index. Only codes in `codes`
@@ -1421,9 +1413,11 @@ mod scan_tests {
         let synthetic = GeoSourceSet::from_bytes(bytes.clone(), Vec::new()).snapshots(requirements);
         assert_eq!(synthetic[0].path, None);
         assert_eq!(synthetic[0].modified_at, None);
-        let overlay = GeoSourceSet::load_captured(requirements, directory.path(), |_| {
-            Ok(Arc::from(bytes.as_slice()))
-        })
+        let overlay = GeoSourceSet::load_captured(
+            requirements,
+            &honk_config::paths::DataRoot::daemon(directory.path()),
+            |_| Ok(Arc::from(bytes.as_slice())),
+        )
         .unwrap()
         .snapshots(requirements);
         assert!(overlay[0].path.is_some());
@@ -1443,20 +1437,26 @@ mod scan_tests {
         requirements.add_geosite("test");
         let malformed = geosite_dat(&[("test", vec![domain_msg(1, "[", &[])])]);
         assert!(parse_geosite_index(&malformed, &requirements.geosite_codes).is_ok());
-        let result = GeoSourceSet::load_captured(&requirements, directory.path(), |_| {
-            Ok(malformed.clone().into())
-        });
+        let result = GeoSourceSet::load_captured(
+            &requirements,
+            &honk_config::paths::DataRoot::daemon(directory.path()),
+            |_| Ok(malformed.clone().into()),
+        );
         assert_eq!(
             result.err().unwrap().kind(),
             std::io::ErrorKind::InvalidData
         );
-        let result = GeoSourceSet::load_captured(&requirements, directory.path(), |_| {
-            Err(std::io::ErrorKind::NotFound.into())
-        });
+        let result = GeoSourceSet::load_captured(
+            &requirements,
+            &honk_config::paths::DataRoot::daemon(directory.path()),
+            |_| Err(std::io::ErrorKind::NotFound.into()),
+        );
         assert_eq!(result.err().unwrap().kind(), std::io::ErrorKind::NotFound);
-        let result = GeoSourceSet::load_captured(&requirements, directory.path(), |_| {
-            Err(std::io::ErrorKind::PermissionDenied.into())
-        });
+        let result = GeoSourceSet::load_captured(
+            &requirements,
+            &honk_config::paths::DataRoot::daemon(directory.path()),
+            |_| Err(std::io::ErrorKind::PermissionDenied.into()),
+        );
         assert_eq!(
             result.err().unwrap().kind(),
             std::io::ErrorKind::PermissionDenied
@@ -1510,9 +1510,15 @@ mod scan_tests {
         let missing = directory.path().join("missing-geosite.dat");
         let name = missing.to_str().unwrap();
         tracing::subscriber::with_default(subscriber, || {
-            assert!(matches!(capture_source(false, name), GeoSource::Unused));
+            assert!(matches!(
+                capture_source(false, name, &honk_config::paths::DataRoot::process()),
+                GeoSource::Unused
+            ));
             assert_eq!(output.as_file().metadata().unwrap().len(), 0);
-            assert!(matches!(capture_source(true, name), GeoSource::Missing));
+            assert!(matches!(
+                capture_source(true, name, &honk_config::paths::DataRoot::process()),
+                GeoSource::Missing
+            ));
         });
         let output = std::fs::read_to_string(output.path()).unwrap();
         assert!(output.contains("WARN"));

@@ -201,7 +201,7 @@ impl Fixture {
             .union(&DnsRouter::geo_requirements(&config.dns));
         let geo = crate::routing::GeoSourceSet::load_captured(
             &requirements,
-            Path::new(&config.global.data_dir),
+            &honk_config::paths::DataRoot::daemon(&config.global.data_dir),
             |path| std::fs::read(path).map(Arc::from),
         )
         .unwrap();
@@ -253,7 +253,7 @@ impl Fixture {
             .start(
                 store,
                 Some(initial),
-                directory.path().join("state"),
+                honk_config::paths::DataRoot::daemon(directory.path().join("state")),
                 control_plane.config_handle(),
                 control_plane.log_files(),
                 control_plane.startup_downgrades(),
