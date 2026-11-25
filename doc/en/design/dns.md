@@ -70,6 +70,8 @@ The control plane owns [TCP handoff and UDP per-packet admission](./control-plan
 
 Stale refresh and preferred-family siblings retain the initiating `DnsRequestMeta`. Source-aware flow resolution without an intercepted destination fails closed when policy selects `asis`.
 
+An embedding application that captures DNS itself calls `DnsService::resolve_outcome_with_context` with the query bytes, its `DnsRequestMeta` and its ingress profile. The call takes the current generation's lease and query permit, as `DnsController` admission does, runs the same strict resolution, and returns the typed `DnsOutcome`. It releases both before returning, so a held outcome does not delay retirement. The caller owns framing and the reply; the call projects no domain route.
+
 The standalone listener has these lifecycle and admission invariants:
 
 - It binds every selected transport synchronously and all-or-nothing before starting a supervisor. One bind failure closes the partial set and fails startup.

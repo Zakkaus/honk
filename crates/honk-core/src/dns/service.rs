@@ -142,6 +142,52 @@ impl DnsService {
         }
     }
 
+    /// Resolves one captured client query and returns honk's typed outcome.
+    ///
+    /// The query runs under the current generation's lease and query permit,
+    /// as an admitted transparent query does; both are released before this
+    /// returns, so a held outcome never delays generation retirement. The
+    /// caller owns framing and the reply. [`packet_rejection`] finds
+    /// [`PacketRejection::Capacity`] for a saturated generation and
+    /// [`PacketRejection::Cancelled`] for a retired one;
+    /// [`DnsForwardError::Overloaded`] is the daemon's `REFUSED` case. No
+    /// domain route is projected.
+    ///
+    /// [`packet_rejection`]: honk_outbound::proxy::packet_rejection
+    /// [`PacketRejection::Capacity`]: honk_outbound::proxy::PacketRejection::Capacity
+    /// [`PacketRejection::Cancelled`]: honk_outbound::proxy::PacketRejection::Cancelled
+    /// [`DnsForwardError::Overloaded`]: crate::dns::forwarder::DnsForwardError::Overloaded
+    pub async fn resolve_outcome_with_context(
+        &self,
+        raw_query: &[u8],
+        metadata: DnsRequestMeta,
+        ingress: IngressProfile,
+    ) -> anyhow::Result<DnsOutcome> {
+        match self.backend.as_ref() {
+            DnsServiceBackend::Runtime(provider) => {
+                let lease = provider.try_acquire()?;
+                // The query semaphore is never closed, so it fails only when
+                // the generation is saturated.
+                let _permit = lease
+                    .runtime()
+                    .try_acquire_query()
+                    .map_err(|_| honk_outbound::proxy::PacketRejection::Capacity)?;
+                self.resolve_client_outcome_with_runtime(&lease, raw_query, metadata, ingress, None)
+                    .await
+            }
+            DnsServiceBackend::Standalone(forwarder) => {
+                let mut operation = self.operation();
+                operation
+                    .run(
+                        forwarder
+                            .resolve_outcome_with_context_and_profile(raw_query, metadata, ingress),
+                    )
+                    .await?
+                    .map_err(Into::into)
+            }
+        }
+    }
+
     pub(crate) async fn resolve_client_outcome_with_runtime(
         &self,
         runtime: &RuntimeLease,
