@@ -50,3 +50,6 @@ mod routing;
 
 #[cfg(test)]
 pub(in crate::control) use routing::{RealityOutcome, domain_reality_outcome};
+
+#[cfg(feature = "embedded")]
+pub mod embedded;

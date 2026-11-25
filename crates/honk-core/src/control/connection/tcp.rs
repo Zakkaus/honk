@@ -16,7 +16,7 @@ use super::observation::ConnectionObservation;
 use crate::observe::catalog::CatalogIdentity;
 
 mod dial;
-mod score;
+pub(super) mod score;
 mod terminal;
 
 use score::{

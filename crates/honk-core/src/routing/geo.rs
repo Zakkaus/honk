@@ -48,7 +48,7 @@ impl GeoRequirements {
     }
 
     /// The sorted category names `kind` must contain, without attribute selectors.
-    #[cfg(feature = "native-api")]
+    #[cfg(any(feature = "native-api", feature = "embedded"))]
     pub(crate) fn codes(&self, kind: &str) -> Vec<String> {
         let mut codes: Vec<String> = match kind {
             "geosite" => self
@@ -260,7 +260,7 @@ impl GeoSourceSet {
 
     /// A replacement file must define every category the configuration uses:
     /// a missing one would silently turn its rules into never-matching ones.
-    #[cfg(feature = "native-api")]
+    #[cfg(any(feature = "native-api", feature = "embedded"))]
     fn contain(&self, requirements: &GeoRequirements) -> std::io::Result<()> {
         let missing = || std::io::Error::from(std::io::ErrorKind::InvalidData);
         if let Some(bytes) = self.geosite.bytes() {
@@ -288,7 +288,7 @@ impl GeoSourceSet {
         Ok(())
     }
 
-    #[cfg(feature = "native-api")]
+    #[cfg(any(feature = "native-api", feature = "embedded"))]
     pub(crate) fn validate(&self, requirements: &GeoRequirements) -> std::io::Result<()> {
         let invalid = |_| std::io::Error::from(std::io::ErrorKind::InvalidData);
         if !requirements.geosite_codes.is_empty() {
@@ -1990,3 +1990,6 @@ mod scan_tests {
         assert!(decoder.read_len_delimited().is_err());
     }
 }
+
+#[cfg(feature = "embedded")]
+mod embedded;

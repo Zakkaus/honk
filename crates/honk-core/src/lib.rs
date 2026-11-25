@@ -2096,3 +2096,6 @@ mod startup_lifecycle_tests {
             .unwrap();
     }
 }
+
+#[cfg(feature = "embedded")]
+pub use control::embedded;
