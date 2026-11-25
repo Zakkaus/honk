@@ -39,6 +39,8 @@ impl Connector for TcpConnector {
         // Never let audit output recurse through honk's own interception path.
         #[cfg(target_os = "linux")]
         socket2::SockRef::from(&socket).set_mark(self.mark)?;
+        #[cfg(not(target_os = "linux"))]
+        let _ = self.mark;
         let stream = socket.connect(self.target).await?;
         stream.set_nodelay(true)?;
         Ok(stream)
