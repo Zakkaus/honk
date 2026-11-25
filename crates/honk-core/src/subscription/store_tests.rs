@@ -358,3 +358,21 @@ async fn a_legacy_body_that_cannot_be_copied_stays_for_a_retry() {
     );
     assert!(!root.exists());
 }
+
+#[test]
+fn an_explicit_root_has_no_legacy_store_roots() {
+    use honk_config::paths::DataRoot;
+
+    assert_eq!(
+        legacy_store_roots(&DataRoot::explicit("/srv/engine")),
+        [Path::new("/srv/engine/.sub")]
+    );
+    assert_eq!(
+        legacy_store_roots(&DataRoot::daemon("/srv/honk")),
+        [
+            Path::new("/srv/honk/.sub"),
+            Path::new("/var/share/honk/.sub"),
+            Path::new(".sub"),
+        ]
+    );
+}

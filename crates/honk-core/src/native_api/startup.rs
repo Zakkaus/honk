@@ -82,7 +82,7 @@ impl NativeRuntime {
         let observation = &self.observation;
         observation.providers.attach(subscriptions.clone());
         let service = observation.configuration.clone();
-        remove_stale_temporaries(sources.as_ref(), config_path);
+        remove_stale_temporaries(sources.as_ref(), config_path, control_plane.data_root());
         let store = match database {
             Some(database) => SourceStore::Db(database.store),
             None => SourceStore::File(
@@ -97,7 +97,7 @@ impl NativeRuntime {
             .start(
                 store,
                 sources,
-                honk_config::paths::DataRoot::process(),
+                control_plane.data_root().clone(),
                 control_plane.config_handle(),
                 control_plane.log_files(),
                 control_plane.startup_downgrades(),
@@ -130,7 +130,11 @@ impl NativeRuntime {
 
 /// Sweeps every directory a configuration or geodata write stages into; runs before the
 /// coordinator exists, so no temporary file of this process can be caught.
-fn remove_stale_temporaries(sources: Option<&SourceUpdate>, config_path: &Path) {
+fn remove_stale_temporaries(
+    sources: Option<&SourceUpdate>,
+    config_path: &Path,
+    data_root: &honk_config::paths::DataRoot,
+) {
     let files = sources.into_iter().flat_map(|sources| {
         let dependencies = sources
             .dependencies
@@ -146,7 +150,7 @@ fn remove_stale_temporaries(sources: Option<&SourceUpdate>, config_path: &Path) 
         .map(PathBuf::as_path)
         .chain([config_path])
         .filter_map(Path::parent)
-        .chain([honk_config::paths::data_dir()])
+        .chain([data_root.dir()])
         .collect();
     for directory in directories {
         for path in config_write::remove_stale_temporaries(directory) {
