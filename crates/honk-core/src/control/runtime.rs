@@ -138,7 +138,7 @@ pub(super) async fn run_tcp_admission_scaler(
     }
 }
 
-#[cfg(feature = "ebpf")]
+#[cfg(any(feature = "ebpf", test))]
 pub(super) fn disable_nfqueue_for_startup(config: &mut Config, enabled: &mut bool) {
     config.global.nfqueue_enable = false;
     *enabled = false;
@@ -287,7 +287,8 @@ impl OutboundHealthPublisher {
 }
 
 impl ControlPlane {
-    #[cfg(feature = "ebpf")]
+    // Tests also drive it without `ebpf`, where no NFQUEUE startup can fail.
+    #[cfg(any(feature = "ebpf", test))]
     pub(super) async fn degrade_nfqueue_startup(
         &mut self,
         enabled: &mut bool,
@@ -297,10 +298,14 @@ impl ControlPlane {
             %error,
             "NFQUEUE startup failed before datapath admission; disabling staging for this process"
         );
-        self.pending_udp_verdicts = None;
+        #[cfg(feature = "ebpf")]
+        {
+            self.pending_udp_verdicts = None;
+        }
         self.startup_downgrades.record_nfqueue_unavailable();
         let mut config = self.config.write().await;
         disable_nfqueue_for_startup(Arc::make_mut(&mut config), enabled);
+        self.diagnostics.write().unsupported = self.startup_downgrades.unsupported_at_startup();
     }
 
     #[cfg(feature = "ebpf")]

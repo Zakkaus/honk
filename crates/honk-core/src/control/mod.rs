@@ -348,7 +348,14 @@ impl ControlPlane {
         buckets: crate::config_diagnostics::DiagnosticBuckets,
     ) {
         let _config = self.config.write().await;
-        self.diagnostics.write().buckets = buckets;
+        let mut active = self.diagnostics.write();
+        active.buckets = buckets;
+        active.unsupported = self.startup_downgrades.unsupported_at_startup();
+    }
+
+    /// What the active generation does not honour from its configuration.
+    pub fn activation_report(&self) -> crate::config_diagnostics::ActivationReport {
+        self.diagnostics.read().activation_report()
     }
 
     #[cfg(feature = "reload-bench-counters")]

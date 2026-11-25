@@ -1,4 +1,5 @@
 use honk_config::diagnostic::{DetailedDiagnostic, DiagnosticSource, Severity, SourceRef};
+use honk_config::parser::source_edit::SettingLocation;
 use honk_config::subscription::Subscription;
 use serde::Serialize;
 use uuid::Uuid;
@@ -12,9 +13,12 @@ pub struct DiagnosticBuckets {
 
 pub(crate) enum DiagnosticUpdate {
     Preserve,
-    Replace(DiagnosticBuckets),
+    /// A whole candidate's provenance and the settings it asks for that this
+    /// engine does not honour.
+    Replace(DiagnosticBuckets, Vec<UnsupportedSetting>),
     Rebase {
         static_diagnostics: Vec<DetailedDiagnostic>,
+        unsupported: Vec<UnsupportedSetting>,
         retained_provider_ids: std::collections::HashSet<Uuid>,
         /// Each retained subscription's id and the file that declares it.
         declared: Vec<(Uuid, SourceRef)>,
@@ -42,9 +46,10 @@ impl DiagnosticBuckets {
     pub(crate) fn apply(&mut self, update: DiagnosticUpdate) {
         match update {
             DiagnosticUpdate::Preserve => {}
-            DiagnosticUpdate::Replace(buckets) => *self = buckets,
+            DiagnosticUpdate::Replace(buckets, _) => *self = buckets,
             DiagnosticUpdate::Rebase {
                 static_diagnostics,
+                unsupported: _,
                 retained_provider_ids,
                 declared,
             } => {
@@ -108,16 +113,76 @@ pub(crate) fn declare_diagnostics(source: &SourceRef, diagnostics: &mut [Detaile
     }
 }
 
+/// A setting the active configuration asks for that this engine does not
+/// honour; the generation runs as if the setting were off.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnsupportedSetting {
+    /// Stable code for the cause.
+    pub code: &'static str,
+    /// Schema path, such as `global.nfqueue_enable`.
+    pub setting: &'static str,
+    pub message: &'static str,
+    /// The effective declaration in the activated sources. `None` when the
+    /// value is the default or the activation carried no source text.
+    pub location: Option<SettingLocation>,
+}
+
+/// What one activated generation does not honour from its configuration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActivationReport {
+    pub generation: u64,
+    pub unsupported: Vec<UnsupportedSetting>,
+}
+
+/// Point each setting at its effective declaration in `sources`.
+pub(crate) fn locate_unsupported(
+    unsupported: &mut [UnsupportedSetting],
+    sources: &[honk_config::parser::SourceSnapshot],
+) {
+    if unsupported.is_empty() || sources.is_empty() {
+        return;
+    }
+    let Ok(locations) = honk_config::parser::source_edit::global_setting_locations(sources) else {
+        return;
+    };
+    for setting in unsupported {
+        setting.location = setting
+            .setting
+            .strip_prefix("global.")
+            .and_then(|key| locations.get(key))
+            .cloned();
+    }
+}
+
 /// Active diagnostics and the datapath generation they describe.
 #[derive(Clone, Debug, Default)]
 pub struct ActiveDiagnostics {
     pub generation: u64,
     pub buckets: DiagnosticBuckets,
+    /// Replaced only with the operator document, so a subscription merge keeps it.
+    pub unsupported: Vec<UnsupportedSetting>,
 }
 
 impl ActiveDiagnostics {
     pub fn snapshot(&self, subscriptions: &[Subscription]) -> DiagnosticSnapshot {
         self.buckets.snapshot(self.generation, subscriptions)
+    }
+
+    /// Only an update that replaces the operator document replaces the report.
+    pub(crate) fn apply(&mut self, mut update: DiagnosticUpdate) {
+        if let DiagnosticUpdate::Replace(_, unsupported)
+        | DiagnosticUpdate::Rebase { unsupported, .. } = &mut update
+        {
+            self.unsupported = std::mem::take(unsupported);
+        }
+        self.buckets.apply(update);
+    }
+
+    pub fn activation_report(&self) -> ActivationReport {
+        ActivationReport {
+            generation: self.generation,
+            unsupported: self.unsupported.clone(),
+        }
     }
 }
 
