@@ -684,6 +684,25 @@ pub fn build_dns_connector(
     })
 }
 
+/// [`build_dns_connector`] trusting only `roots` instead of the bundled set,
+/// for loopback TLS fixtures in dependent crates.
+#[doc(hidden)]
+pub fn build_dns_connector_with_roots(
+    roots: boring::x509::store::X509Store,
+    alpn_wire: &[u8],
+) -> anyhow::Result<TlsConnector> {
+    let mut builder = base_builder(false)?;
+    builder.set_cert_store(roots);
+    builder.set_alpn_protos(alpn_wire)?;
+    Ok(TlsConnector {
+        connector: builder.build(),
+        chrome: false,
+        alps: false,
+        ech_config_list: None,
+        ech_discovery: false,
+    })
+}
+
 /// ALPN wire offering HTTP/2 with HTTP/1.1 fallback (Chrome / Go-client
 /// style: the server picks).
 const PROBE_ALPN_WIRE: &[u8] = b"\x02h2\x08http/1.1";

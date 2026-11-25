@@ -125,11 +125,13 @@ impl Client {
         Self { tls: None }
     }
 
-    /// A client that accepts any certificate, for loopback TLS fixtures.
+    /// A client that trusts only `roots`, for loopback TLS fixtures.
     #[cfg(all(test, feature = "clash-api"))]
-    pub(crate) fn unverified() -> Self {
+    pub(crate) fn with_roots(roots: boring::x509::store::X509Store) -> Self {
         Self {
-            tls: Some(honk_outbound::tls::build_dns_connector(true, HTTP1_ALPN_WIRE).unwrap()),
+            tls: Some(
+                honk_outbound::tls::build_dns_connector_with_roots(roots, HTTP1_ALPN_WIRE).unwrap(),
+            ),
         }
     }
 

@@ -6,6 +6,10 @@ fn download_tls() -> (crate::marked_http::Client, tokio_rustls::TlsAcceptor) {
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let der = rustls::pki_types::CertificateDer::from(cert.cert);
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let mut roots = boring::x509::store::X509StoreBuilder::new().unwrap();
+    roots
+        .add_cert(boring::x509::X509::from_der(&der).unwrap())
+        .unwrap();
     let server = rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .unwrap()
@@ -16,7 +20,7 @@ fn download_tls() -> (crate::marked_http::Client, tokio_rustls::TlsAcceptor) {
         )
         .unwrap();
     (
-        crate::marked_http::Client::unverified(),
+        crate::marked_http::Client::with_roots(roots.build()),
         tokio_rustls::TlsAcceptor::from(Arc::new(server)),
     )
 }
@@ -228,14 +232,7 @@ async fn download_tls_keeps_san_validation() {
     let error = anyhow::Error::new(error);
     assert!(!ScoreOutcome::from_error(&error).is_node_failure());
     assert!(
-        error.chain().any(|source| source
-            .downcast_ref::<std::io::Error>()
-            .and_then(std::io::Error::get_ref)
-            .and_then(|source| source.downcast_ref::<tokio_rustls::rustls::Error>())
-            .is_some_and(|error| matches!(
-                error,
-                tokio_rustls::rustls::Error::InvalidCertificate(_)
-            ))),
+        format!("{error:#}").contains("CERTIFICATE_VERIFY_FAILED"),
         "{error:#}"
     );
     server.await.unwrap();
