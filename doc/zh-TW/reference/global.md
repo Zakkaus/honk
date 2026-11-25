@@ -428,7 +428,7 @@ IP6GRE 如果只有單播 remote、沒有明確的 local 位址，可能不帶 `
 5. `/usr/local/share/honk/<name>`，然後 `/usr/share/honk/<name>`
 6. `/usr/local/share/dae/<name>`、`/usr/share/dae/<name>`，然後 `/etc/dae/<name>`
 
-以上是常駐程式的查詢順序。嵌入 `honk-core` 的應用程式用 `DataRoot::explicit(<dir>)` 建構引擎，並把它傳給 `ControlPlane::new_with_data_root`、`Router::from_config_in`、`DnsRouter::new_from_dns_config_in` 和 `DnsForwarder::with_policy_from_config_in` 時，啟動階段只從 `<dir>` 讀取 `geoip.dat`、`geosite.dat` 和相對路徑的 `use_host` 檔案。重新載入設定和相對路徑的 `ech_config_path` 檔案仍使用行程的資料目錄。
+以上是常駐程式的查詢順序。嵌入 `honk-core` 的應用程式用 `DataRoot::explicit(<dir>)` 建構引擎，並把它傳給 `ControlPlane::new_with_data_root`、`Router::from_config_in`、`DnsRouter::new_from_dns_config_in` 和 `DnsForwarder::with_policy_from_config_in` 時，啟動和每次重新載入設定都只從 `<dir>` 讀取 `geoip.dat`、`geosite.dat` 和相對路徑的 `use_host` 檔案。相對路徑的 `ech_config_path` 檔案仍使用行程的資料目錄。
 
 其他相對執行期路徑會按下表保留舊安裝。除日誌外，每次查詢會先檢查實際生效資料目錄中已有的副本，再檢查 `/var/share/honk` 中已有的副本，最後檢查各呼叫端既有的舊候選路徑。都不存在時，傳回 `data_dir` 下的路徑供建立使用；絕對路徑保持原樣。
 

@@ -428,7 +428,7 @@ Direct, block, `must`, and other reserved handoffs remain final and keep the ori
 5. `/usr/local/share/honk/<name>`, then `/usr/share/honk/<name>`
 6. `/usr/local/share/dae/<name>`, `/usr/share/dae/<name>`, then `/etc/dae/<name>`
 
-This order is the daemon's. An application that embeds `honk-core` and builds its engine with `DataRoot::explicit(<dir>)`, passing it to `ControlPlane::new_with_data_root`, `Router::from_config_in`, `DnsRouter::new_from_dns_config_in` and `DnsForwarder::with_policy_from_config_in`, reads `geoip.dat`, `geosite.dat` and relative `use_host` files at startup only from `<dir>`. A configuration reload and relative `ech_config_path` files still use the process data directory.
+This order is the daemon's. An application that embeds `honk-core` and builds its engine with `DataRoot::explicit(<dir>)`, passing it to `ControlPlane::new_with_data_root`, `Router::from_config_in`, `DnsRouter::new_from_dns_config_in` and `DnsForwarder::with_policy_from_config_in`, reads `geoip.dat`, `geosite.dat` and relative `use_host` files only from `<dir>`, at startup and on each configuration reload. Relative `ech_config_path` files still use the process data directory.
 
 Other relative runtime paths preserve legacy installations as follows. Except for logs, each lookup checks the existing configured-data-directory copy first, then an existing `/var/share/honk` copy, then the existing per-caller legacy candidate. If none exists, the path below `data_dir` is returned for creation. Absolute paths remain explicit.
 
