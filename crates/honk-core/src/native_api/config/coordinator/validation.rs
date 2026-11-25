@@ -10,7 +10,7 @@ impl Worker {
         let instance = self.service.instance_id.clone();
         let store = self.store.clone();
         let accepted = self.service.sources.accepted.read().clone();
-        let data_dir = self.data_dir.clone();
+        let data_root = self.data_root.clone();
         let deferred = if request.mode == "syntax" {
             Vec::new()
         } else {
@@ -46,7 +46,7 @@ impl Worker {
                             check_dae_source(path,content)?;
                         }
                     }
-                    let validated=offline::validate_for_coordinator(loaded,store.dependency_root(),&active,&data_dir,SourceLimits::DEFAULT,&mut diagnostics,&deferred,None,&documents)?;
+                    let validated=offline::validate_for_coordinator(loaded,store.dependency_root(),&active,&data_root,SourceLimits::DEFAULT,&mut diagnostics,&deferred,None,&documents)?;
                     // A save of this candidate would be refused; a dry run only warns.
                     diagnostics.extend(restart_diagnostics(&active,&validated.config,&log_files,&startup_downgrades,&validated.sources[0].source,Severity::Warning));
                     Ok(LoadedConfig {config:validated.config,sources:validated.sources})
@@ -71,7 +71,7 @@ impl Worker {
             active,
             log_files: self.log_files.clone(),
             startup_downgrades: self.startup_downgrades.clone(),
-            data_dir: self.data_dir.clone(),
+            data_root: self.data_root.clone(),
             deferred: self
                 .subscriptions
                 .deferred_subscriptions()
@@ -89,7 +89,7 @@ pub(super) struct CandidateCheck {
     pub(super) active: Arc<Config>,
     pub(super) log_files: LogFiles,
     pub(super) startup_downgrades: StartupDowngrades,
-    pub(super) data_dir: PathBuf,
+    pub(super) data_root: DataRoot,
     pub(super) deferred: Vec<honk_config::subscription::Subscription>,
 }
 
@@ -111,7 +111,7 @@ impl CandidateCheck {
             loaded,
             self.store.dependency_root(),
             active,
-            &self.data_dir,
+            &self.data_root,
             SourceLimits::DEFAULT,
             diagnostics,
             &self.deferred,
@@ -213,7 +213,7 @@ impl CandidateCheck {
             overlay,
             validated,
             &self.active,
-            &self.data_dir,
+            &self.data_root,
             &self.deferred,
         )
     }
@@ -226,7 +226,7 @@ pub(super) fn unchanged(
     overlay: &HashMap<PathBuf, Arc<str>>,
     validated: &offline::ValidatedConfig,
     active: &Config,
-    data_dir: &Path,
+    data_root: &DataRoot,
     deferred: &[honk_config::subscription::Subscription],
 ) -> Result<(), WriteError> {
     let mut notices = Vec::new();
@@ -241,7 +241,7 @@ pub(super) fn unchanged(
         return Err(WriteError::Conflict);
     }
     let dependencies = validated
-        .recapture_dependencies(active, data_dir, SourceLimits::DEFAULT, deferred)
+        .recapture_dependencies(active, data_root, SourceLimits::DEFAULT, deferred)
         .map_err(|_| WriteError::Conflict)?;
     if validated.dependencies != dependencies {
         return Err(WriteError::Conflict);

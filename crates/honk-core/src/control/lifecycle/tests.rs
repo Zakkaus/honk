@@ -100,7 +100,7 @@ impl Fixture {
         let dns_geo = crate::dns::routing::DnsRouter::geo_requirements(&config.dns);
         let sources = crate::routing::GeoSourceSet::load_captured(
             &traffic_geo.union(&dns_geo),
-            std::path::Path::new(&config.global.data_dir),
+            &honk_config::paths::DataRoot::daemon(&config.global.data_dir),
             // Pin test inputs, not a developer's ambient DAE_LOCATION_ASSET directory.
             |path| {
                 std::fs::read(

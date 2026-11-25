@@ -151,7 +151,12 @@ fn hosts_admission_charges_each_materialized_reference() {
     assert_eq!(
         admitted.dependencies,
         admitted
-            .recapture_dependencies(&active, Path::new(&active.global.data_dir), exact, &[],)
+            .recapture_dependencies(
+                &active,
+                &honk_config::paths::DataRoot::daemon(Path::new(&active.global.data_dir)),
+                exact,
+                &[],
+            )
             .unwrap()
     );
     let short = SourceLimits {
@@ -219,7 +224,7 @@ fn unused_submissions_share_exact_materialization_byte_and_count_limits() {
             loaded.clone(),
             loaded.sources[0].path.parent(),
             &active,
-            Path::new(&active.global.data_dir),
+            &honk_config::paths::DataRoot::daemon(Path::new(&active.global.data_dir)),
             limits,
             &mut Vec::new(),
             &[],
@@ -231,7 +236,12 @@ fn unused_submissions_share_exact_materialization_byte_and_count_limits() {
     assert_eq!(
         admitted.dependencies,
         admitted
-            .recapture_dependencies(&active, Path::new(&active.global.data_dir), exact, &[])
+            .recapture_dependencies(
+                &active,
+                &honk_config::paths::DataRoot::daemon(Path::new(&active.global.data_dir)),
+                exact,
+                &[]
+            )
             .unwrap()
     );
     for (limits, code) in [
@@ -279,7 +289,12 @@ fn revalidation_binds_ordered_host_aliases_to_their_targets() {
     assert_eq!(
         admitted.dependencies,
         admitted
-            .recapture_dependencies(&active, data_dir, SourceLimits::default(), &[])
+            .recapture_dependencies(
+                &active,
+                &honk_config::paths::DataRoot::daemon(data_dir),
+                SourceLimits::default(),
+                &[]
+            )
             .unwrap()
     );
     fs::remove_file(&first_reader).unwrap();
@@ -289,7 +304,12 @@ fn revalidation_binds_ordered_host_aliases_to_their_targets() {
     assert_ne!(
         admitted.dependencies,
         admitted
-            .recapture_dependencies(&active, data_dir, SourceLimits::default(), &[])
+            .recapture_dependencies(
+                &active,
+                &honk_config::paths::DataRoot::daemon(data_dir),
+                SourceLimits::default(),
+                &[]
+            )
             .unwrap()
     );
 }
@@ -426,7 +446,7 @@ fn repeated_aliases_cannot_retain_bodies_beyond_byte_or_source_limits() {
             &loaded.sources,
             loaded.sources[0].path.parent(),
             &loaded.config,
-            Path::new(&loaded.config.global.data_dir),
+            &honk_config::paths::DataRoot::daemon(Path::new(&loaded.config.global.data_dir)),
             limits,
             &[],
         )
@@ -508,7 +528,7 @@ fn ech_is_bounded_and_inline_material_wins_without_opening_a_file() {
         admitted
             .recapture_dependencies(
                 &active,
-                Path::new(&active.global.data_dir),
+                &honk_config::paths::DataRoot::daemon(Path::new(&active.global.data_dir)),
                 SourceLimits::default(),
                 &[],
             )
@@ -523,7 +543,7 @@ fn ech_is_bounded_and_inline_material_wins_without_opening_a_file() {
         admitted
             .recapture_dependencies(
                 &active,
-                Path::new(&active.global.data_dir),
+                &honk_config::paths::DataRoot::daemon(Path::new(&active.global.data_dir)),
                 SourceLimits::default(),
                 &[],
             )
@@ -580,7 +600,7 @@ fn cached_subscriptions_remain_inside_source_budgets() {
         admitted
             .recapture_dependencies(
                 &loaded.config,
-                Path::new(&loaded.config.global.data_dir),
+                &honk_config::paths::DataRoot::daemon(Path::new(&loaded.config.global.data_dir)),
                 exact,
                 &[],
             )
@@ -752,7 +772,7 @@ fn cached_presence_and_rebased_active_semantics_are_both_required() {
         admitted
             .recapture_dependencies(
                 &active,
-                Path::new(&active.global.data_dir),
+                &honk_config::paths::DataRoot::daemon(Path::new(&active.global.data_dir)),
                 SourceLimits::default(),
                 &[],
             )
@@ -830,7 +850,12 @@ fn revalidation_detects_a_new_higher_priority_dependency() {
     fs::create_dir_all(higher.parent().unwrap()).unwrap();
     fs::write(&higher, "full:new.test 192.0.2.2\n").unwrap();
     let dependencies = old
-        .recapture_dependencies(&active, &data_dir, SourceLimits::default(), &[])
+        .recapture_dependencies(
+            &active,
+            &honk_config::paths::DataRoot::daemon(&data_dir),
+            SourceLimits::default(),
+            &[],
+        )
         .unwrap();
     assert_ne!(old.dependencies, dependencies);
     assert_eq!(dependencies[0].path, fs::canonicalize(higher).unwrap());
@@ -867,7 +892,7 @@ fn geodata_overlay_compiles_and_retains_verified_bytes_instead_of_disk() {
         loaded.clone(),
         loaded.sources[0].path.parent(),
         &active,
-        data_dir,
+        &honk_config::paths::DataRoot::daemon(data_dir),
         SourceLimits::default(),
         &mut Vec::new(),
         &[],
@@ -879,7 +904,12 @@ fn geodata_overlay_compiles_and_retains_verified_bytes_instead_of_disk() {
     assert_eq!(
         admitted.dependencies,
         admitted
-            .recapture_dependencies(&active, data_dir, SourceLimits::default(), &[])
+            .recapture_dependencies(
+                &active,
+                &honk_config::paths::DataRoot::daemon(data_dir),
+                SourceLimits::default(),
+                &[]
+            )
             .unwrap()
     );
     assert_eq!(
@@ -896,7 +926,7 @@ fn a_stored_body_over_the_budget_is_refused_before_it_is_read() {
         &loaded.sources,
         loaded.sources[0].path.parent(),
         &loaded.config,
-        Path::new(&loaded.config.global.data_dir),
+        &honk_config::paths::DataRoot::daemon(Path::new(&loaded.config.global.data_dir)),
         SourceLimits::default(),
         &[],
     )

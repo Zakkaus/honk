@@ -94,7 +94,7 @@ impl ValidatedConfig {
     pub(crate) fn recapture_dependencies(
         &self,
         active: &Config,
-        data_dir: &Path,
+        data_root: &honk_config::paths::DataRoot,
         limits: SourceLimits,
         deferred: &[honk_config::subscription::Subscription],
     ) -> io::Result<Vec<DependencySnapshot>> {
@@ -102,7 +102,7 @@ impl ValidatedConfig {
             &self.sources,
             self.dependency_root.as_deref(),
             active,
-            data_dir,
+            data_root,
             limits,
             &[],
         )?;
@@ -112,7 +112,7 @@ impl ValidatedConfig {
             .iter()
             .any(|subscription| subscription.enabled)
         {
-            let store = StoredBodies::open(data_dir)?;
+            let store = StoredBodies::open(data_root.dir())?;
             for (index, subscription) in self
                 .config
                 .subscriptions
@@ -143,7 +143,7 @@ impl ValidatedConfig {
         let mut dependencies = if let Some(geo) = &self.geo_sources {
             geo_dependencies(geo, &requirements)?
         } else {
-            GeoSourceSet::capture_for_admission(&requirements, data_dir, |kind, path| {
+            GeoSourceSet::capture_for_admission(&requirements, data_root, |kind, path| {
                 capture.path(path, true, DependencyReader::Geo(kind))
             })?;
             Vec::new()
