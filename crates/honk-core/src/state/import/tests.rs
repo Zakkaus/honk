@@ -1,6 +1,7 @@
 use std::fs;
 
 use super::*;
+use honk_config::paths::DataRoot;
 
 fn now() -> i64 {
     i64::try_from(now_unix()).unwrap()
@@ -173,7 +174,12 @@ fn locate_keeps_the_legacy_resolver() {
     let directory = tempfile::tempdir().unwrap();
     let absolute = directory.path().join("elsewhere.db");
     assert_eq!(
-        LegacyCache::locate(absolute.to_str(), Some("gw"), Some(Path::new("/etc/honk"))),
+        LegacyCache::locate(
+            absolute.to_str(),
+            Some("gw"),
+            Some(Path::new("/etc/honk")),
+            &DataRoot::process()
+        ),
         LegacyCache {
             path: absolute,
             cache_id: "gw".into(),
@@ -182,7 +188,13 @@ fn locate_keeps_the_legacy_resolver() {
     let name = format!("cache-{}.db", uuid::Uuid::new_v4());
     fs::write(directory.path().join(&name), b"").unwrap();
     assert_eq!(
-        LegacyCache::locate(Some(&name), None, Some(directory.path())).path,
+        LegacyCache::locate(
+            Some(&name),
+            None,
+            Some(directory.path()),
+            &DataRoot::process()
+        )
+        .path,
         directory.path().join(&name)
     );
 }
@@ -297,7 +309,12 @@ fn a_bare_legacy_name_is_looked_up_in_the_current_directory() {
     assert_eq!(directory_of(Path::new("/srv/cache.db")), Path::new("/srv"));
     // `-c config.dae` has an empty parent, which the old resolver turns into
     // the bare name.
-    let located = LegacyCache::locate(None, None, Path::new("config.dae").parent());
+    let located = LegacyCache::locate(
+        None,
+        None,
+        Path::new("config.dae").parent(),
+        &DataRoot::process(),
+    );
     assert!(
         located.path == Path::new("cache.db") || located.path.is_absolute(),
         "{}",

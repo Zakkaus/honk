@@ -24,7 +24,10 @@ pub(super) enum Ui {
     Embedded(&'static [(&'static str, EmbeddedAsset)]),
 }
 
-pub(super) async fn load(path: &str) -> anyhow::Result<Option<Ui>> {
+pub(super) async fn load(
+    path: &str,
+    root: &honk_config::paths::DataRoot,
+) -> anyhow::Result<Option<Ui>> {
     if path.is_empty() {
         return Ok(None);
     }
@@ -45,7 +48,7 @@ pub(super) async fn load(path: &str) -> anyhow::Result<Option<Ui>> {
         anyhow::bail!("{path} native UI requires the native-ui feature");
     }
 
-    let root = honk_config::paths::resolve_dependency_path(path);
+    let root = root.resolve_dependency(path);
     ensure!(
         tokio::fs::metadata(&root)
             .await

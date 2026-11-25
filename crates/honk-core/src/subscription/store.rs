@@ -482,10 +482,15 @@ fn copy_legacy(
     Ok(copied)
 }
 
-/// Where older releases kept `.sub`, in their search order.
-pub(crate) fn legacy_store_roots() -> [PathBuf; 3] {
-    [
-        honk_config::paths::data_dir().join(SUBSCRIPTION_STORE_DIR),
+/// Where older releases kept `.sub`, in their search order. An explicit root
+/// has no older releases, so only its own directory is searched.
+pub(crate) fn legacy_store_roots(root: &honk_config::paths::DataRoot) -> Vec<PathBuf> {
+    let own = root.dir().join(SUBSCRIPTION_STORE_DIR);
+    if !root.searches_system_locations() {
+        return vec![own];
+    }
+    vec![
+        own,
         Path::new(honk_config::paths::LEGACY_DATA_DIR).join(SUBSCRIPTION_STORE_DIR),
         PathBuf::from(SUBSCRIPTION_STORE_DIR),
     ]

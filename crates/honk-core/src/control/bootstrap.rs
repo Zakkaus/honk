@@ -1,6 +1,8 @@
 use super::*;
 
 impl ControlPlane {
+    /// A control plane on the process data root (see
+    /// [`honk_config::paths::DataRoot::process`]).
     pub fn new(
         config: Config,
         ebpf: Box<dyn EbpfBackend>,
@@ -8,6 +10,29 @@ impl ControlPlane {
         proxy_registry: std::sync::Arc<ProxyRegistry>,
         dns_resolver: DnsResolver,
         dns_forwarder: std::sync::Arc<crate::dns::forwarder::DnsForwarder>,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_data_root(
+            config,
+            ebpf,
+            router,
+            proxy_registry,
+            dns_resolver,
+            dns_forwarder,
+            honk_config::paths::DataRoot::process(),
+        )
+    }
+
+    /// A control plane whose runtime files resolve against `data_root`. An
+    /// embedder passes [`honk_config::paths::DataRoot::explicit`] so the
+    /// engine reads nothing outside the directory it owns.
+    pub fn new_with_data_root(
+        config: Config,
+        ebpf: Box<dyn EbpfBackend>,
+        router: Router,
+        proxy_registry: std::sync::Arc<ProxyRegistry>,
+        dns_resolver: DnsResolver,
+        dns_forwarder: std::sync::Arc<crate::dns::forwarder::DnsForwarder>,
+        data_root: honk_config::paths::DataRoot,
     ) -> anyhow::Result<Self> {
         drop(dns_resolver);
         let config = if config.nodes.iter().any(|node| node.chain_hops().is_some()) {
@@ -31,13 +56,16 @@ impl ControlPlane {
             .with_socket_budget(dns_forwarder.socket_budget().clone())
             .with_client_subnet(config.dns.effective_client_subnet()?),
         );
-        Self::new_with_upstream_pool(
+        Self::new_with_upstream_pool_and_budget(
             config,
             ebpf,
             router,
             proxy_registry,
             dns_forwarder,
             dns_upstream_pool,
+            ResourceBudget::for_nofile(MAX_EFFECTIVE_NOFILE),
+            Arc::default(),
+            data_root,
         )
     }
 
@@ -59,6 +87,7 @@ impl ControlPlane {
             dns_upstream_pool,
             ResourceBudget::for_nofile(MAX_EFFECTIVE_NOFILE),
             Arc::default(),
+            honk_config::paths::DataRoot::process(),
         )
     }
 
@@ -72,6 +101,7 @@ impl ControlPlane {
         dns_upstream_pool: Arc<crate::dns::upstream_pool::UpstreamPool>,
         resource_budget: ResourceBudget,
         degradations: Arc<crate::degradations::Degradations>,
+        data_root: honk_config::paths::DataRoot,
     ) -> anyhow::Result<Self> {
         #[cfg(not(feature = "dns-syslog"))]
         crate::audit::validate_config(&config.global)?;
@@ -259,6 +289,7 @@ impl ControlPlane {
                 crate::config_diagnostics::ActiveDiagnostics::default(),
             )),
             reload_lock: tokio::sync::Mutex::new(()),
+            data_root,
             log_files: LogFiles {
                 cli_override: None,
                 effective: effective_log_file,

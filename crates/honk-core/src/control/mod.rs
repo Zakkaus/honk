@@ -155,6 +155,8 @@ pub struct ControlPlane {
     diagnostics: crate::config_diagnostics::SharedDiagnostics,
     /// Reuse decisions must observe the generation they eventually replace.
     reload_lock: tokio::sync::Mutex<()>,
+    /// Where this engine keeps state and finds runtime assets.
+    data_root: honk_config::paths::DataRoot,
     log_files: LogFiles,
     startup_downgrades: StartupDowngrades,
     ebpf: Arc<RwLock<Box<dyn EbpfBackend>>>,
@@ -334,6 +336,10 @@ impl ControlPlane {
     }
     pub fn config_handle(&self) -> Arc<RwLock<Arc<Config>>> {
         self.config.clone()
+    }
+    /// The root this control plane resolves its runtime files against.
+    pub fn data_root(&self) -> &honk_config::paths::DataRoot {
+        &self.data_root
     }
     #[cfg(feature = "native-api")]
     pub(crate) fn log_files(&self) -> LogFiles {

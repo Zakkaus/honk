@@ -105,15 +105,29 @@ where
     }
 }
 
+/// Resolve against the process data root; an engine uses
+/// [`resolved_log_file_path_in`].
 pub(crate) fn resolved_log_file_path(
     config: &Config,
     cli_override: Option<&std::path::Path>,
 ) -> Option<PathBuf> {
+    resolved_log_file_path_in(
+        config,
+        cli_override,
+        &honk_config::paths::DataRoot::process(),
+    )
+}
+
+pub(crate) fn resolved_log_file_path_in(
+    config: &Config,
+    cli_override: Option<&std::path::Path>,
+    root: &honk_config::paths::DataRoot,
+) -> Option<PathBuf> {
     cli_override
-        .map(honk_config::paths::resolve_artifact_path)
+        .map(|path| root.resolve_artifact(path))
         .or_else(|| match config.global.log_file.trim() {
             "" => None,
-            path => Some(honk_config::paths::resolve_artifact_path(path)),
+            path => Some(root.resolve_artifact(path)),
         })
 }
 

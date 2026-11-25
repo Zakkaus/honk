@@ -24,21 +24,19 @@ pub struct LegacyCache {
 impl LegacyCache {
     /// The resolver older releases used: an absolute path is literal; a
     /// relative one prefers `data_dir`, then `/var/share/honk`, then
-    /// `legacy_config_dir`.
+    /// `legacy_config_dir`. An explicit `root` uses only its own directory.
     pub fn locate(
         path: Option<&str>,
         cache_id: Option<&str>,
         legacy_config_dir: Option<&Path>,
+        root: &honk_config::paths::DataRoot,
     ) -> Self {
         let configured = Path::new(path.filter(|path| !path.is_empty()).unwrap_or("cache.db"));
         let legacy = (!configured.is_absolute()).then(|| {
             legacy_config_dir.map_or_else(|| configured.to_path_buf(), |dir| dir.join(configured))
         });
         Self {
-            path: honk_config::paths::resolve_artifact_path_with_legacy(
-                configured,
-                legacy.as_deref(),
-            ),
+            path: root.resolve_artifact_with_legacy(configured, legacy.as_deref()),
             cache_id: cache_id.unwrap_or_default().to_owned(),
         }
     }
