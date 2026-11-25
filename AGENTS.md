@@ -135,7 +135,7 @@ resolver; its parity test (`--features embedded,native-api`)
 compares every decision and score context with the control plane's. The typed
 mode override in `mode.rs` compiles for `embedded` and for `native-api` with
 `clash-api`. `just lint`, `just test-ci` and the CI `lint` and `test` jobs
-enable `honk-core/embedded`.
+enable `honk-core/embedded`. User docs: [embedded routing engine](doc/en/reference/api.md#embedded-routing-engine).
 
 `just test-ci` requires `cargo-nextest` and selects `.config/nextest.toml`'s `ci` profile: no retries, a three-minute per-test timeout and no fail-fast. JUnit is written to `target/nextest/ci/junit.xml`; CI uploads it on failure. Plain `cargo test` remains supported.
 

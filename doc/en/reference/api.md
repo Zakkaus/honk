@@ -2064,6 +2064,16 @@ A one-second sampler reads the owned kernel queue independently of packet dispat
 
 A node may count under several explicit reasons. The gauges follow the current runtime generation, so drained resources disappear from the next snapshot.
 
+## Embedded routing engine
+
+The default-off `embedded` Cargo feature adds `honk_core::embedded::Engine`, a library API for an application that captures flows itself, for example from a TUN device, and needs the decision the daemon would make for each flow. It starts no listener, HTTP stack or datapath and dials nothing. Build with `--features embedded`; `--no-default-features --features embedded` also works.
+
+- `Engine::new(config, data_root)` takes a parsed configuration and assembles it as the daemon does at startup. Subscription nodes must already be merged into the configuration. Geodata is read only from `data_root/geosite.dat` and `data_root/geoip.dat`. Construction fails when a file the rules need is missing or does not parse, or lacks a category the rules use. The daemon instead warns and leaves the matcher empty, which widens negated rules.
+- `Engine::decide(&Flow)` takes the transport, the source and destination addresses, the sniffed server name and whether the reality check trusts it, and the process name, MAC address and DSCP when they are known. It returns the matched rule (its index in the configuration, its name and its Clash-style type and payload), or none when `fallback` applied; the routed outbound and its `must` modifier; the mode result and the outbound after mode handling; the direct fwmark; the ordered candidate nodes with their group chains; and whether the daemon would race the leading candidates of a cold URLTest group.
+- `global.dial_mode` applies as in the daemon: under `dial_mode: ip` a supplied name is ignored, and under `dial_mode: domain` a name the reality check does not trust is dropped. A flow without a process name matches no `pname` rule.
+- A new engine starts in Rule mode with no GLOBAL target and does not read `experimental.clash_api.default_mode`. `set_mode` selects Rule, Global or Direct. `set_global_target` takes a node id or a group name from the configuration, and rejects a node whose name another node shares. GLOBAL without a target blocks every flow that is not `must`; no mode changes a `must` or `block` result.
+- The engine keeps no health state, probe results or runtime group choices, so every node counts as alive and an unreachable node can be the first candidate. One engine holds one configuration; to apply a new configuration, build a new engine.
+
 ## Related docs
 
 - [Experimental configuration](./experimental.md)

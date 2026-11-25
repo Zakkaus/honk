@@ -1949,6 +1949,16 @@ carrier 观测由控制心跳接入，和选路调用相互独立。
 
 一个节点可以同时计入多个显式原因。瞬时值跟随当前运行时 generation；已排干资源会从下一次快照中消失。
 
+## 嵌入式路由引擎
+
+默认关闭的 `embedded` Cargo feature 提供库 API `honk_core::embedded::Engine`。应用自行捕获流量（例如从 TUN 设备读取）时，可以用它得到守护进程对每条流会做出的路由决定。它不启动 listener、HTTP 栈或数据面，也不发起连接。用 `--features embedded` 构建；`--no-default-features --features embedded` 同样可用。
+
+- `Engine::new(config, data_root)` 接收解析后的配置，按守护进程启动时的方式组装。订阅节点须事先合并进配置。geodata 只从 `data_root/geosite.dat` 和 `data_root/geoip.dat` 读取。规则需要的文件缺失、无法解析或缺少规则用到的类别时，构建失败。守护进程在这种情况下只记录警告并使用空的匹配数据，这会放宽取反规则。
+- `Engine::decide(&Flow)` 接收传输协议、源地址和目的地址、嗅探到的服务器名及 reality check 是否信任它，以及已知时的进程名、MAC 地址和 DSCP。它返回命中的规则（配置中的序号、名称以及 Clash 风格的类型和 payload；适用 `fallback` 时为空）、规则选出的出站及其 `must` 修饰符、模式处理结果和模式处理后的出站、direct fwmark、按顺序排列的候选节点及其 group 链，以及守护进程是否会对冷启动的 URLTest group 并发尝试前几个候选。
+- `global.dial_mode` 的处理与守护进程相同：`dial_mode: ip` 下忽略传入的服务器名；`dial_mode: domain` 下丢弃 reality check 不信任的服务器名。没有进程名的流不会命中 `pname` 规则。
+- 新建的引擎处于 Rule 模式，没有 GLOBAL 目标，也不读取 `experimental.clash_api.default_mode`。`set_mode` 选择 Rule、Global 或 Direct。`set_global_target` 接收配置中的节点 id 或 group 名；如果另一个节点与该节点同名，则拒绝。没有目标的 GLOBAL 阻断所有非 `must` 的流；任何模式都不改变 `must` 或 `block` 的结果。
+- 引擎不保存健康状态、探测结果或运行时的 group 选择，因此所有节点都视为可用，第一个候选可能是不可达的节点。一个引擎只对应一份配置；要应用新配置，需构建新的引擎。
+
 ## Related docs
 
 - [Experimental 配置](./experimental.md)
