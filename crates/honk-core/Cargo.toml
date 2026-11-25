@@ -128,6 +128,8 @@ jemalloc = ["dep:tikv-jemallocator"]
 rprx = ["honk-outbound/rprx"]
 # Compile optional client DNS syslog auditing.
 dns-syslog = []
+# Userspace engine for applications that capture flows themselves (`honk_core::embedded`).
+embedded = []
 dns-bench = []
 udp-bench = []
 reload-bench = []
