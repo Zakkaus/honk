@@ -75,23 +75,45 @@ impl ControlPlane {
             hook: &self.pre_dns_publication_hook,
         }
     }
+    #[cfg(test)]
+    pub(in crate::control) async fn apply_runtime_config(
+        &self,
+        new_config: Config,
+        diagnostics: crate::config_diagnostics::DiagnosticBuckets,
+        drain: &DrainTracker,
+    ) -> ReloadOutcome {
+        self.apply_runtime_config_from_sources(new_config, diagnostics, drain, &[])
+            .await
+            .0
+    }
+
     /// Atomically publish a rebuilt router, config, group manager, outbound
     /// runtime generation, DNS runtime, and exact eBPF routing plan. Build
     /// failures leave the current generation untouched; an eBPF publication
     /// failure retains the active plan without replay. SIGHUP,
     /// subscription merges, and public callers share this serialized path.
-    pub(in crate::control) async fn apply_runtime_config(
+    ///
+    /// Also returns each setting the candidate asks for that this engine does
+    /// not honour, located in `sources`.
+    pub(in crate::control) async fn apply_runtime_config_from_sources(
         &self,
         mut new_config: Config,
         diagnostics: crate::config_diagnostics::DiagnosticBuckets,
         drain: &DrainTracker,
-    ) -> ReloadOutcome {
+        sources: &[honk_config::parser::SourceSnapshot],
+    ) -> (
+        ReloadOutcome,
+        Vec<crate::config_diagnostics::UnsupportedSetting>,
+    ) {
         let _reload = self.reload_lock.lock().await;
         // The previous subnet only lets ECS log a change rather than every re-resolution.
         new_config.dns.resolved_client_subnet = self.config.read().await.dns.resolved_client_subnet;
         crate::dns::ecs::resolve_client_subnet(&mut new_config.dns).await;
-        let update = DiagnosticUpdate::Replace(diagnostics);
-        match self
+        // Before the transaction applies the downgrades to the candidate.
+        let mut unsupported = self.startup_downgrades.unsupported(&new_config);
+        crate::config_diagnostics::locate_unsupported(&mut unsupported, sources);
+        let update = DiagnosticUpdate::Replace(diagnostics, unsupported.clone());
+        let outcome = match self
             .apply_resolved_runtime_config_locked(
                 new_config,
                 drain,
@@ -107,7 +129,8 @@ impl ControlPlane {
                 crate::report_runtime_admission_error(&error);
                 ReloadOutcome::Rejected
             }
-        }
+        };
+        (outcome, unsupported)
     }
     pub(in crate::control) async fn apply_sighup_config(
         &self,
@@ -145,11 +168,19 @@ impl ControlPlane {
                 Some((subscription.id, subscription.source.as_ref()?.0.clone()))
             })
             .collect();
+        // Before the transaction applies the downgrades to the candidate.
+        #[cfg_attr(not(feature = "native-api"), allow(unused_mut))]
+        let mut unsupported = self.startup_downgrades.unsupported(&new_config);
+        #[cfg(feature = "native-api")]
+        if let Some(sources) = sources {
+            crate::config_diagnostics::locate_unsupported(&mut unsupported, &sources.sources);
+        }
         self.apply_resolved_runtime_config_locked(
             new_config,
             drain,
             DiagnosticUpdate::Rebase {
                 static_diagnostics: diagnostics,
+                unsupported,
                 retained_provider_ids: retained_providers,
                 declared,
             },
@@ -183,9 +214,37 @@ impl ControlPlane {
             return false;
         }
         let drain = Arc::clone(&self.drain_tracker);
-        self.apply_runtime_config(new_config, diagnostics, &drain)
+        // Not through `reload_runtime_config_from_sources`: one more async layer
+        // around the transaction overflowed a test thread's stack in debug builds.
+        self.apply_runtime_config_from_sources(new_config, diagnostics, &drain, &[])
             .await
+            .0
             .accepted()
+    }
+
+    /// `reload_runtime_config` for a configuration loaded from `sources`
+    /// (`honk_config::parser::LoadedConfig`), returning what the activated
+    /// generation does not honour, each setting located in `sources`.
+    /// `None` when the candidate is rejected; the active report is unchanged.
+    pub async fn reload_runtime_config_from_sources(
+        &self,
+        new_config: Config,
+        diagnostics: crate::config_diagnostics::DiagnosticBuckets,
+        sources: &[honk_config::parser::SourceSnapshot],
+    ) -> Option<crate::config_diagnostics::ActivationReport> {
+        let unchanged = *self.config.read().await.as_ref() == new_config;
+        if !unchanged && let Err(error) = new_config.validate_detailed() {
+            crate::report_runtime_admission_error(&error);
+            return None;
+        }
+        let drain = Arc::clone(&self.drain_tracker);
+        let (outcome, unsupported) = self
+            .apply_runtime_config_from_sources(new_config, diagnostics, &drain, sources)
+            .await;
+        Some(crate::config_diagnostics::ActivationReport {
+            generation: outcome.generation()?,
+            unsupported,
+        })
     }
 
     pub(in crate::control) async fn apply_resolved_runtime_config_locked(
@@ -205,9 +264,9 @@ impl ControlPlane {
         #[cfg(feature = "native-api")]
         let replaces_sources = matches!(
             &diagnostic_update,
-            DiagnosticUpdate::Replace(_) | DiagnosticUpdate::Rebase { .. }
+            DiagnosticUpdate::Replace(..) | DiagnosticUpdate::Rebase { .. }
         );
-        if let DiagnosticUpdate::Replace(buckets) = &diagnostic_update
+        if let DiagnosticUpdate::Replace(buckets, _) = &diagnostic_update
             && buckets.providers.len() > 1
         {
             let mut provider_ids =
@@ -265,7 +324,7 @@ impl ControlPlane {
                 DiagnosticUpdate::Rebase { .. } => {
                     new_config = new_config.assemble(honk_config::parser::resolve_group_filters)?;
                 }
-                DiagnosticUpdate::Replace(_)
+                DiagnosticUpdate::Replace(..)
                     if new_config
                         .nodes
                         .iter()
@@ -274,7 +333,7 @@ impl ControlPlane {
                     new_config =
                         new_config.assemble(honk_config::parser::resolve_programmatic_groups)?;
                 }
-                DiagnosticUpdate::Replace(_)
+                DiagnosticUpdate::Replace(..)
                 | DiagnosticUpdate::Preserve
                 | DiagnosticUpdate::ReplaceProvider { .. } => {
                     new_config.validate_assembled()?;
@@ -385,7 +444,7 @@ impl ControlPlane {
                 }
                 let generation = self.diagnostics.read().generation;
                 if !matches!(&diagnostic_update, DiagnosticUpdate::Preserve) {
-                    self.diagnostics.write().buckets.apply(diagnostic_update);
+                    self.diagnostics.write().apply(diagnostic_update);
                     #[cfg(feature = "native-api")]
                     if let Some(native) = &self.native {
                         native
@@ -905,7 +964,7 @@ impl ControlPlane {
                             configuration.invalidate();
                         }
                     }
-                    active_diagnostics.buckets.apply(diagnostic_update);
+                    active_diagnostics.apply(diagnostic_update);
                     #[cfg(feature = "native-api")]
                     if let Some(native) = &self.native {
                         self.alive_set.invalidate_group_health_observations();

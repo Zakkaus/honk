@@ -166,6 +166,8 @@ TCP syslog 接收端：数字 IP 加端口，例如 `192.0.2.10:514` 或 `[2001:
 
 启动降级会记录 `NFQUEUE is unavailable at startup; continuing with NFQUEUE staging disabled`，并带 `reason` 字段：`the mock eBPF backend was selected`、`honk-core was built without the ebpf feature`，或固定队列前置检查的错误。honk 不改写配置文件，在本进程内保持关闭。
 
+该设置在本进程内关闭期间，每次启用的配置只要仍开启它，引擎的启用报告（activation report）就会列出 `global.nfqueue_enable`，代码为 `nfqueue_unavailable`。从源文本启用时，该条目指向生效声明所在的行号和字节列号；默认值、别名的值和启动时安装的配置都没有位置。见 [Reload 与运行时 generation](../design/control-plane.md#reload-与运行时-generation)。
+
 单实例交接后，固定队列不可用，或数据路径 admission 之前队列、规则、健康检查失败时，honk 会记一条 warning，并在本进程内关闭该功能，不改写配置。安装阶段会回收保留的 nftables table。
 
 持久化 token generation 恢复失败，以及 [admission 后的失败](../design/nfqueue.md#启用与范围)，仍然是 fatal。

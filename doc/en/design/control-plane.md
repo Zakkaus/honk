@@ -273,6 +273,8 @@ SIGHUP uses an attempt-local diagnostic list. Load and operator-validation warni
 
 The common reload transaction normalizes the candidate's effective NFQUEUE value before fingerprint/no-op and restart checks, preserving any recorded early or late pre-admission startup downgrade. Native pre-write checks and full validation share that restart policy without rewriting requested source intent; see the [startup exception](../reference/global.md) and [native configuration API](../reference/api.md).
 
+The transaction also records, before that normalization, each setting the candidate asks for that the process does not honour, today `global.nfqueue_enable` after a recorded downgrade. The list travels with the candidate's diagnostic update and is written in the same `ActiveDiagnostics` write as the parse diagnostics, beside the new generation on commit and under the kept generation on a no-op, so `ControlPlane::activation_report` always describes the active generation. A whole-document update (public reload, SIGHUP, native write) replaces the list; a subscription merge or ECS refresh keeps it; a rejected candidate never touches it. `reload_runtime_config_from_sources` takes the loaded source snapshots and returns the report with each entry located at its effective declaration (source index, byte range, one-based line and byte column). The configuration installed at startup and SIGHUP without the native API keep no source text, so their entries have no location. The existing log lines are unchanged.
+
 `apply_runtime_config` first builds the replacement router, group manager, outbound registry, DNS runtime, and routing plan without mutating live state. Commit ordering is:
 
 1. Fence NFQUEUE readiness and complete the synchronous kernel grace barrier.

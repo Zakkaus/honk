@@ -45,6 +45,39 @@ impl StartupDowngrades {
             config.global.nfqueue_enable = false;
         }
     }
+
+    /// What `apply` turns off in `config`; call it before `apply`.
+    pub(crate) fn unsupported(
+        &self,
+        config: &Config,
+    ) -> Vec<crate::config_diagnostics::UnsupportedSetting> {
+        let mut unsupported = Vec::new();
+        if self.nfqueue_unavailable() && config.global.nfqueue_enable {
+            unsupported.push(nfqueue_unsupported());
+        }
+        unsupported
+    }
+
+    /// The startup configuration was already downgraded, so the record alone
+    /// says what it asked for.
+    pub(crate) fn unsupported_at_startup(
+        &self,
+    ) -> Vec<crate::config_diagnostics::UnsupportedSetting> {
+        if self.nfqueue_unavailable() {
+            vec![nfqueue_unsupported()]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+fn nfqueue_unsupported() -> crate::config_diagnostics::UnsupportedSetting {
+    crate::config_diagnostics::UnsupportedSetting {
+        code: "nfqueue_unavailable",
+        setting: "global.nfqueue_enable",
+        message: "NFQUEUE is unavailable to this process; NFQUEUE staging stays off",
+        location: None,
+    }
 }
 
 /// A restart-only setting that differs, with a safe message naming it.

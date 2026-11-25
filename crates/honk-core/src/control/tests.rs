@@ -15,6 +15,7 @@ use support::{
     udp_test_handle_with_reply_factory, udp_test_node,
 };
 
+mod activation_report;
 mod admission;
 #[cfg(all(feature = "ebpf", target_os = "linux"))]
 mod bond_binding;
@@ -171,6 +172,11 @@ async fn nfqueue_startup_degradation_clears_config_and_effective_flag() {
 
     assert!(!enabled);
     assert!(!control.config_handle().read().await.global.nfqueue_enable);
+    assert_eq!(
+        control.activation_report().unsupported,
+        downgrades.unsupported_at_startup()
+    );
+    assert_eq!(control.activation_report().unsupported.len(), 1);
     control
         .datapath_flags_handle()
         .expect("datapath flags coordinator")

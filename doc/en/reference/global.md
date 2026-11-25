@@ -166,6 +166,8 @@ Holds ambiguous LAN-forwarded UDP originals in NFQUEUE until userspace reaches a
 
 The startup downgrade logs `NFQUEUE is unavailable at startup; continuing with NFQUEUE staging disabled` with a `reason` field: `the mock eBPF backend was selected`, `honk-core was built without the ebpf feature`, or the fixed-queue preflight error. honk leaves the configuration file unchanged and keeps the setting off for the process.
 
+While the setting is off for the process, every activated configuration that still enables it lists `global.nfqueue_enable` with code `nfqueue_unavailable` in the engine's activation report. An activation from source text points the entry at the effective declaration's line and byte column; a default or alias value, and the configuration installed at startup, have no location. See [Reload and runtime generations](../design/control-plane.md#reload-and-runtime-generations).
+
 After the singleton instance handoff, honk logs a warning and disables the setting for the process, without rewriting the configuration, when the fixed queue is unavailable or a pre-admission queue, rules or health check fails. Installing the queue reclaims the reserved nftables table.
 
 Persistent token-generation recovery failures and [post-admission failures](../design/nfqueue.md#activation-and-scope) remain fatal.

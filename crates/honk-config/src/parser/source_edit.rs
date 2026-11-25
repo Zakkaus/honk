@@ -770,5 +770,74 @@ pub fn source_indices(
     Ok((groups, result))
 }
 
+/// Where a setting's effective declaration starts and ends in its source.
+/// `line` and `column` are one-based; `column` counts bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingLocation {
+    pub source_index: usize,
+    /// From the key to the end of the value, comments excluded.
+    pub bytes: Range<usize>,
+    pub line: usize,
+    pub column: usize,
+}
+
+/// Locate each `global` key's effective declaration in accepted source bytes:
+/// the last one in preorder, the declaration admission reads.
+pub fn global_setting_locations(
+    sources: &[SourceSnapshot],
+) -> Result<HashMap<&'static str, SettingLocation>, SourceEditError> {
+    let mut notices = Vec::new();
+    let documents = sources
+        .iter()
+        .map(|source| {
+            Document::parse_attempt(
+                Source::new(&source.content, source.source.clone()),
+                &mut notices,
+                false,
+            )
+            .map_err(|_| SourceEditError::default())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let sections = documents
+        .iter()
+        .flat_map(Document::sections)
+        .filter(|section| section.header() == "global")
+        .collect::<Vec<_>>();
+    let mut locations = HashMap::new();
+    let Some(first) = sources.first() else {
+        return Ok(locations);
+    };
+    let mut diagnostics =
+        super::diagnostics::ParserDiagnostics::new(&mut notices, first.source.clone());
+    for line in read::statements(&sections, &mut diagnostics, BodySyntax::Statements) {
+        let Some((key, value)) = line.kv() else {
+            continue;
+        };
+        let Some(&key_name) = super::scalars::GLOBAL_KEYS
+            .iter()
+            .find(|known| **known == key.raw())
+        else {
+            continue;
+        };
+        let Some(source_index) = sources
+            .iter()
+            .position(|source| source.source.index() == key.span.source)
+        else {
+            continue;
+        };
+        let (line, column) = key.source.location(key.span.start);
+        locations.insert(
+            key_name,
+            SettingLocation {
+                source_index,
+                bytes: key.span.start..value.span.end,
+                line,
+                column,
+            },
+        );
+    }
+    Ok(locations)
+}
+
 #[cfg(test)]
 mod tests;
