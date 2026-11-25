@@ -30,12 +30,9 @@ use honk_config::Config;
 use honk_config::group::GroupPolicy;
 use honk_config::node::{Group, Node};
 use honk_config::types::NodeProtocol;
-use honk_outbound::alive::{AliveDialerSet, HealthCheckError, IpVersion, ProbeDomain, ProbeTicket};
+use honk_outbound::alive::{AliveDialerSet, HealthCheckError};
 use honk_outbound::group::SelectionNetwork;
 use honk_outbound::group::{GroupManager, SharedGroupManager};
-use honk_outbound::urltest::{
-    urltest_group_with_feedback, urltest_node_in_generation_with_feedback,
-};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -442,43 +439,20 @@ fn build_group_proxy_info(
     let node_names = group_manager.node_names_in_group(&group.name);
     let verification = (group.policy == GroupPolicy::Score)
         .then(|| score::verification(group_manager, &group.name));
-    // An explicit Selector choice or an automatic group's pin wins.
-    let now = match (
-        group.policy,
-        group_manager.get_selector_choice(&group.name, SelectionNetwork::Tcp),
-    ) {
-        (_, Some(choice)) => choice,
-        (GroupPolicy::Selector, None) => group
-            .default
-            .clone()
-            .or_else(|| node_names.first().cloned())
-            .unwrap_or_default(),
-        (GroupPolicy::URLTest, None) => group_manager
-            .get_urltest_selection(&group.name)
-            .or_else(|| node_names.first().cloned())
-            .unwrap_or_default(),
-        // Round-robin has no stable selection to display; show the first.
-        (GroupPolicy::LoadBalance, None) => node_names.first().cloned().unwrap_or_default(),
-        (GroupPolicy::Fallback, None) => group_manager
-            .get_fallback_selection(&group.name)
-            .or_else(|| node_names.first().cloned())
-            .unwrap_or_default(),
-        (GroupPolicy::Score, None) => verification
+    let now = crate::group_view::displayed_member(
+        group,
+        group_manager,
+        verification
             .as_ref()
-            .and_then(|(selected, _)| selected.clone())
-            .or_else(|| {
-                group_manager.get_score_selection_for_network(&group.name, SelectionNetwork::Tcp)
-            })
-            .or_else(|| node_names.first().cloned())
-            .unwrap_or_default(),
-    };
+            .and_then(|(selected, _)| selected.clone()),
+    );
 
     let mut history: Vec<serde_json::Value> = Vec::new();
     for name in &node_names {
         // Member tags may name sub-groups; only real nodes carry samples.
         let sample = group_manager
             .node_by_name(name)
-            .and_then(|n| alive_set.get_last_real_sample(n.id, ProbeDomain::Tcp, IpVersion::V4));
+            .and_then(|n| crate::group_view::last_latency(alive_set, n));
         if let Some((latency, at)) = sample {
             history.push(delay_history_entry(latency.as_millis() as u64, at));
         }
@@ -734,27 +708,6 @@ fn health_probe_error(error: HealthCheckError) -> Response {
     error_response(StatusCode::SERVICE_UNAVAILABLE, &error.to_string())
 }
 
-fn capture_delay_leaves<'a>(
-    alive_set: &AliveDialerSet,
-    members: &'a [(String, Node)],
-) -> Vec<(&'a Node, ProbeTicket)> {
-    members
-        .iter()
-        .map(|(_, leaf)| (leaf, alive_set.probe_ticket(leaf.id)))
-        .collect()
-}
-
-fn reselect_urltest(s: &ClashState, captured: &Arc<GroupManager>, name: &str) {
-    if captured.get_group_policy(name) != Some(GroupPolicy::URLTest) {
-        return;
-    }
-    // Keep the manager published through selection and its activity update.
-    let published = s.group_manager.read();
-    if Arc::ptr_eq(&published, captured) {
-        let _ = captured.select_node_for_domain(name, ProbeDomain::Tcp, IpVersion::V4);
-    }
-}
-
 /// GET /proxies/{name}/delay — live latency measurement (HEAD request
 /// through the node / group members). Successful scalar measurements of an
 /// unregistered ordinary leaf are display-only. Errors return 503.
@@ -779,45 +732,29 @@ async fn proxy_delay(
     let config = s.config.read().await;
 
     if let Some(node) = config.nodes.iter().find(|n| n.name == name).cloned() {
-        let (group_manager, generation, ticket) = {
-            let manager = s.group_manager.read();
-            let (generation, ticket) = s.alive_set.clash_node_ticket(&node, &s.runtime_registry);
-            (Arc::clone(&manager), generation, ticket)
-        };
-        drop(config);
-        let Some(entry) = s.proxy_registry.find(node.protocol()) else {
-            return error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "no handler for the node protocol",
-            );
-        };
-        let tcp = entry.tcp.clone();
-        let warmable = entry.warmable.clone();
-        let measured = urltest_node_in_generation_with_feedback(
-            &generation,
+        let capture = crate::group_view::NodeDelayCapture::new(
+            &s.alive_set,
+            &s.runtime_registry,
+            &s.group_manager,
             &node,
-            tcp.as_ref(),
-            warmable.as_deref(),
-            &query.url,
-            query.timeout(),
-            &group_manager,
-            cancel.clone(),
-        )
-        .await;
-        return match measured {
+        );
+        drop(config);
+        return match capture
+            .run(
+                &node,
+                &s.alive_set,
+                &s.runtime_registry,
+                &s.proxy_registry,
+                &query.url,
+                query.timeout(),
+                cancel,
+            )
+            .await
+        {
             Ok(measurement) => {
-                s.alive_set.record_urltest_latency(
-                    &s.runtime_registry,
-                    &generation,
-                    &ticket,
-                    measurement,
-                );
                 Json(serde_json::json!({"delay": delay_ms(measurement.latency)})).into_response()
             }
-            Err(e) => error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                &format!("An error occurred in the delay test: {e}"),
-            ),
+            Err(e) => error_response(StatusCode::SERVICE_UNAVAILABLE, &e.to_string()),
         };
     }
 
@@ -864,34 +801,33 @@ async fn group_delay(
         };
         return error_response(StatusCode::NOT_FOUND, reason);
     }
-    let members;
-    let (group_manager, generation, leaves) = {
-        let manager = s.group_manager.read();
-        let registry = s.runtime_registry.read();
-        members = manager.delay_test_members(name);
-        let leaves = capture_delay_leaves(&s.alive_set, &members);
-        (Arc::clone(&manager), Arc::clone(&registry), leaves)
-    };
-    if members.is_empty() && matches!(view, GroupDelayView::Selected) {
+    let capture = crate::group_view::GroupDelayCapture::new(
+        &s.alive_set,
+        &s.runtime_registry,
+        &s.group_manager,
+        name,
+    );
+    if capture.members.is_empty() && matches!(view, GroupDelayView::Selected) {
         return error_response(StatusCode::SERVICE_UNAVAILABLE, "group has no members");
     }
     drop(config);
-    let results = urltest_group_with_feedback(
-        &leaves,
-        &generation,
-        &s.runtime_registry,
-        &s.proxy_registry,
-        &s.alive_set,
-        &query.url,
-        query.timeout(),
-        Arc::clone(&group_manager),
-        cancel.clone(),
-    )
-    .await;
+    let results = capture
+        .run(
+            name,
+            &s.alive_set,
+            &s.runtime_registry,
+            &s.proxy_registry,
+            &s.group_manager,
+            &query.url,
+            query.timeout(),
+            cancel.clone(),
+        )
+        .await;
     if cancel.is_cancelled() {
         return error_response(StatusCode::SERVICE_UNAVAILABLE, "delay test was cancelled");
     }
-    reselect_urltest(s, &group_manager, name);
+    let group_manager = capture.group_manager();
+    let members = &capture.members;
     if matches!(view, GroupDelayView::Selected) {
         // The selected tag may name a subgroup; the latency belongs to its leaf.
         let current = group_manager
@@ -913,7 +849,7 @@ async fn group_delay(
     let mut delays = serde_json::Map::new();
     for (tag, leaf) in members {
         if let Some((_, Ok(latency))) = results.iter().find(|(n, _)| n == &leaf.name) {
-            delays.insert(tag, serde_json::json!(delay_ms(*latency)));
+            delays.insert(tag.clone(), serde_json::json!(delay_ms(*latency)));
         }
     }
     Json(serde_json::Value::Object(delays)).into_response()

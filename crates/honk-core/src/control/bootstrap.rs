@@ -89,51 +89,11 @@ impl ControlPlane {
         let (tx, rx) = mpsc::channel(256);
         let effective_log_file = crate::resolved_log_file_path(&config, None);
 
-        let alive_set = Arc::new(
-            crate::outbound::AliveDialerSet::new().with_so_mark(config.global.effective_so_mark()),
-        );
-        // Periodic direct health uses a stable bootstrap target; on-demand
-        // URL tests still measure their requested URL.
-        let direct_target = direct_check_addr(&config.global.bootstrap_resolver);
-        alive_set.set_direct_check_addr(direct_target.clone());
-        let mut reachable = build_outbound_id_map(&config);
-        let (added, _) = alive_set.sync_registrations(health_registrations(&config, &reachable));
-        info!(
-            "Registered {}/{} nodes for health check ({} skipped: not in any group)",
-            added,
-            config.nodes.len(),
-            config.nodes.len().saturating_sub(added),
-        );
-        // Fixed probe nodes are published below once GroupManager exists.
-        alive_set.sync_idle_groups(&idle_group_registrations(&config));
-        alive_set.sync_group_check_urls(&group_check_url_registrations(&config));
-        let group_manager =
-            GroupManager::with_alive_set(&config.groups, &config.nodes, Some(alive_set.clone()));
-        extend_route_health_dependencies(&config, &group_manager, &mut reachable);
-        let outbound_id_map = Arc::new(parking_lot::RwLock::new(reachable));
-        {
-            let map = outbound_id_map.clone();
-            alive_set.set_outbound_resolver(Some(Arc::new(move |node_id: uuid::Uuid| {
-                map.read().get(&node_id).copied()
-            })));
-        }
-        group_manager.publish_selected_probe_nodes();
-        // Custom-URL member resolution: a group's members are probed via
-        // their current picks (delay_test_members = tag → representative
-        // leaf), so sub-group members are measured through whatever leaf
-        // they currently select, and the tag keeps the result. The cell
-        // keeps working across reloads (the manager inside is swapped).
-        let group_manager = group_manager.into_shared();
-        {
-            let group_manager = group_manager.clone();
-            let probe_interval = Duration::from_secs(config.global.check_interval_secs);
-            alive_set.set_score_feedback_factory(move |node_id, context| {
-                group_manager
-                    .read()
-                    .feedback_for_node(node_id, context)
-                    .map(|feedback| feedback.with_probe_interval(probe_interval))
-            });
-        }
+        let super::health::HealthState {
+            alive_set,
+            group_manager,
+            outbound_id_map,
+        } = super::health::health_state(&config);
         // Per-node runtime registry (single owner of session-layer
         // resources, keyed by Node.id). Invalid node sets (nil/duplicate
         // UUIDs) are a fatal config error at startup.
@@ -457,7 +417,7 @@ impl ControlPlane {
     }
 }
 
-fn install_url_member_resolver(
+pub(in crate::control) fn install_url_member_resolver(
     alive_set: &crate::outbound::AliveDialerSet,
     group_manager: SharedGroupManager,
     #[cfg(feature = "native-api")] native: Option<Arc<crate::observe::Observation>>,

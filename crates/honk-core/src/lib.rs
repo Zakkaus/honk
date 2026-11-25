@@ -25,6 +25,8 @@ pub(crate) mod degradations;
 pub mod dns;
 pub(crate) mod download_route;
 pub mod ebpf;
+#[cfg(feature = "clash-api")]
+pub(crate) mod group_view;
 mod logging;
 mod marked_http;
 pub mod mode;
