@@ -273,12 +273,24 @@ impl DnsForwarder {
         self
     }
 
+    /// [`Self::with_policy_from_config_in`] on the process data root.
     pub fn with_policy_from_config(self, config: &DnsConfig) -> anyhow::Result<Self> {
+        self.with_policy_from_config_in(config, &honk_config::paths::DataRoot::process())
+    }
+
+    /// Applies the policy of `config`, with the hosts files it names resolved
+    /// against `root`. A relative name under an explicit root resolves inside
+    /// that directory; a file that cannot be read is an error.
+    pub fn with_policy_from_config_in(
+        self,
+        config: &DnsConfig,
+        root: &honk_config::paths::DataRoot,
+    ) -> anyhow::Result<Self> {
         #[cfg(feature = "native-api")]
         let this = self.with_configured_upstreams(config);
         #[cfg(not(feature = "native-api"))]
         let this = self;
-        let sources = hosts::HostsSourceSet::load(config)?;
+        let sources = hosts::HostsSourceSet::load_in(config, root)?;
         let policy_id = PolicyId::from_config_with_artifacts(
             config,
             &sources.fingerprint(),
