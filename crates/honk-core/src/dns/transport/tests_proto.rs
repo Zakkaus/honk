@@ -506,6 +506,7 @@ async fn quic_dns_queries_distinguish_exit_refusals_from_packet_dials() {
     }
 }
 
+#[cfg(feature = "doh3")]
 #[tokio::test]
 async fn packet_dns_returns_verified_replies_via_selected_sibling_and_native_collapse() {
     use crate::test_support::routed_udp::{PASSWORD, Peer, trojan_quic_peer};
