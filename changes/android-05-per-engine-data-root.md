@@ -1,0 +1,3 @@
+Added
+
+- An application that embeds `honk-core` can give its engine its own data directory by passing `DataRoot::explicit` to `ControlPlane::new_with_data_root`, `Router::from_config_in`, `DnsRouter::new_from_dns_config_in` and `DnsForwarder::with_policy_from_config_in`. At startup that engine reads geodata and relative `use_host` files only from that directory; it skips `$DAE_LOCATION_ASSET`, `/var/share/honk`, the working directory and the share directories. A configuration reload and relative node `ech_config_path` files still use the process data directory. The daemon's search order is unchanged.

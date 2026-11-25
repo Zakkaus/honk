@@ -428,6 +428,8 @@ IP6GRE 如果只有单播 remote、没有显式 local 地址，可能不带 `IFF
 5. `/usr/local/share/honk/<name>`，然后 `/usr/share/honk/<name>`
 6. `/usr/local/share/dae/<name>`、`/usr/share/dae/<name>`，然后 `/etc/dae/<name>`
 
+以上是守护进程的查找顺序。嵌入 `honk-core` 的应用用 `DataRoot::explicit(<dir>)` 构建引擎，并把它传给 `ControlPlane::new_with_data_root`、`Router::from_config_in`、`DnsRouter::new_from_dns_config_in` 和 `DnsForwarder::with_policy_from_config_in` 时，启动阶段只从 `<dir>` 读取 `geoip.dat`、`geosite.dat` 和相对路径的 `use_host` 文件。配置重载和相对路径的 `ech_config_path` 文件仍使用进程的数据目录。
+
 其他相对运行时路径按下表保留旧安装。除日志外，每次查找先检查实际生效数据目录中已有的副本，再检查 `/var/share/honk` 中已有的副本，最后检查各调用方的已有旧候选路径。都不存在时，返回 `data_dir` 下的路径用于创建；绝对路径保持原样。
 
 | 路径 | 解析与旧路径回退 |
