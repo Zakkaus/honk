@@ -142,3 +142,46 @@ async fn handoff_process_fields_decode_and_fail_closed() {
     ho.pid = u32::MAX;
     assert_eq!(ho.process_path().await, None);
 }
+
+#[test]
+fn dial_mode_domain_keeps_only_a_domain_the_reality_check_trusts() {
+    let name = || Some("example.test".to_owned());
+    assert_eq!(
+        reality_checked_domain(DialMode::Domain, name(), Some(RealityOutcome::ExactMatch)),
+        (name(), true, "matched")
+    );
+    assert_eq!(
+        reality_checked_domain(
+            DialMode::Domain,
+            name(),
+            Some(RealityOutcome::OtherFamilyOnly)
+        ),
+        (name(), true, "other_family_trusted")
+    );
+    assert_eq!(
+        reality_checked_domain(DialMode::Domain, name(), Some(RealityOutcome::Mismatch)),
+        (None, false, "failed")
+    );
+    assert_eq!(
+        reality_checked_domain(DialMode::Domain, None, None),
+        (None, false, "not_required")
+    );
+    for mode in [DialMode::Ip, DialMode::DomainPlus, DialMode::DomainPlusPlus] {
+        assert_eq!(
+            reality_checked_domain(mode, name(), None),
+            (name(), false, "not_required")
+        );
+    }
+}
+
+#[test]
+fn only_dial_mode_ip_skips_sniffing() {
+    assert!(!dial_mode_sniffs(DialMode::Ip));
+    for mode in [
+        DialMode::Domain,
+        DialMode::DomainPlus,
+        DialMode::DomainPlusPlus,
+    ] {
+        assert!(dial_mode_sniffs(mode), "{mode:?}");
+    }
+}

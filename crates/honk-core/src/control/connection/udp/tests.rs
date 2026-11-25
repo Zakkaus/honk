@@ -1371,3 +1371,34 @@ async fn a_route_checks_the_port_policy_of_its_exit() {
             .is_ok()
     );
 }
+
+#[test]
+fn udp_score_target_keys_on_the_domain_unless_the_outbound_dials_the_address() {
+    for outbound in ["direct", "block", "must_rules", "control_plane_routing"] {
+        assert_eq!(udp_target_domain(outbound, Some("example.test")), None);
+    }
+    assert_eq!(
+        udp_target_domain("proxy", Some("example.test")),
+        Some("example.test")
+    );
+    assert_eq!(udp_target_domain("proxy", None), None);
+
+    let v6: SocketAddr = "[2001:db8::5]:443".parse().unwrap();
+    let named = udp_score_context(v6, Some("example.test"));
+    assert_eq!(
+        named.target,
+        Some(crate::group::ScoreTarget::domain("example.test", 443))
+    );
+    assert_eq!(
+        (named.target_family, named.health_family),
+        (Some(IpVersion::V6), IpVersion::V6)
+    );
+    assert_eq!(
+        (named.network, named.probe_domain),
+        (SelectionNetwork::Udp, ProbeDomain::DataUdp)
+    );
+    let v4: SocketAddr = "192.0.2.1:53".parse().unwrap();
+    let addressed = udp_score_context(v4, None);
+    assert_eq!(addressed.target, Some(v4.into()));
+    assert_eq!(addressed.health_family, IpVersion::V4);
+}
