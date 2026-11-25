@@ -199,7 +199,7 @@ impl Worker {
         let service = Arc::clone(&self.service);
         let store = self.store.clone();
         let revision = plan.revision.clone();
-        let data_dir = self.data_dir.clone();
+        let data_root = self.data_root.clone();
         let deferred = self
             .subscriptions
             .deferred_subscriptions()
@@ -207,7 +207,7 @@ impl Worker {
             .map_err(|_| failure("subscription_owner_unavailable", &writes))?;
         let prepared = tokio::task::spawn_blocking(move || {
             prepare_and_replace(
-                &service, &store, &active, &accepted, downloads, &revision, &data_dir, &deferred,
+                &service, &store, &active, &accepted, downloads, &revision, &data_root, &deferred,
             )
         })
         .await
@@ -342,7 +342,7 @@ fn prepare_and_replace(
     accepted: &Accepted,
     downloads: Vec<DownloadedAsset>,
     revision: &str,
-    data_dir: &Path,
+    data_root: &DataRoot,
     deferred: &[honk_config::subscription::Subscription],
 ) -> Result<Option<PreparedGeodata>, Value> {
     let writes: Vec<_> = downloads
@@ -365,7 +365,7 @@ fn prepare_and_replace(
         loaded,
         store.dependency_root(),
         active,
-        data_dir,
+        data_root,
         SourceLimits::DEFAULT,
         &mut diagnostics,
         deferred,
@@ -406,7 +406,7 @@ fn prepare_and_replace(
     let mut assets: std::collections::VecDeque<StagedAsset> =
         std::collections::VecDeque::with_capacity(downloads.len());
     let mut kept: Vec<KeptAsset> = Vec::new();
-    let resolved_data_dir = std::fs::canonicalize(data_dir);
+    let resolved_data_dir = std::fs::canonicalize(data_root.dir());
     for download in downloads {
         let original = download.original;
         let recorded = original
@@ -469,10 +469,8 @@ fn prepare_and_replace(
         let (staged, target) = match update_target(
             &dependency.path,
             name,
-            data_dir,
-            std::env::var_os("DAE_LOCATION_ASSET")
-                .as_deref()
-                .map(Path::new),
+            data_root.dir(),
+            data_root.asset_override().as_deref(),
         ) {
             None => (file.stage(&original.sha256, &download.bytes), path),
             // The operator configures the data directory, so its symlinks are
@@ -581,7 +579,7 @@ fn prepare_and_replace(
                 &HashMap::new(),
                 &validated,
                 active,
-                data_dir,
+                data_root,
                 deferred,
             )
         });

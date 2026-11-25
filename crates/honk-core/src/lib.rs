@@ -161,7 +161,7 @@ use honk_config::diagnostic::{
 use honk_config::error::{DetailedConfigError, ErrorCategory};
 use logging::{
     LOG_FILE_LIMIT, LocalTime, QUIET_LOG_TARGETS, RotatingLogFile, console_ansi, console_log_layer,
-    resolved_log_file_path,
+    resolved_log_file_path, resolved_log_file_path_in,
 };
 use state::startup::{claim_state, open_state_db};
 use std::path::PathBuf;
@@ -942,6 +942,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             requested_data_dir.display(),
             runtime_data_dir.display()
         );
+        let data_root = honk_config::paths::DataRoot::daemon(&runtime_data_dir);
         honk_config::paths::set_data_dir(runtime_data_dir).map_err(|requested| {
             anyhow::anyhow!(
                 "runtime data directory is already {}; cannot switch to {}",
@@ -965,7 +966,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 tracing_subscriber::EnvFilter::new(format!("{default_level},{QUIET_LOG_TARGETS}"))
             });
 
-        let log_file_path = resolved_log_file_path(&config, cli.log_file.as_deref());
+        let log_file_path = resolved_log_file_path_in(&config, cli.log_file.as_deref(), &data_root);
         let (log_file_layer, log_file_level) = if let Some(path) = log_file_path.as_ref() {
             let file = RotatingLogFile::open(path, LOG_FILE_LIMIT)?;
             let (filter, level) = tracing_subscriber::reload::Layer::new(env_filter.clone());
@@ -985,6 +986,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Ok((
             config,
             requested_data_dir,
+            data_root,
             data_dir_creation_error,
             log_file_path,
             log_file_layer,
@@ -995,6 +997,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let (
         mut config,
         requested_data_dir,
+        data_root,
         data_dir_creation_error,
         log_file_path,
         log_file_layer,
@@ -1051,16 +1054,15 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     if let Some(error) = data_dir_creation_error {
         warn!(
             requested = %requested_data_dir.display(),
-            fallback = %honk_config::paths::data_dir().display(),
+            fallback = %data_root.dir().display(),
             %error,
             "Runtime data directory is unusable; using process working directory"
         );
     }
     report_detailed_diagnostics(&diagnostics);
-    info!(directory = %honk_config::paths::data_dir().display(), "Runtime data directory configured");
+    info!(directory = %data_root.dir().display(), "Runtime data directory configured");
     let degradations = Arc::new(degradations::Degradations::default());
-    let (state_db, state_reset) =
-        open_state_db(&cli, &config, honk_config::paths::data_dir(), &degradations)?;
+    let (state_db, state_reset) = open_state_db(&cli, &config, data_root.dir(), &degradations)?;
     #[cfg(feature = "native-api")]
     let state_db = database
         .as_ref()
@@ -1073,7 +1075,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         let config_dir = database
             .as_ref()
             .map_or(config_dir, |database| database.store.entry().parent());
-        state::import::LegacyCache::locate(path, cache_id, config_dir)
+        state::import::LegacyCache::locate(path, cache_id, config_dir, &data_root)
     };
     if let Some(path) = log_file_path.as_ref() {
         info!(path = %path.display(), "File logging enabled");
@@ -1126,8 +1128,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         state_db,
         state_reset,
         &config,
-        honk_config::paths::data_dir(),
-        subscription::legacy_store_roots(),
+        data_root.dir(),
+        subscription::legacy_store_roots(&data_root),
         &degradations,
     );
     let state_db = claimed.state_db;
@@ -1303,7 +1305,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
     let traffic_geo = routing::GeoRequirements::for_traffic(&config.routing.rules);
     let dns_geo = dns::routing::DnsRouter::geo_requirements(&config.dns);
-    let geo_sources = routing::GeoSourceSet::load(&traffic_geo.union(&dns_geo));
+    let geo_sources = routing::GeoSourceSet::load_in(&traffic_geo.union(&dns_geo), &data_root);
     let mut shared = routing::SharedMatchers::default();
     let router = routing::Router::from_config_sharing(&config.routing, &geo_sources, &mut shared)?;
     info!("Router ready with {} compiled routes", router.route_count());
@@ -1349,7 +1351,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             u.name, u.address, u.protocol, u.outbound
         );
     }
-    let hosts_sources = dns::forwarder::HostsSourceSet::load(&config.dns)?;
+    let hosts_sources = dns::forwarder::HostsSourceSet::load_in(&config.dns, &data_root)?;
     let dns_policy = dns::policy::PolicyId::from_config_with_artifacts(
         &config.dns,
         &hosts_sources.fingerprint(),
@@ -1389,6 +1391,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         dns_upstream_pool.clone(),
         resource_budget,
         Arc::clone(&degradations),
+        data_root.clone(),
     )?;
     honk_outbound::bootstrap::set_node_host_resolver(Some(dns::node_host::resolver(
         &control_plane.dns_service(),
@@ -1522,7 +1525,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         let external_ui = if clash_cfg.external_ui.is_empty() {
             String::new()
         } else {
-            honk_config::paths::resolve_dependency_path(&clash_cfg.external_ui)
+            data_root
+                .resolve_dependency(&clash_cfg.external_ui)
                 .to_string_lossy()
                 .into_owned()
         };

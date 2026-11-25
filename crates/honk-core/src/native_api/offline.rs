@@ -14,6 +14,7 @@ use honk_config::diagnostic::{
 };
 use honk_config::error::{DetailedConfigError, ErrorCategory};
 use honk_config::parser::{LoadedConfig, SourceLimits, SourceSnapshot};
+use honk_config::paths::DataRoot;
 
 use crate::configuration::{DependencyReader, DependencySnapshot};
 use crate::control::ControlPlane;
@@ -52,7 +53,7 @@ pub(crate) fn capture_for_coordinator(
     loaded: LoadedConfig,
     dependency_root: Option<&Path>,
     active: &Config,
-    data_dir: &Path,
+    data_root: &DataRoot,
     limits: SourceLimits,
     diagnostics: &mut Vec<DetailedDiagnostic>,
     deferred: &[honk_config::subscription::Subscription],
@@ -62,7 +63,7 @@ pub(crate) fn capture_for_coordinator(
         loaded,
         dependency_root,
         active,
-        data_dir,
+        data_root,
         limits,
         diagnostics,
         geo,
@@ -77,7 +78,7 @@ pub(crate) fn validate_for_coordinator(
     loaded: LoadedConfig,
     dependency_root: Option<&Path>,
     active: &Config,
-    data_dir: &Path,
+    data_root: &DataRoot,
     limits: SourceLimits,
     diagnostics: &mut Vec<DetailedDiagnostic>,
     deferred: &[honk_config::subscription::Subscription],
@@ -88,7 +89,7 @@ pub(crate) fn validate_for_coordinator(
         loaded,
         dependency_root,
         active,
-        data_dir,
+        data_root,
         limits,
         diagnostics,
         geo,
@@ -116,7 +117,7 @@ pub(crate) fn validate_with_data_dir(
         loaded,
         entry_dir.as_deref(),
         active,
-        data_dir,
+        &DataRoot::daemon(data_dir),
         limits,
         diagnostics,
         None,
@@ -132,7 +133,7 @@ fn capture_inner(
     loaded: LoadedConfig,
     dependency_root: Option<&Path>,
     active: &Config,
-    data_dir: &Path,
+    data_root: &DataRoot,
     limits: SourceLimits,
     diagnostics: &mut Vec<DetailedDiagnostic>,
     geo_override: Option<&GeoSourceSet>,
@@ -156,7 +157,7 @@ fn capture_inner(
         &sources,
         dependency_root,
         active,
-        data_dir,
+        data_root,
         limits,
         submitted,
     )
@@ -181,7 +182,7 @@ fn capture_inner(
 
     if config.subscriptions.iter().any(|sub| sub.enabled) {
         // No state db yet means no subscription has ever been fetched on this host.
-        let store = StoredBodies::open(&capture.data_dir)
+        let store = StoredBodies::open(capture.data_root.dir())
             .map_err(|cause| dependency_error(source, "subscription", cause))?;
         for (index, subscription) in config
             .subscriptions
@@ -262,10 +263,10 @@ fn capture_inner(
 
     let dns_requirements = DnsRouter::geo_requirements(&config.dns);
     let requirements = GeoRequirements::for_traffic(&config.routing.rules).union(&dns_requirements);
-    let data_dir = capture.data_dir.clone();
+    let data_root = capture.data_root.clone();
     let geo = match geo_override {
         Some(geo) => geo.clone(),
-        None => GeoSourceSet::capture_for_admission(&requirements, &data_dir, |kind, path| {
+        None => GeoSourceSet::capture_for_admission(&requirements, &data_root, |kind, path| {
             capture.path(path, true, DependencyReader::Geo(kind))
         })
         .map_err(|cause| dependency_error(source, "routing", cause))?,
@@ -471,7 +472,7 @@ fn dependency_error(
 }
 
 struct Capture {
-    data_dir: PathBuf,
+    data_root: DataRoot,
     roots: Vec<PathBuf>,
     explicitly_allowed: Vec<PathBuf>,
     limits: SourceLimits,
@@ -485,7 +486,7 @@ impl Capture {
         sources: &[SourceSnapshot],
         dependency_root: Option<&Path>,
         active: &Config,
-        data_dir: &Path,
+        data_root: &DataRoot,
         limits: SourceLimits,
         submitted: &[(PathBuf, Arc<str>)],
     ) -> io::Result<Self> {
@@ -508,12 +509,12 @@ impl Capture {
             .try_fold(0usize, |total, bytes| total.checked_add(bytes))
             .filter(|bytes| *bytes <= limits.max_bytes)
             .ok_or(io::ErrorKind::FileTooLarge)?;
-        let data_dir = data_dir.to_path_buf();
+        let data_root = data_root.clone();
         let mut roots = Vec::new();
         if let Some(root) = dependency_root {
             roots.push(fs::canonicalize(root)?);
         }
-        if let Ok(path) = fs::canonicalize(&data_dir) {
+        if let Ok(path) = fs::canonicalize(data_root.dir()) {
             roots.push(path);
         }
         let explicitly_allowed = active
@@ -528,15 +529,10 @@ impl Capture {
                     .filter_map(|node| node.tls()?.ech_config_path.as_deref()),
             )
             .chain(std::iter::once(honk_config::dns::SYSTEM_HOSTS_PATH))
-            .filter_map(|path| {
-                fs::canonicalize(honk_config::paths::resolve_dependency_path_from(
-                    path, &data_dir,
-                ))
-                .ok()
-            })
+            .filter_map(|path| fs::canonicalize(data_root.resolve_dependency(path)).ok())
             .collect();
         Ok(Self {
-            data_dir,
+            data_root,
             roots,
             explicitly_allowed,
             limits,
@@ -547,7 +543,7 @@ impl Capture {
     }
 
     fn text(&mut self, path: &str, reader: DependencyReader) -> io::Result<String> {
-        let path = honk_config::paths::resolve_dependency_path_from(path, &self.data_dir);
+        let path = self.data_root.resolve_dependency(path);
         let bytes = self.path(&path, false, reader)?;
         String::from_utf8(bytes.to_vec()).map_err(|_| io::ErrorKind::InvalidData.into())
     }

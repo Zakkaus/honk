@@ -177,7 +177,7 @@ impl NativeState {
             security: security::Security::new(&settings, listen),
             auth,
             geodata,
-            ui: ui::load(&settings.ui).await?,
+            ui: ui::load(&settings.ui, control.data_root()).await?,
             settings,
             instance_id: observation.core.instance_id.clone(),
             observation,

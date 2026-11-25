@@ -92,9 +92,17 @@ impl HostsSnapshot {
 }
 
 impl HostsSourceSet {
+    /// Load from the process data root; an engine uses [`Self::load_in`].
     pub(crate) fn load(config: &honk_config::dns::DnsConfig) -> anyhow::Result<Self> {
+        Self::load_in(config, &honk_config::paths::DataRoot::process())
+    }
+
+    pub(crate) fn load_in(
+        config: &honk_config::dns::DnsConfig,
+        root: &honk_config::paths::DataRoot,
+    ) -> anyhow::Result<Self> {
         Self::load_captured(config, |source| {
-            let path = honk_config::paths::resolve_dependency_path(source);
+            let path = root.resolve_dependency(source);
             fs::read_to_string(&path)
                 .map_err(anyhow::Error::new)
                 .with_context(|| format!("failed to load DNS hosts file {}", path.display()))
@@ -120,13 +128,21 @@ impl HostsSourceSet {
         })
     }
 
+    /// Fingerprint against the process data root; see [`Self::probe_fingerprint_in`].
     pub(crate) fn probe_fingerprint(
         config: &honk_config::dns::DnsConfig,
+    ) -> anyhow::Result<[u8; 32]> {
+        Self::probe_fingerprint_in(config, &honk_config::paths::DataRoot::process())
+    }
+
+    pub(crate) fn probe_fingerprint_in(
+        config: &honk_config::dns::DnsConfig,
+        root: &honk_config::paths::DataRoot,
     ) -> anyhow::Result<[u8; 32]> {
         let mut hash = Sha256::new();
         for source in &config.hosts {
             let rules = source != honk_config::dns::SYSTEM_HOSTS_PATH;
-            let path = honk_config::paths::resolve_dependency_path(source);
+            let path = root.resolve_dependency(source);
             let digest = digest_file(&path)
                 .map_err(anyhow::Error::new)
                 .with_context(|| format!("failed to load DNS hosts file {}", path.display()))?;

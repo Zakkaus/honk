@@ -224,9 +224,11 @@ async fn an_update_replaces_the_resolved_copy_of_an_unchanged_loaded_file() {
         let config = state.config.read().await.clone();
         let requirements = crate::routing::GeoRequirements::for_traffic(&config.routing.rules)
             .union(&DnsRouter::geo_requirements(&config.dns));
-        let geo = crate::routing::GeoSourceSet::load_captured(&requirements, &packaged, |path| {
-            std::fs::read(path).map(Arc::from)
-        })
+        let geo = crate::routing::GeoSourceSet::load_captured(
+            &requirements,
+            &honk_config::paths::DataRoot::daemon(&packaged),
+            |path| std::fs::read(path).map(Arc::from),
+        )
         .unwrap();
         *state.traffic_router.write().await =
             Router::from_config_with_geo_sources(&config.routing, &geo).unwrap();
