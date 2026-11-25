@@ -176,8 +176,6 @@ pub(crate) fn claim_state(
 mod state_claim_tests {
     use std::path::PathBuf;
 
-    use clap::Parser as _;
-
     fn legacy_store(
         root: &std::path::Path,
         subscriptions: &[&honk_config::subscription::Subscription],
@@ -247,12 +245,11 @@ mod state_claim_tests {
                 ),
             )
             .unwrap();
-            let cli = crate::Cli::parse_from([
-                "honk-core",
-                "--mock-ebpf",
-                "-c",
-                config.to_str().unwrap(),
-            ]);
+            let cli = crate::Cli {
+                config,
+                mock_ebpf: true,
+                ..crate::Cli::defaults()
+            };
             let error = crate::run(cli).await.unwrap_err();
             assert!(error.to_string().contains("refusing to start"), "{error:#}");
         }
@@ -285,7 +282,7 @@ mod state_claim_tests {
         let file = state_dir.join(crate::state::DB_FILE);
         std::fs::write(&file, vec![0x5a; 8192]).unwrap();
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let cli = crate::Cli::parse_from(["honk-core"]);
+        let cli = crate::Cli::defaults();
         let mut config = honk_config::Config::default();
         config.global.store_subscribe = true;
 
@@ -339,8 +336,11 @@ mod state_claim_tests {
             ),
         )
         .unwrap();
-        let cli =
-            crate::Cli::parse_from(["honk-core", "--mock-ebpf", "-c", config.to_str().unwrap()]);
+        let cli = crate::Cli {
+            config,
+            mock_ebpf: true,
+            ..crate::Cli::defaults()
+        };
 
         let error = crate::run(cli)
             .await

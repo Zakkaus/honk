@@ -56,7 +56,7 @@ Maintaining this guide: a rule that binds every change goes in this file; a subs
     ├── honk-ebpf-common      # no_std shared eBPF/userspace types (workspace member)
     ├── honk-nfqueue          # Raw-netlink NFQUEUE 320 + owned nftables table/chain (workspace member)
     ├── honk-outbound         # Proxy handlers, groups, health checks (workspace member)
-    ├── honk-core             # eBPF proxy engine, library + `honk-core` binary (workspace member)
+    ├── honk-core             # eBPF proxy engine, library + `honk-core` binary (default `daemon` feature) (workspace member)
     ├── honk-tool             # `honk-tool` CLI toolbox: `sub` subscription/node probing (workspace member)
     └── honk-ebpf             # Kernel eBPF programs (EXCLUDED from workspace, own Cargo.lock)
 ```
@@ -90,7 +90,7 @@ See [design docs](doc/en/design/overview.md).
 ```bash
 cargo check
 cargo build --release                 # whole workspace (needs cmake + C compiler + libclang for boring-sys)
-cargo build --release -p honk-core    # engine (default features: clash-api, jemalloc, rprx; mock eBPF)
+cargo build --release -p honk-core    # engine (default features: clash-api, daemon, jemalloc, rprx; mock eBPF)
 cargo test --all                      # full suite (see current validation guidance below)
 ```
 

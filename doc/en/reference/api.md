@@ -4,7 +4,7 @@ honk provides a native HTTP API, a Clash-compatible HTTP API and a userspace sta
 
 ## Native API
 
-Enable the opt-in `native-api` Cargo feature with `--features native-api` (or `native-ui`). `--no-default-features --features native-api` works without Clash. Choose the release artifact by the interfaces you need:
+Enable the opt-in `native-api` Cargo feature with `--features native-api` (or `native-ui`). `--no-default-features --features daemon,native-api` works without Clash. Choose the release artifact by the interfaces you need:
 
 | Release | Native API | Embedded UI | Clash API |
 | --- | --- | --- | --- |

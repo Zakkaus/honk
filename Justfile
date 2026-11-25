@@ -55,7 +55,7 @@ build-musl-native:
     CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER={{justfile_directory()}}/ci/zigcc \
     CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C link-self-contained=no" \
     BINDGEN_EXTRA_CLANG_ARGS="$({{justfile_directory()}}/ci/zig-bindgen-env x86_64-linux-musl)" \
-    cargo build --release -p honk-core --no-default-features --features "ebpf,native-api,rprx,jemalloc" --target x86_64-unknown-linux-musl
+    cargo build --release -p honk-core --no-default-features --features "daemon,ebpf,native-api,rprx,jemalloc" --target x86_64-unknown-linux-musl
     @echo "Binary: target/x86_64-unknown-linux-musl/release/honk-core"
 
 # Build eBPF object standalone (optional; honk-core build.rs auto-builds it)

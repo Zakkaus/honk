@@ -95,6 +95,8 @@ fn new_tcp_socket(addr: &SocketAddr, mark: Option<u32>) -> io::Result<socket2::S
         }
         apply_tcp_keepalive(&socket)?;
     }
+    #[cfg(not(target_os = "linux"))]
+    let _ = mark;
     Ok(socket)
 }
 
@@ -300,6 +302,8 @@ pub(crate) fn marked_udp_socket_with_mark(
     socket.set_nonblocking(true)?;
     #[cfg(target_os = "linux")]
     set_mark_best_effort(&socket, mark)?;
+    #[cfg(not(target_os = "linux"))]
+    let _ = mark;
     // QUIC throughput is buffer-bound: the default 208 KiB rmem caps a
     // ~1ms-RTT path at ~2 Gbps (quic-go sets ~7 MiB and lands dae at ~3
     // Gbps). Request 8 MiB; the kernel clamps to 2×rmem_max, and honk-core

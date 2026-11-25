@@ -142,7 +142,7 @@ flowchart TB
 
 ## Build features and mock mode
 
-`honk-core` defaults to `clash-api`, `jemalloc`, and `rprx`; real eBPF is opt-in.
+`honk-core` defaults to `clash-api`, `daemon`, `jemalloc`, and `rprx`; real eBPF is opt-in.
 
 | Feature | Default | Effect |
 | --- | --- | --- |
@@ -150,6 +150,7 @@ flowchart TB
 | `clash-api` | yes | Pulls in optional `axum` and `tower-http` for the Clash-compatible REST/WebSocket service. |
 | `native-api` | no | Independent HTTP/1.1 native observations, opt-in accepted-source administration, and a local-directory UI. It owns bounded connections, checks bearer/Host/Origin strictly, and does not depend on Clash. |
 | `native-ui` | no | Includes `native-api` and embeds assets from the pinned doona distribution for `ui: embedded`. `ui: embedded-lite` selects the lighter doona lite edition (preview) with the same feature requirement. No runtime extraction, download, or frontend build. |
+| `daemon` | yes | Builds the `honk-core` binary with its command-line parser and subcommands, and sends systemd notifications. Pulls in `clap` and `libsystemd`. Without it the crate builds as the `honk_core` library only, so a build with `--no-default-features` that needs the binary must list `daemon`. |
 | `jemalloc` | yes | Pulls in `tikv-jemallocator` and installs jemalloc as the `honk-core` binary allocator; the crate builds jemalloc from C source. On Linux, startup disables transparent huge pages for the process before starting Tokio. Runtime options use `_RJEM_MALLOC_CONF`, not `MALLOC_CONF`, because the crate prefixes jemalloc symbols with `_rjem_`. |
 | `rprx` | yes | Enables `honk-outbound/rprx`, which registers the VLESS and VMess handlers, including the supported VLESS Encryption and `xtls-rprx-vision` paths. |
 

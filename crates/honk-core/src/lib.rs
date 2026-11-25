@@ -152,6 +152,7 @@ pub const REVISION: &str = env!("HONK_REVISION");
 /// The target triple this binary was built for.
 pub const TARGET: &str = env!("HONK_TARGET");
 
+#[cfg(feature = "daemon")]
 use clap::Parser;
 use honk_config::Config;
 use honk_config::diagnostic::{
@@ -235,6 +236,7 @@ fn detect_default_interface() -> Option<String> {
 #[cfg(feature = "ebpf")]
 const DEFAULT_BPF_OBJECT: &[u8] = include_bytes!(env!("HONK_EBPF_OBJECT"));
 
+#[cfg(feature = "daemon")]
 #[derive(clap::Subcommand, Debug)]
 pub enum ClashCommand {
     /// Set clash mode (rule / global / direct)
@@ -271,12 +273,14 @@ pub enum ClashCommand {
     },
 }
 
+#[cfg(feature = "daemon")]
 #[derive(clap::Subcommand, Debug)]
 pub enum AdminCommand {
     /// Delete the administrator record so that setup opens again; refused while honk-core runs
     Reset,
 }
 
+#[cfg(feature = "daemon")]
 #[derive(clap::Subcommand, Debug)]
 pub enum ConfigCommand {
     /// Write the active revision as one dae file, listener secrets included
@@ -290,64 +294,94 @@ pub enum ConfigCommand {
     },
 }
 
-#[derive(Parser, Debug)]
-#[command(author, version = VERSION, about, long_about = None, disable_version_flag = true)]
-#[command(arg(clap::Arg::new("version")
+// Without the `daemon` feature there is no command-line parser; callers of
+// `run` set the fields directly.
+#[derive(Debug)]
+#[cfg_attr(feature = "daemon", derive(Parser))]
+#[cfg_attr(feature = "daemon", command(author, version = VERSION, about, long_about = None, disable_version_flag = true))]
+#[cfg_attr(feature = "daemon", command(arg(clap::Arg::new("version")
     .short('v')
     .long("version")
     .action(clap::ArgAction::Version)
-    .help("Print version")))]
+    .help("Print version"))))]
 pub struct Cli {
     /// Subcommand (reload, mode, proxy, delay)
+    #[cfg(feature = "daemon")]
     #[command(subcommand)]
     pub command: Option<ClashCommand>,
 
     /// Path to configuration file
-    #[arg(short, long, default_value = "/etc/honk/config.dae")]
+    #[cfg_attr(
+        feature = "daemon",
+        arg(short, long, default_value = "/etc/honk/config.dae")
+    )]
     pub config: PathBuf,
 
     /// Append operational logs to this path, overriding `global.log_file`
-    #[arg(long, value_name = "PATH")]
+    #[cfg_attr(feature = "daemon", arg(long, value_name = "PATH"))]
     pub log_file: Option<PathBuf>,
 
     /// Path to an external eBPF object file (for real eBPF backend).
     /// If omitted, the built-in object file is used.
-    #[arg(short = 'b', long)]
+    #[cfg_attr(feature = "daemon", arg(short = 'b', long))]
     pub bpf_object: Option<PathBuf>,
 
     /// BPF pin root directory
-    #[arg(long, default_value = "/sys/fs/bpf")]
+    #[cfg_attr(feature = "daemon", arg(long, default_value = "/sys/fs/bpf"))]
     pub bpf_pin_root: PathBuf,
 
     /// Run in debug mode with verbose logging
-    #[arg(short, long)]
+    #[cfg_attr(feature = "daemon", arg(short, long))]
     pub debug: bool,
 
     /// Omit timestamps from console log lines, for journald or another
     /// logger that stamps them itself. The log file keeps its timestamps.
-    #[arg(long)]
+    #[cfg_attr(feature = "daemon", arg(long))]
     pub disable_timestamp: bool,
 
     /// Use mock eBPF backend (for testing without kernel support)
-    #[arg(long)]
+    #[cfg_attr(feature = "daemon", arg(long))]
     pub mock_ebpf: bool,
 
     /// Where the administered configuration lives: the `-c` file tree, or the
     /// revisions in `<data-dir>/state/honk.db`
-    #[arg(long, value_enum, default_value = "file")]
+    #[cfg_attr(feature = "daemon", arg(long, value_enum, default_value = "file"))]
     pub store: ConfigStore,
 
     /// Runtime data directory holding the state db; must equal `global.data_dir`
-    #[arg(long, value_name = "PATH", default_value = honk_config::paths::DEFAULT_DATA_DIR, global = true)]
+    #[cfg_attr(feature = "daemon", arg(long, value_name = "PATH", default_value = honk_config::paths::DEFAULT_DATA_DIR, global = true))]
     pub data_dir: PathBuf,
 }
 
-#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "daemon", derive(clap::ValueEnum))]
 pub enum ConfigStore {
     File,
     Db,
 }
 
+#[cfg(test)]
+impl Cli {
+    /// The options `honk-core` runs with when given no arguments. Builds
+    /// without the `daemon` feature have no parser to produce them.
+    pub(crate) fn defaults() -> Self {
+        Self {
+            #[cfg(feature = "daemon")]
+            command: None,
+            config: PathBuf::from("/etc/honk/config.dae"),
+            log_file: None,
+            bpf_object: None,
+            bpf_pin_root: PathBuf::from("/sys/fs/bpf"),
+            debug: false,
+            disable_timestamp: false,
+            mock_ebpf: false,
+            store: ConfigStore::File,
+            data_dir: PathBuf::from(honk_config::paths::DEFAULT_DATA_DIR),
+        }
+    }
+}
+
+#[cfg(feature = "daemon")]
 pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
     use std::time::Duration;
 
@@ -524,6 +558,7 @@ fn running_instance_pid(path: &std::path::Path) -> anyhow::Result<libc::pid_t> {
     Ok(pid)
 }
 
+#[cfg(feature = "daemon")]
 fn request_reload(path: &std::path::Path) -> anyhow::Result<libc::pid_t> {
     let pid = running_instance_pid(path)?;
     // SAFETY: libc::kill has no pointer or lifetime requirements.
@@ -1679,7 +1714,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     native_api::NativeRuntime::shutdown(native, &control_plane, control_result.is_err()).await;
 
     // Signal systemd that we're stopping (Type=notify)
-    #[cfg(target_os = "linux")]
+    #[cfg(all(feature = "daemon", target_os = "linux"))]
     let _ = libsystemd::daemon::notify(false, &[libsystemd::daemon::NotifyState::Stopping]);
 
     sig_handle.abort();
@@ -1699,12 +1734,14 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod startup_lifecycle_tests {
+    #[cfg(feature = "daemon")]
+    use super::{ClashCommand, publish_instance_pid, running_instance_pid};
     use super::{
-        ClashCommand, Cli, RotatingLogFile, acquire_instance_lock, load_operator_config,
-        prepare_nfqueue_startup, prepare_runtime_data_dir, prepare_runtime_data_dir_with_fallback,
-        publish_instance_pid, running_instance_pid,
+        Cli, RotatingLogFile, acquire_instance_lock, load_operator_config, prepare_nfqueue_startup,
+        prepare_runtime_data_dir, prepare_runtime_data_dir_with_fallback,
     };
     use crate::logging::open_log_file;
+    #[cfg(feature = "daemon")]
     use clap::Parser;
 
     #[test]
@@ -1796,7 +1833,7 @@ mod startup_lifecycle_tests {
     fn a_non_strict_state_db_that_cannot_be_used_leaves_honk_running() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let cli = Cli::parse_from(["honk-core"]);
+        let cli = Cli::defaults();
         let mut config = honk_config::Config::default();
         config.experimental.cache_file.enabled = Some(true);
 
@@ -1986,6 +2023,16 @@ mod startup_lifecycle_tests {
         assert!(open_log_file(std::path::Path::new("/dev/null")).is_err());
     }
 
+    #[cfg(feature = "daemon")]
+    #[test]
+    fn no_arguments_parse_to_the_test_defaults() {
+        assert_eq!(
+            format!("{:?}", Cli::parse_from(["honk-core"])),
+            format!("{:?}", Cli::defaults())
+        );
+    }
+
+    #[cfg(feature = "daemon")]
     #[test]
     fn log_file_option_parses() {
         let cli =
@@ -1997,6 +2044,7 @@ mod startup_lifecycle_tests {
         );
     }
 
+    #[cfg(feature = "daemon")]
     #[test]
     fn reload_command_targets_only_a_locked_instance() {
         let cli = Cli::try_parse_from(["honk-core", "reload"]).expect("parse reload command");
@@ -2057,6 +2105,7 @@ mod startup_lifecycle_tests {
         assert!(!rendered.contains("configuration validation failed"));
     }
 
+    #[cfg(feature = "daemon")]
     #[tokio::test]
     async fn delay_without_a_url_refuses_a_chain() {
         let front = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

@@ -2,6 +2,9 @@ use super::*;
 
 #[cfg(target_os = "linux")]
 const IPV6_ORIGDSTADDR_OPT: libc::c_int = 74;
+// Only Linux transparent sockets request ORIGDST records; no cmsg type is negative.
+#[cfg(not(target_os = "linux"))]
+const IPV6_ORIGDSTADDR_OPT: libc::c_int = -1;
 #[cfg(all(feature = "ebpf", feature = "native-api", target_os = "linux"))]
 const SO_RCVPRIORITY_OPT: libc::c_int = 82;
 
@@ -164,6 +167,8 @@ pub(super) fn new_udp_listener_socket(domain: Domain, reuse_port: bool) -> io::R
     if reuse_port {
         socket.set_reuse_port(true)?;
     }
+    #[cfg(not(target_os = "linux"))]
+    let _ = reuse_port;
     socket.set_reuse_address(true)?;
     if domain == Domain::IPV6 {
         socket.set_only_v6(true)?;
@@ -641,6 +646,21 @@ fn sendmsg_with_src(
         }
         Ok(n as usize)
     }
+}
+
+/// Non-Linux fallback: source selection through pktinfo is Linux-only.
+#[cfg(not(target_os = "linux"))]
+fn sendmsg_with_src(
+    _fd: RawFd,
+    _data: &[u8],
+    _src_ip: std::net::IpAddr,
+    _src_ifindex: u32,
+    _dst: SocketAddr,
+) -> io::Result<usize> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "sending with a chosen source address requires Linux",
+    ))
 }
 
 pub(super) async fn send_to_with_src(
@@ -1172,9 +1192,11 @@ fn packet_info_from_cmsg(
         }
         let pktinfo =
             unsafe { std::ptr::read_unaligned(data.as_ptr().cast::<libc::in6_pktinfo>()) };
+        // glibc declares the index unsigned, bionic signed.
+        let ifindex = u32::try_from(i64::from(pktinfo.ipi6_ifindex)).ok()?;
         return Some((
             std::net::IpAddr::V6(std::net::Ipv6Addr::from(pktinfo.ipi6_addr.s6_addr)),
-            pktinfo.ipi6_ifindex,
+            ifindex,
         ));
     }
     None

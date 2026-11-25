@@ -822,7 +822,7 @@ impl ControlPlane {
             self.start_epoch_maintenance(active).await;
             #[cfg(feature = "native-api")]
             self.publish_phase(EnginePhase::Running);
-            #[cfg(target_os = "linux")]
+            #[cfg(all(feature = "daemon", target_os = "linux"))]
             if let Err(error) =
                 libsystemd::daemon::notify(false, &[libsystemd::daemon::NotifyState::Ready])
             {

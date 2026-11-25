@@ -596,6 +596,7 @@ fn test_outbound_index_conversions() {
     assert_eq!(user0.to_user_num(), 0);
 }
 
+#[cfg(feature = "daemon")]
 #[test]
 fn test_daemon_reports_timer_diagnostics_on_startup_and_sighup() {
     use std::io::{BufRead, BufReader, Read};
@@ -739,6 +740,7 @@ fn test_daemon_reports_timer_diagnostics_on_startup_and_sighup() {
     );
 }
 
+#[cfg(feature = "daemon")]
 #[test]
 fn test_mode_command_rejects_dae_without_rewriting() {
     let directory = tempfile::tempdir().expect("create temporary directory");
