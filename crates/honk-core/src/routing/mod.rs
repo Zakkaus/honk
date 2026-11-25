@@ -213,8 +213,19 @@ impl Router {
         )
     }
 
+    /// [`Self::from_config_in`] on the process data root.
     pub fn from_config(routing: &RoutingConfig) -> anyhow::Result<Self> {
-        let sources = GeoSourceSet::load(&GeoRequirements::for_traffic(&routing.rules));
+        Self::from_config_in(routing, &honk_config::paths::DataRoot::process())
+    }
+
+    /// Builds from `routing` with `geosite.dat` and `geoip.dat` read from
+    /// `root`. An explicit root searches only its own directory; a rule whose
+    /// asset is missing there matches nothing, as in the daemon.
+    pub fn from_config_in(
+        routing: &RoutingConfig,
+        root: &honk_config::paths::DataRoot,
+    ) -> anyhow::Result<Self> {
+        let sources = GeoSourceSet::load_in(&GeoRequirements::for_traffic(&routing.rules), root);
         Self::from_config_with_geo_sources(routing, &sources)
     }
 

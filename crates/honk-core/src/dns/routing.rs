@@ -458,10 +458,20 @@ impl DnsRouter {
         )
     }
 
+    /// [`Self::new_from_dns_config_in`] on the process data root.
     pub fn new_from_dns_config(dns_config: &DnsConfig) -> anyhow::Result<Self> {
+        Self::new_from_dns_config_in(dns_config, &honk_config::paths::DataRoot::process())
+    }
+
+    /// Builds from `dns_config` with geodata read from `root`, searched as
+    /// [`crate::routing::Router::from_config_in`] searches it.
+    pub fn new_from_dns_config_in(
+        dns_config: &DnsConfig,
+        root: &honk_config::paths::DataRoot,
+    ) -> anyhow::Result<Self> {
         let request = dns_config.routing.effective_request();
         let requirements = requirements(&request, &dns_config.routing.response);
-        let sources = GeoSourceSet::load(&requirements);
+        let sources = GeoSourceSet::load_in(&requirements, root);
         Self::build(
             &request,
             &dns_config.routing.response,
