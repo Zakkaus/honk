@@ -477,3 +477,274 @@ mod parity {
         assert_eq!(compared, (7 + 6 + 7) * flows().len());
     }
 }
+
+mod health {
+    use std::collections::HashSet;
+
+    use honk_outbound::proxy::{ProtocolEntry, ProxyStream, TcpOutbound};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
+
+    /// Dials the target directly unless the node is marked down.
+    struct TestOutbound {
+        down: Arc<parking_lot::Mutex<HashSet<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TcpOutbound for TestOutbound {
+        async fn dial(
+            &self,
+            node: &honk_config::node::Node,
+            target: SocketAddr,
+            target_domain: Option<&str>,
+            _connect_timeout: Duration,
+        ) -> anyhow::Result<ProxyStream> {
+            anyhow::ensure!(!self.down.lock().contains(&node.name), "node is down");
+            Ok(ProxyStream {
+                stream: Box::new(tokio::net::TcpStream::connect(target).await?),
+                target_addr: target,
+                target_domain: target_domain.map(str::to_owned),
+            })
+        }
+    }
+
+    /// Answers every request with 204 after `delay`.
+    async fn check_server(delay: Duration) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 2048];
+                    let mut head = Vec::new();
+                    loop {
+                        let Ok(n) = stream.read(&mut buf).await else {
+                            return;
+                        };
+                        if n == 0 {
+                            return;
+                        }
+                        head.extend_from_slice(&buf[..n]);
+                        while let Some(end) = head.windows(4).position(|w| w == b"\r\n\r\n") {
+                            head.drain(..end + 4);
+                            tokio::time::sleep(delay).await;
+                            if stream
+                                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    struct Fixture {
+        engine: Engine,
+        down: Arc<parking_lot::Mutex<HashSet<String>>>,
+        url: String,
+    }
+
+    async fn fixture(delay: Duration, down: &[&str]) -> Fixture {
+        let url = format!("http://{}/", check_server(delay).await);
+        let source = format!(
+            r#"
+global {{
+    tcp_check_url: '{url}'
+    check_interval: 1s
+}}
+node {{
+    a: 'socks5://192.0.2.20:1080'
+    b: 'socks5://192.0.2.21:1080'
+}}
+group {{
+    auto {{
+        policy: min_avg10
+        filter: name(a, b)
+    }}
+    pick {{
+        policy: fixed
+        filter: name(a, b)
+    }}
+}}
+routing {{
+    dport(81) -> pick
+    fallback: auto
+}}
+"#
+        );
+        let engine = engine(&source);
+        let down = Arc::new(parking_lot::Mutex::new(
+            down.iter().map(|name| (*name).to_owned()).collect(),
+        ));
+        Fixture { engine, down, url }
+    }
+
+    async fn start(fixture: &mut Fixture) {
+        let mut proxies = ProxyRegistry::new();
+        proxies.register(ProtocolEntry::new(
+            honk_config::types::NodeProtocol::Socks5,
+            Arc::new(TestOutbound {
+                down: Arc::clone(&fixture.down),
+            }),
+        ));
+        let runtimes =
+            honk_outbound::runtime::OutboundRuntimeRegistry::build(&fixture.engine.config().nodes)
+                .unwrap()
+                .into_shared();
+        fixture
+            .engine
+            .start_health(Outbounds {
+                proxies: Arc::new(proxies),
+                runtimes,
+                resolver: None,
+            })
+            .await;
+    }
+
+    fn leaf(engine: &Engine, port: u16) -> String {
+        let flow = flow(
+            Network::Tcp,
+            "198.18.0.2:40000",
+            &format!("198.51.100.7:{port}"),
+        );
+        engine.decide(&flow).candidates[0].node.clone()
+    }
+
+    fn id(engine: &Engine, name: &str) -> uuid::Uuid {
+        engine
+            .config()
+            .nodes
+            .iter()
+            .find(|node| node.name == name)
+            .unwrap()
+            .id
+    }
+
+    #[tokio::test]
+    async fn a_urltest_group_leaves_a_member_whose_probe_fails() {
+        let mut fixture = fixture(Duration::ZERO, &["a"]).await;
+        assert_eq!(leaf(&fixture.engine, 443), "a");
+        start(&mut fixture).await;
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while leaf(&fixture.engine, 443) != "b" {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("auto leaves the failed member");
+        // A fresh node's failures do not count toward a dead verdict during
+        // honk's grace period; the URL test already ranks it last.
+        assert_eq!(fixture.engine.groups()[0].selected, "b");
+    }
+
+    #[tokio::test]
+    async fn a_selector_choice_changes_the_next_flows_leaf() {
+        let fixture = fixture(Duration::ZERO, &[]).await;
+        assert_eq!(leaf(&fixture.engine, 81), "a");
+        fixture.engine.select("pick", "b").unwrap();
+        assert_eq!(leaf(&fixture.engine, 81), "b");
+        assert_eq!(fixture.engine.groups()[1].selected, "b");
+        assert_eq!(
+            fixture.engine.select("auto", "b"),
+            Err(SelectorError::NotSelector)
+        );
+        assert_eq!(
+            fixture.engine.select("pick", "c"),
+            Err(SelectorError::NotMember)
+        );
+    }
+
+    #[tokio::test]
+    async fn delay_tests_return_and_record_honks_measurement() {
+        let delay = Duration::from_millis(80);
+        let mut fixture = fixture(delay, &["b"]).await;
+        let a = id(&fixture.engine, "a");
+        let timeout = Duration::from_secs(5);
+        assert!(matches!(
+            fixture.engine.test_node(a, &fixture.url, timeout).await,
+            Err(TestError::NotStarted)
+        ));
+        start(&mut fixture).await;
+        let latency = fixture
+            .engine
+            .test_node(a, &fixture.url, timeout)
+            .await
+            .unwrap();
+        assert!(latency >= delay, "{latency:?}");
+        let pick = &fixture.engine.groups()[1];
+        assert_eq!(pick.members[0].last_latency, Some(latency));
+
+        let results = fixture
+            .engine
+            .test_group("pick", &fixture.url, timeout)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "a");
+        assert!(results[0].1.as_ref().is_ok_and(|latency| *latency >= delay));
+        assert_eq!(results[1].0, "b");
+        assert!(results[1].1.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_snapshot_reports_the_group_managers_view() {
+        let mut fixture = fixture(Duration::ZERO, &["a"]).await;
+        start(&mut fixture).await;
+        fixture.engine.select("pick", "b").unwrap();
+        let a = id(&fixture.engine, "a");
+        let _ = fixture
+            .engine
+            .test_node(a, &fixture.url, Duration::from_secs(5))
+            .await;
+        let manager = fixture.engine.health.group_manager.read().clone();
+        let alive_set = &fixture.engine.health.alive_set;
+        let groups = fixture.engine.groups();
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group.name.as_str())
+                .collect::<Vec<_>>(),
+            ["auto", "pick"]
+        );
+        for group in &groups {
+            let config = fixture
+                .engine
+                .config()
+                .groups
+                .iter()
+                .find(|config| config.name == group.name)
+                .unwrap();
+            assert_eq!(group.policy, config.policy);
+            assert_eq!(
+                group.selected,
+                crate::group_view::displayed_member(config, &manager, None)
+            );
+            let tags: Vec<_> = group
+                .members
+                .iter()
+                .map(|member| member.tag.clone())
+                .collect();
+            assert_eq!(tags, manager.node_names_in_group(&group.name));
+            for member in &group.members {
+                let node = manager.node_by_name(&member.tag).unwrap();
+                assert_eq!(member.node_id, Some(node.id));
+                assert_eq!(
+                    member.alive,
+                    alive_set.is_alive_for(node.id, ProbeDomain::Tcp, IpVersion::V4)
+                );
+                assert_eq!(
+                    member.last_latency,
+                    crate::group_view::last_latency(alive_set, node).map(|(latency, _)| latency)
+                );
+            }
+        }
+        assert_eq!(groups[1].selected, "b");
+    }
+}

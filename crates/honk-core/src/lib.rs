@@ -25,7 +25,7 @@ pub(crate) mod degradations;
 pub mod dns;
 pub(crate) mod download_route;
 pub mod ebpf;
-#[cfg(feature = "clash-api")]
+#[cfg(any(feature = "clash-api", feature = "embedded"))]
 pub(crate) mod group_view;
 mod logging;
 mod marked_http;

@@ -205,6 +205,7 @@ impl GroupDelayCapture {
         results
     }
 
+    #[cfg(feature = "clash-api")]
     pub(crate) fn group_manager(&self) -> &GroupManager {
         &self.group_manager
     }
