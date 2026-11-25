@@ -52,6 +52,8 @@ h2.workspace = true
 http.workspace = true
 
 [dev-dependencies]
+quinn = { workspace = true, features = ["rustls-ring", "platform-verifier"] }
+quinn-proto = { workspace = true, features = ["rustls-ring", "platform-verifier"] }
 chrono.workspace = true
 rcgen.workspace = true
 serde_json.workspace = true

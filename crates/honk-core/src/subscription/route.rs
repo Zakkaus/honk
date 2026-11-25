@@ -167,7 +167,7 @@ impl Hop<'_> {
     pub(super) async fn get(
         &mut self,
         subscription: &Subscription,
-        url: &reqwest::Url,
+        url: &url::Url,
         headers: &http::HeaderMap,
         deadline: Instant,
     ) -> anyhow::Result<(Reply, Option<Via>)> {
@@ -242,18 +242,11 @@ fn direct_stage(error: &anyhow::Error) -> Option<(&'static str, Option<String>)>
         return Some((failed.stage, None));
     }
     let io = error.downcast_ref::<std::io::Error>()?;
-    let stage = if io
-        .get_ref()
-        .is_some_and(|inner| inner.is::<tokio_rustls::rustls::Error>())
-    {
-        "tls_failed"
-    } else {
-        match io.kind() {
-            std::io::ErrorKind::TimedOut => "download_timeout",
-            std::io::ErrorKind::NotFound => "resolution_failed",
-            std::io::ErrorKind::InvalidInput => return None,
-            _ => "connection_failed",
-        }
+    let stage = match io.kind() {
+        std::io::ErrorKind::TimedOut => "download_timeout",
+        std::io::ErrorKind::NotFound => "resolution_failed",
+        std::io::ErrorKind::InvalidInput => return None,
+        _ => "connection_failed",
     };
     Some((stage, Some(io.to_string())))
 }

@@ -83,7 +83,6 @@ brotli = "9"
 webpki-root-certs = "1"
 foreign-types = "0.5"
 tokio-rustls = "0.26"
-rustls-platform-verifier = "0.7"
 rustls-pemfile = "2.2"
 webpki-roots = "1"
 aes-gcm = "0.11"
@@ -102,8 +101,10 @@ subtle = "2.6.1"
 
 # Networking
 socket2 = { version = "0.6", features = ["all"] }
-quinn = "0.11"
-quinn-proto = "0.11"
+# Production QUIC uses honk-outbound's BoringSSL crypto (`quic::boring`); the
+# rustls integration is test-only (each crate's dev-dependencies).
+quinn = { version = "0.11", default-features = false, features = ["log", "runtime-tokio", "bloom", "ring"] }
+quinn-proto = { version = "0.11", default-features = false, features = ["log", "bloom", "ring"] }
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
 tokio-tungstenite = { version = "0.30", default-features = false, features = [

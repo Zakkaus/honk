@@ -422,7 +422,7 @@ impl UpstreamPool {
             .map(|target| target.node))
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "doh3"))]
     pub(crate) async fn selected_dial_context_for_test(
         &self,
         upstream: &str,

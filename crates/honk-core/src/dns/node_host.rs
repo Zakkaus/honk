@@ -136,8 +136,7 @@ mod tests {
         )
         .unwrap();
         let mut link =
-            reqwest::Url::parse("vless://b831381d-6324-4d53-ad4f-8cda48b30811@up.example:443")
-                .unwrap();
+            url::Url::parse("vless://b831381d-6324-4d53-ad4f-8cda48b30811@up.example:443").unwrap();
         link.query_pairs_mut()
             .append_pair("type", "xhttp")
             .append_pair("security", "tls")

@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use honk_outbound::tls::TlsConnector;
 use http::header::{
     ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_ENCODING, HOST, LOCATION,
     PROXY_AUTHORIZATION,
@@ -12,7 +13,6 @@ use http::header::{
 use hyper::body::{Body as _, Incoming};
 use hyper_util::rt::TokioIo;
 use tokio::time::{Instant, timeout_at};
-use tokio_rustls::{TlsConnector, rustls};
 
 use crate::proxy::AsyncReadWrite;
 
@@ -58,7 +58,7 @@ impl From<&'static str> for Error {
 /// The existing GET inputs after its connection and any TLS are ready.
 pub(crate) struct Prepared<'a> {
     stream: Stream,
-    url: std::borrow::Cow<'a, reqwest::Url>,
+    url: std::borrow::Cow<'a, url::Url>,
     target: http::Uri,
     headers: http::HeaderMap,
 }
@@ -98,40 +98,38 @@ impl ResponseBody {
     }
 }
 
-/// reqwest has no socket-mark hook; keep Hyper's framing on our marked dialer.
+/// Hyper's HTTP/1.1 framing on our marked dialer, with honk-outbound's TLS.
 pub(crate) struct Client {
     /// `None` only for [`Client::plain`], which never dials `https`.
     tls: Option<TlsConnector>,
 }
 
-impl Client {
-    /// Fallible where `reqwest::Client::new` panics: a TLS setup failure must
-    /// fail the download, not the task running it.
-    pub(crate) fn new() -> anyhow::Result<Self> {
-        use rustls_platform_verifier::BuilderVerifierExt;
+/// ALPN wire for the one protocol [`send`] speaks.
+const HTTP1_ALPN_WIRE: &[u8] = b"\x08http/1.1";
 
-        let provider = rustls::crypto::CryptoProvider::get_default()
-            .cloned()
-            .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
-        let mut config = rustls::ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()?
-            .with_platform_verifier()?
-            .with_no_client_auth();
-        config.alpn_protocols.push(b"http/1.1".to_vec());
+impl Client {
+    /// The BoringSSL connector DoT and DoH upstreams use, verifying against
+    /// the same bundled roots. Fallible: a TLS setup failure must fail the
+    /// download, not the task running it.
+    pub(crate) fn new() -> anyhow::Result<Self> {
         Ok(Self {
-            tls: Some(TlsConnector::from(Arc::new(config))),
+            tls: Some(honk_outbound::tls::build_dns_connector(
+                false,
+                HTTP1_ALPN_WIRE,
+            )?),
         })
     }
 
-    /// A client for `http` only: no TLS config, so no system CA store.
+    /// A client for `http` only: no TLS config, so no CA store.
     pub(crate) fn plain() -> Self {
         Self { tls: None }
     }
 
+    /// A client that accepts any certificate, for loopback TLS fixtures.
     #[cfg(all(test, feature = "clash-api"))]
-    pub(crate) fn with_tls(config: rustls::ClientConfig) -> Self {
+    pub(crate) fn unverified() -> Self {
         Self {
-            tls: Some(TlsConnector::from(Arc::new(config))),
+            tls: Some(honk_outbound::tls::build_dns_connector(true, HTTP1_ALPN_WIRE).unwrap()),
         }
     }
 
@@ -157,14 +155,15 @@ impl Client {
                 let host = uri
                     .host()
                     .ok_or_else(|| anyhow::anyhow!("HTTPS URL has no host"))?;
-                let name = rustls::pki_types::ServerName::try_from(
-                    host.trim_matches(['[', ']']).to_owned(),
-                )?;
                 let tls = self
                     .tls
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("HTTPS needs a TLS client"))?;
-                Ok(Box::new(tls.connect(name, stream).await?))
+                let stream = tls
+                    .connect(host.trim_matches(['[', ']']), stream)
+                    .await
+                    .map_err(|error| Error::caused("tls_failed", error))?;
+                Ok(Box::new(stream))
             }
             Some("http") => Ok(stream),
             _ => anyhow::bail!("unsupported HTTP URL scheme"),
@@ -174,7 +173,7 @@ impl Client {
     /// Execute one GET; the caller owns redirects and the whole-body deadline.
     pub(crate) async fn get(
         &self,
-        url: &reqwest::Url,
+        url: &url::Url,
         headers: &http::HeaderMap,
         timeout: Duration,
     ) -> anyhow::Result<Response> {
@@ -186,7 +185,7 @@ impl Client {
     /// Prepare the direct GET, including environment proxy CONNECT and TLS.
     pub(crate) async fn prepare(
         &self,
-        url: &reqwest::Url,
+        url: &url::Url,
         headers: &http::HeaderMap,
         timeout: Duration,
     ) -> anyhow::Result<Prepared<'static>> {
@@ -256,7 +255,7 @@ impl Client {
     pub(crate) async fn prepare_over<'a>(
         &self,
         stream: Stream,
-        url: &'a reqwest::Url,
+        url: &'a url::Url,
         headers: &http::HeaderMap,
         by: Instant,
     ) -> Result<Prepared<'a>, Error> {
@@ -448,7 +447,7 @@ pub(crate) fn followed_redirect(status: http::StatusCode) -> bool {
 
 /// Move initial URL credentials into headers before a caller follows redirects.
 pub(crate) fn normalize_url(
-    url: &mut reqwest::Url,
+    url: &mut url::Url,
     headers: &mut http::HeaderMap,
 ) -> anyhow::Result<()> {
     if (!url.username().is_empty() || url.password().is_some())

@@ -297,7 +297,7 @@ impl<'a> AdmissionOwner<'a> {
 
 /// A hostname that resolves to a private address is not detected here; this
 /// only refuses a destination the redirect states outright.
-fn has_private_literal_host(url: &reqwest::Url) -> bool {
+fn has_private_literal_host(url: &url::Url) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
@@ -324,10 +324,7 @@ fn has_private_literal_host(url: &reqwest::Url) -> bool {
     }
 }
 
-fn subscription_redirect_error(
-    previous: &reqwest::Url,
-    next: &reqwest::Url,
-) -> Option<&'static str> {
+fn subscription_redirect_error(previous: &url::Url, next: &url::Url) -> Option<&'static str> {
     if previous.scheme() == "https" && next.scheme() != "https" {
         Some("subscription redirected from https to plaintext")
     } else if has_private_literal_host(next) && !has_private_literal_host(previous) {
@@ -342,8 +339,8 @@ fn subscription_redirect_error(
 /// a configured Host; the previous URL becomes the Referer unless the hop
 /// goes from https to http.
 fn follow_subscription_redirect(
-    previous: &reqwest::Url,
-    next: &reqwest::Url,
+    previous: &url::Url,
+    next: &url::Url,
     headers: &mut http::HeaderMap,
 ) {
     use http::header;
@@ -448,7 +445,7 @@ async fn fetch_following(
     mut hop: route::Hop<'_>,
 ) -> anyhow::Result<(Vec<u8>, SubscriptionUserinfo)> {
     let deadline = tokio::time::Instant::now() + SUBSCRIPTION_TIMEOUT;
-    let mut url = reqwest::Url::parse(&sub.url)?;
+    let mut url = url::Url::parse(&sub.url)?;
     let mut headers = subscription_request_headers(sub)?;
     // Userinfo becomes Basic auth unless a configured Authorization wins.
     crate::marked_http::normalize_url(&mut url, &mut headers)?;

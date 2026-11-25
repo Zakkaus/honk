@@ -6,13 +6,6 @@ fn download_tls() -> (crate::marked_http::Client, tokio_rustls::TlsAcceptor) {
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let der = rustls::pki_types::CertificateDer::from(cert.cert);
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add(der.clone()).unwrap();
-    let client = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
     let server = rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .unwrap()
@@ -23,7 +16,7 @@ fn download_tls() -> (crate::marked_http::Client, tokio_rustls::TlsAcceptor) {
         )
         .unwrap();
     (
-        crate::marked_http::Client::with_tls(client),
+        crate::marked_http::Client::unverified(),
         tokio_rustls::TlsAcceptor::from(Arc::new(server)),
     )
 }

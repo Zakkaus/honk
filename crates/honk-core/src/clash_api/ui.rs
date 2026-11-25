@@ -342,7 +342,7 @@ async fn fetch_direct(
         result = tokio::time::timeout(DOWNLOAD_TIMEOUT, async {
         let prepared = crate::marked_http::Client::new()?
             .prepare(
-                &reqwest::Url::parse(url)?,
+                &url::Url::parse(url)?,
                 &http::HeaderMap::new(),
                 DOWNLOAD_TIMEOUT,
             )
@@ -386,7 +386,7 @@ async fn fetch_proxied(
     registry: &ProxyRegistry,
     proxy: &crate::download_route::DownloadProxy,
     feedback: Option<ScoreAttempt>,
-    (url, host, port): (&reqwest::Url, &str, u16),
+    (url, host, port): (&url::Url, &str, u16),
     archive: &mut ArchiveFile,
     stop: &mut Option<watch::Receiver<bool>>,
 ) -> anyhow::Result<ProxiedFetch> {
@@ -454,7 +454,7 @@ async fn fetch_proxied(
 async fn proxied_get(
     client: &crate::marked_http::Client,
     stream: Box<dyn AsyncReadWrite>,
-    url: &reqwest::Url,
+    url: &url::Url,
     archive: &mut ArchiveFile,
     reporter: &Option<ScoreReporter>,
     by: tokio::time::Instant,
@@ -595,8 +595,8 @@ fn named_then_unlinked(
 
 /// Parse a download URL with its host and port; the scheme is required and
 /// must be http or https.
-fn parse_download_url(url: &str) -> anyhow::Result<(reqwest::Url, String, u16)> {
-    let parsed = reqwest::Url::parse(url)
+fn parse_download_url(url: &str) -> anyhow::Result<(url::Url, String, u16)> {
+    let parsed = url::Url::parse(url)
         .map_err(|e| anyhow::anyhow!("invalid external UI URL '{url}': {e}"))?;
 
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -1352,7 +1352,7 @@ mod tests {
         *ctx.config.write().await = Arc::new(config);
         *ctx.runtime_registry.write() = Arc::clone(&old);
         let origin = spawn_zip_server(make_zip(&[("dist/index.html", b"new")])).await;
-        let url = reqwest::Url::parse(&format!("http://{origin}/ui.zip")).unwrap();
+        let url = url::Url::parse(&format!("http://{origin}/ui.zip")).unwrap();
         let UiRoute::Proxy { proxy, feedback } =
             decide_route(&ctx, "127.0.0.1", origin.port(), None)
                 .await
@@ -1437,7 +1437,7 @@ mod tests {
         *ctx.config.write().await = Arc::new(config);
         let body = b"this reply is not a zip file";
         let origin = spawn_zip_server(body.to_vec()).await;
-        let url = reqwest::Url::parse(&format!("http://{origin}/ui.zip")).unwrap();
+        let url = url::Url::parse(&format!("http://{origin}/ui.zip")).unwrap();
 
         assert!(download_external_ui(&ctx, url.as_str()).await.is_err());
         assert_eq!(*front.requests.lock(), [land.addr]);
@@ -1554,7 +1554,7 @@ mod tests {
             ["ui-parent", "ui-child"]
         );
         let mut archive = ArchiveFile::create(dir.path()).unwrap();
-        let url = reqwest::Url::parse(&format!("http://{addr}/ui.zip")).unwrap();
+        let url = url::Url::parse(&format!("http://{addr}/ui.zip")).unwrap();
         let fetched = fetch_proxied(
             &ctx.proxy_registry,
             &proxy,
@@ -1668,77 +1668,6 @@ mod tests {
             .unwrap()
             .start()
             .setup_failed(ScoreOutcome::Timeout);
-    }
-
-    /// The rustls default provider is process-global, so only a child may break it.
-    #[test]
-    fn direct_fetch_reports_tls_setup_failure() {
-        const CHILD: &str = "HONK_UI_TLS_SETUP_FAILURE_CHILD";
-        if std::env::var_os(CHILD).is_none() {
-            let status = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "clash_api::ui::tests::direct_fetch_reports_tls_setup_failure",
-                    "--nocapture",
-                ])
-                .env(CHILD, "1")
-                .env_remove("HTTP_PROXY")
-                .env_remove("HTTPS_PROXY")
-                .env_remove("ALL_PROXY")
-                .env_remove("http_proxy")
-                .env_remove("https_proxy")
-                .env_remove("all_proxy")
-                .status()
-                .unwrap();
-            assert!(status.success());
-            return;
-        }
-        use tokio_rustls::rustls::{
-            self,
-            crypto::{CryptoProvider, aws_lc_rs},
-        };
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async {
-                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-                let address = listener.local_addr().unwrap();
-                let server = tokio::spawn(async move {
-                    loop {
-                        let (mut stream, _) = listener.accept().await.unwrap();
-                        let mut request = Vec::new();
-                        let mut byte = [0];
-                        while !request.ends_with(b"\r\n\r\n") {
-                            stream.read_exact(&mut byte).await.unwrap();
-                            request.push(byte[0]);
-                        }
-                        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndone").await.unwrap();
-                    }
-                });
-                let url = format!("http://{address}/ui.zip");
-                let dir = tempfile::tempdir().unwrap();
-                let mut archive = ArchiveFile::create(dir.path()).unwrap();
-                let healthy = fetch_direct(&url, None, &mut archive, &mut None)
-                    .await
-                    .unwrap();
-                assert!(matches!(healthy, ProxiedFetch::Body));
-                assert_eq!(archive_bytes(archive).await, b"done");
-                CryptoProvider {
-                    cipher_suites: Vec::new(),
-                    ..aws_lc_rs::default_provider()
-                }
-                .install_default()
-                .unwrap();
-                let mut archive = ArchiveFile::create(dir.path()).unwrap();
-                let error = fetch_direct(&url, None, &mut archive, &mut None)
-                    .await
-                    .err()
-                    .expect("invalid TLS provider must fail even for a reachable HTTP endpoint");
-                assert!(error.downcast_ref::<rustls::Error>().is_some(), "{error:?}");
-                server.abort();
-                assert!(server.await.unwrap_err().is_cancelled());
-            });
     }
 
     #[tokio::test]

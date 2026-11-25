@@ -147,7 +147,6 @@ async fn a_direct_connection_refusal_is_staged_and_an_invalid_url_is_not() {
 #[test]
 fn direct_errors_map_to_the_stage_their_cause_names() {
     use std::io::{Error, ErrorKind};
-    use tokio_rustls::rustls::{CertificateError, Error as TlsError};
     let stage = |error: Error| direct_stage(&anyhow::Error::new(error));
     let named = |stage: &'static str, cause: &str| Some((stage, Some(cause.to_owned())));
     assert_eq!(
@@ -157,13 +156,6 @@ fn direct_errors_map_to_the_stage_their_cause_names() {
     assert_eq!(
         stage(Error::new(ErrorKind::NotFound, "no DNS addresses")),
         named("resolution_failed", "no DNS addresses")
-    );
-    assert_eq!(
-        stage(Error::other(TlsError::InvalidCertificate(
-            CertificateError::UnknownIssuer
-        )))
-        .map(|found| found.0),
-        Some("tls_failed")
     );
     assert_eq!(
         stage(Error::new(ErrorKind::ConnectionReset, "reset")),
@@ -176,6 +168,32 @@ fn direct_errors_map_to_the_stage_their_cause_names() {
             "http_failed"
         ))),
         Some(("http_failed", None))
+    );
+}
+
+/// A handshake the server cannot complete is a TLS failure, not a
+/// connection or HTTP one.
+#[tokio::test]
+async fn a_direct_https_handshake_failure_is_staged_as_tls() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").await;
+        }
+    });
+    let (outbounds, dials) = routing("proxy");
+    let mut plain = subscription(address, "direct");
+    plain.url = format!("https://{address}/sub");
+    let error = manager(outbounds).fetch(&plain).await.unwrap_err();
+    assert_eq!(dials.load(Ordering::SeqCst), 0);
+    assert_eq!(failure_code(&error), "fetch_failed", "{error:#}");
+    assert_eq!(
+        failure_stage(&error),
+        Some(FetchFailure {
+            stage: "tls_failed",
+            via: None,
+        })
     );
 }
 
