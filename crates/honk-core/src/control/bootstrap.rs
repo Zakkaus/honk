@@ -117,7 +117,7 @@ impl ControlPlane {
         );
         honk_outbound::util::init_bypass_mark(config.global.effective_so_mark())?;
         let (tx, rx) = mpsc::channel(256);
-        let effective_log_file = crate::resolved_log_file_path(&config, None);
+        let effective_log_file = crate::resolved_log_file_path_in(&config, None, &data_root);
 
         let alive_set = Arc::new(
             crate::outbound::AliveDialerSet::new().with_so_mark(config.global.effective_so_mark()),
@@ -289,11 +289,12 @@ impl ControlPlane {
                 crate::config_diagnostics::ActiveDiagnostics::default(),
             )),
             reload_lock: tokio::sync::Mutex::new(()),
-            data_root,
             log_files: LogFiles {
                 cli_override: None,
                 effective: effective_log_file,
+                root: data_root.clone(),
             },
+            data_root,
             startup_downgrades: StartupDowngrades::default(),
             ebpf: ebpf_arc,
             router: router_arc,
@@ -405,6 +406,7 @@ impl ControlPlane {
         self.log_files = LogFiles {
             cli_override: log_file_override,
             effective: effective_log_file,
+            root: self.data_root.clone(),
         };
     }
 

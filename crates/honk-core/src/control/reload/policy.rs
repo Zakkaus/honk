@@ -2,10 +2,23 @@ use super::*;
 
 /// The log file the process opened at startup and the CLI override, which
 /// takes precedence over any candidate's `global.log_file`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct LogFiles {
     pub(crate) cli_override: Option<PathBuf>,
     pub(crate) effective: Option<PathBuf>,
+    /// The engine root a relative `global.log_file` resolves against.
+    pub(crate) root: honk_config::paths::DataRoot,
+}
+
+#[cfg(test)]
+impl Default for LogFiles {
+    fn default() -> Self {
+        Self {
+            cli_override: None,
+            effective: None,
+            root: honk_config::paths::DataRoot::process(),
+        }
+    }
 }
 
 /// Settings this process turned off at startup because the host cannot honour
@@ -75,8 +88,11 @@ pub(super) fn restart_required_fields_with_udp_dns(
     downgrades: &StartupDowngrades,
     current_udp_check_dns: &[String],
 ) -> Vec<RestartField> {
-    let candidate_log_file =
-        crate::resolved_log_file_path(candidate, log_files.cli_override.as_deref());
+    let candidate_log_file = crate::resolved_log_file_path_in(
+        candidate,
+        log_files.cli_override.as_deref(),
+        &log_files.root,
+    );
     let mut changed = restart_required_changes(
         current,
         candidate,

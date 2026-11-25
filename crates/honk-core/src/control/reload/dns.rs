@@ -6,8 +6,9 @@ use crate::dns::routing::DnsRouter;
 pub(super) fn load_hosts_and_policy(
     config: &Config,
     dns_geo_fingerprint: &[u8; 32],
+    root: &honk_config::paths::DataRoot,
 ) -> Option<(HostsSourceSet, PolicyId)> {
-    let hosts_sources = match HostsSourceSet::load(&config.dns) {
+    let hosts_sources = match HostsSourceSet::load_in(&config.dns, root) {
         Ok(sources) => sources,
         Err(error) => {
             warn!(target: "honk_core::control::reload::transaction", %error, "Failed to load DNS hosts snapshot");

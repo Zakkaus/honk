@@ -107,6 +107,7 @@ where
 
 /// Resolve against the process data root; an engine uses
 /// [`resolved_log_file_path_in`].
+#[cfg(test)]
 pub(crate) fn resolved_log_file_path(
     config: &Config,
     cli_override: Option<&std::path::Path>,
