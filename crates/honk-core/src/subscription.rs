@@ -32,12 +32,10 @@ pub(crate) use store::{LegacySubscriptionStore, legacy_store_roots, prune_bodies
 pub(crate) use route::FetchFailure;
 pub(crate) use route::{failure_code, failure_stage};
 pub(crate) use supervisor::SubscriptionMergeReply;
-#[cfg(feature = "native-api")]
-pub(crate) use supervisor::same_subscription_source_spec;
 pub(crate) use supervisor::{
     AuthorizedSubscription, SubscriptionAuthorizations, SubscriptionSupervisor,
-    SubscriptionSupervisorHandle, drop_nodes_published_elsewhere, same_subscription_worker_set,
-    validate_subscription_ids,
+    SubscriptionSupervisorHandle, drop_nodes_published_elsewhere, same_subscription_source_spec,
+    same_subscription_worker_set, validate_subscription_ids,
 };
 #[cfg(feature = "native-api")]
 pub(crate) use supervisor::{ProviderLoad, RefreshRefusal, RefreshReport};
@@ -389,12 +387,17 @@ fn subscription_client() -> anyhow::Result<crate::marked_http::Client> {
     crate::marked_http::Client::new()
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct SubscriptionUserinfo {
-    pub(crate) upload: Option<u64>,
-    pub(crate) download: Option<u64>,
-    pub(crate) total: Option<u64>,
-    pub(crate) expire: Option<u64>,
+/// Usage a provider reports in its `subscription-userinfo` response header.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SubscriptionUserinfo {
+    /// Uploaded bytes.
+    pub upload: Option<u64>,
+    /// Downloaded bytes.
+    pub download: Option<u64>,
+    /// Byte quota; a reported zero means none.
+    pub total: Option<u64>,
+    /// Expiry as Unix seconds; a reported zero means none.
+    pub expire: Option<u64>,
 }
 
 fn parse_subscription_userinfo(header: &str) -> SubscriptionUserinfo {
@@ -563,7 +566,7 @@ impl SubscriptionManager {
         Ok(nodes)
     }
 
-    async fn fetch_content(
+    pub(crate) async fn fetch_content(
         &self,
         sub: &Subscription,
         diagnostics: &mut Vec<DetailedDiagnostic>,
@@ -597,7 +600,7 @@ impl SubscriptionManager {
         Ok((nodes, content, userinfo))
     }
 
-    async fn persist_content(
+    pub(crate) async fn persist_content(
         sub: &Subscription,
         store: Option<&SubscriptionStore>,
         content: String,
