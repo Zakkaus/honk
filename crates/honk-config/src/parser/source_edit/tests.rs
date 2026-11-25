@@ -811,3 +811,40 @@ fn routing_positions_follow_parser_ordinals_across_includes() {
     assert_eq!(fallback.source_index, 1);
     assert_eq!(fallback.expression, "fallback: block");
 }
+
+#[test]
+fn global_settings_locate_the_declaration_admission_reads() {
+    let main = "global {\n    log_level: info\n    tproxy_port: 12345\n}\n\nglobal {\n  # override\n  tproxy_port: 9999   # trailing\n    lan_interface: eth0\n    not_a_key: 1\n}\n";
+    let child = "global {\nnfqueue_enable: false\n}\n";
+    let loaded = parse_dae_sources(
+        &[
+            (PathBuf::from("main.dae"), Arc::from(main)),
+            (PathBuf::from("child.dae"), Arc::from(child)),
+        ],
+        SourceLimits::default(),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(loaded.config.global.tproxy_port, 9999);
+    assert!(!loaded.config.global.nfqueue_enable);
+    let locations = global_setting_locations(&loaded.sources).unwrap();
+    let located = |key: &str| {
+        let location = &locations[key];
+        let content = &loaded.sources[location.source_index].content;
+        (
+            location.source_index,
+            location.line,
+            location.column,
+            &content[location.bytes.clone()],
+        )
+    };
+    assert_eq!(located("log_level"), (0, 2, 5, "log_level: info"));
+    assert_eq!(located("tproxy_port"), (0, 8, 3, "tproxy_port: 9999"));
+    assert_eq!(located("lan_interface"), (0, 9, 5, "lan_interface: eth0"));
+    assert_eq!(
+        located("nfqueue_enable"),
+        (1, 2, 1, "nfqueue_enable: false")
+    );
+    assert_eq!(locations.len(), 4);
+    assert!(global_setting_locations(&[]).unwrap().is_empty());
+}
