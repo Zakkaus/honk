@@ -70,6 +70,8 @@ flowchart LR
 
 过期缓存刷新与偏好地址族的附加查询保留发起者的 `DnsRequestMeta`。为流执行的 DNS 解析按客户端来源进行，但没有被拦截的目的地址；策略选择 `asis` 时会 fail-closed。
 
+自行截获 DNS 的嵌入式应用调用 `DnsService::resolve_outcome_with_context`，传入查询字节、对应的 `DnsRequestMeta` 与 ingress profile。该调用与 `DnsController` 的 admission 一样，取得当前 generation 的 lease 和查询 permit，执行同一条 strict 解析路径，并返回带类型的 `DnsOutcome`。两者在返回前释放，因此调用方持有 outcome 不会推迟 retirement。framing 与应答由调用方负责；该调用不投影任何域名路由。
+
 独立 listener 具有以下生命周期与 admission 不变量：
 
 - 启动 supervisor 前，同步绑定全部所选 transport。任一绑定失败都会关闭已绑定的部分，并令启动失败。

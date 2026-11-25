@@ -80,6 +80,8 @@ hosts、快取、請求和回應策略，以及投影。
 
 過期快取重新整理與偏好位址族的附加查詢保留發起者的 `DnsRequestMeta`。為流執行的 DNS 解析依用戶端來源處理，但沒有被攔截的目的位址；策略選擇 `asis` 時會 fail-closed。
 
+自行擷取 DNS 的嵌入式應用程式呼叫 `DnsService::resolve_outcome_with_context`，傳入查詢位元組、對應的 `DnsRequestMeta` 與 ingress profile。該呼叫與 `DnsController` 的 admission 一樣，取得目前 generation 的 lease 和查詢 permit，執行同一條 strict 解析路徑，並傳回帶型別的 `DnsOutcome`。兩者在傳回前釋放，因此呼叫方持有 outcome 不會延後 retirement。framing 與應答由呼叫方負責；該呼叫不投影任何網域路由。
+
 獨立 listener 具有以下生命週期與 admission 不變量：
 
 - 啟動 supervisor 前，同步繫結全部所選 transport。任一繫結失敗都會關閉已繫結的部分，並令啟動失敗。

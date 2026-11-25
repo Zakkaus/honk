@@ -1,3 +1,4 @@
+mod captured;
 mod lifecycle;
 mod release;
 
@@ -441,7 +442,7 @@ async fn retirement_cancels_every_foreground_entry_path() {
         let provider = Arc::new(DnsServiceProvider::new(Arc::clone(&old)));
         let service = DnsService::with_provider(Arc::clone(&provider));
         let mut queries = tokio::task::JoinSet::new();
-        for caller in 0..4 {
+        for caller in 0..5 {
             let service = service.clone();
             queries.spawn(async move {
                 let query = crate::dns::forwarder::build_dns_query("blocked.example", 1);
@@ -463,6 +464,14 @@ async fn retirement_cancels_every_foreground_entry_path() {
                         .await
                         .map(|_| ()),
                     2 => service.resolve_name("blocked.example").await.map(|_| ()),
+                    3 => service
+                        .resolve_outcome_with_context(
+                            &query,
+                            DnsRequestMeta::EMPTY,
+                            IngressProfile::Tcp,
+                        )
+                        .await
+                        .map(|_| ()),
                     _ => service
                         .resolve_name_for_source(
                             "blocked.example",
@@ -474,7 +483,7 @@ async fn retirement_cancels_every_foreground_entry_path() {
             });
         }
         tokio::time::timeout(Duration::from_secs(1), async {
-            while old.lease_count() != 4 {
+            while old.lease_count() != 5 {
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
         })
@@ -482,7 +491,7 @@ async fn retirement_cancels_every_foreground_entry_path() {
         .expect("all foreground callers acquire their old-generation lease");
         provider.publish(prefetch_runtime(Arc::new(BlockingTransport::default())));
         tokio::task::yield_now().await;
-        assert_eq!(old.lease_count(), 4);
+        assert_eq!(old.lease_count(), 5);
         match trigger {
             Trigger::Deadline => tokio::time::advance(super::RETIREMENT_DEADLINE).await,
             Trigger::Capacity => {
