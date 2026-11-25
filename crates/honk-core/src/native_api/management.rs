@@ -276,7 +276,7 @@ pub(super) async fn mutate(
                     return rejected("Provider URL must be 1 to 4096 characters", "url");
                 }
                 if !(input.url.starts_with("http://") || input.url.starts_with("https://"))
-                    || reqwest::Url::parse(&input.url)
+                    || url::Url::parse(&input.url)
                         .ok()
                         .is_none_or(|url| url.host_str().is_none())
                 {

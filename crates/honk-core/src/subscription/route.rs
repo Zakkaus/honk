@@ -167,7 +167,7 @@ impl Hop<'_> {
     pub(super) async fn get(
         &mut self,
         subscription: &Subscription,
-        url: &reqwest::Url,
+        url: &url::Url,
         headers: &http::HeaderMap,
         deadline: Instant,
     ) -> anyhow::Result<(Reply, Option<Via>)> {

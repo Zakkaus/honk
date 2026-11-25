@@ -51,9 +51,9 @@ clap = { workspace = true, optional = true }
 toml.workspace = true
 
 # Networking
-reqwest.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
+url.workspace = true
 tokio-rustls.workspace = true
 rustls-platform-verifier.workspace = true
 socket2.workspace = true
@@ -154,6 +154,7 @@ tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 tokio-tungstenite.workspace = true
 rcgen.workspace = true
+reqwest.workspace = true
 boring.workspace = true
 tokio-boring.workspace = true
 rustls-pemfile.workspace = true

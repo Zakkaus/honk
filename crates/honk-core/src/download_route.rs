@@ -447,7 +447,7 @@ impl Tunnel<'_> {
 
 /// One GET a download makes.
 pub(crate) struct Request<'a> {
-    pub(crate) url: &'a reqwest::Url,
+    pub(crate) url: &'a url::Url,
     pub(crate) headers: &'a http::HeaderMap,
     /// Which answers' bodies are read, as in [`marked_http::read`].
     pub(crate) wants_body: fn(http::StatusCode, &http::HeaderMap) -> bool,
