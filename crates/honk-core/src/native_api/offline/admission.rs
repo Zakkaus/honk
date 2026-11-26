@@ -42,14 +42,20 @@ impl CapturedConfig {
         let hosts = hosts
             .parse()
             .map_err(|cause| dependency_error(source, "dns", cause))?;
-        let router = Router::from_config_with_geo_sources(&config.routing, &geo).map_err(|_| {
-            error(
-                source,
-                "routing",
-                "invalid-routing-config",
-                "routing configuration cannot be compiled",
-            )
-        })?;
+        let router =
+            Router::from_config_with_geo_sources(&config.routing, &geo).map_err(|cause| {
+                let Ok(mut rule) = cause.downcast::<DetailedConfigError>() else {
+                    return error(
+                        source,
+                        "routing",
+                        "invalid-routing-config",
+                        "routing configuration cannot be compiled",
+                    );
+                };
+                rule.diagnostic.source = source.clone();
+                honk_config::parser::locate_setting(&sources, &mut rule.diagnostic);
+                rule
+            })?;
         ControlPlane::compile_routing_plan(&config, &router).map_err(|_| {
             error(
                 source,

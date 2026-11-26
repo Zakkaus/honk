@@ -76,6 +76,28 @@ async fn full_validation_places_a_semantic_refusal_at_its_setting() {
 }
 
 #[tokio::test]
+async fn full_validation_places_a_rule_that_does_not_compile() {
+    let fixture = Fixture::new(Access::Admin, false).await;
+    let candidate = format!(
+        "{}routing {{\n  domain(regex: '(') -> direct\n}}\n",
+        fixture.originals["main.dae"]
+    );
+    let offset = candidate.rfind("domain(regex: '(')").unwrap();
+    let line = candidate[..offset].matches('\n').count() + 1;
+    let full = ok(fixture.validate("full", &candidate).send().await.unwrap()).await;
+    assert_eq!(full["valid"], false, "{full}");
+    let refusal = full["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["level"] == "error")
+        .unwrap();
+    assert_eq!(refusal["code"], "invalid-routing-rule", "{refusal}");
+    assert_eq!(refusal["line"], line, "{refusal}");
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn full_validation_applies_include_overrides_before_semantic_admission() {
     let fixture = Fixture::new_custom(Access::Admin, false, |_, sources| {
         sources.insert("editable.dae", "global { nfqueue_enable: false }\n".into());
