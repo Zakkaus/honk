@@ -1,5 +1,6 @@
 //! Daemon-owned Linux TUN capture into the existing scoped packet Endpoint executor.
 
+mod device;
 mod setup;
 #[cfg(feature = "ebpf")]
 mod source;
@@ -10,13 +11,13 @@ use crate::control::{
     packet_endpoint::{PacketEndpointOwner, PacketEndpoints},
 };
 use anyhow::{Context as _, ensure};
+pub(crate) use device::TunDevice;
 use honk_config::{Config, datapath::Backend};
 use honk_datapath::{ScopeId, buffer::TxClass};
 use honk_netstack::{
     Csum, GsoKind, GsoRx, MemoryBudget, MemoryReservation, RxMeta, Transmit, TxCaps, TxCsum, wire,
 };
 use honk_xsk::topology::Topology;
-pub(crate) use setup::TunDevice;
 use setup::TunSetup;
 use std::{
     future::poll_fn,
