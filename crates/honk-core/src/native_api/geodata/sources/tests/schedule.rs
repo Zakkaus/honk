@@ -1,4 +1,7 @@
 use super::*;
+use std::time::Duration;
+
+use crate::geodata_update::{MAX_JITTER_SECS, STARTUP_DELAY, due};
 use crate::native_api::tests::run_local_schedule_test;
 
 const GAP_CRON: &str = "30 2 8-14 3 */7";
@@ -173,8 +176,8 @@ fn unavailable_runtime_schedule_preserves_retries_and_reports_one_warning_per_ep
     ));
     {
         let mut status = sources.status.lock();
-        status.last_checked_at = Some(checked);
-        status.last_error = Some("download_failed".into());
+        status.history.last_checked_at = Some(checked);
+        status.history.last_error = Some("download_failed".into());
     }
     sources.reschedule(now);
     sources.reschedule(now);
@@ -182,7 +185,7 @@ fn unavailable_runtime_schedule_preserves_retries_and_reports_one_warning_per_ep
     assert_eq!(warnings.load(Ordering::Relaxed), 1);
     {
         let mut status = sources.status.lock();
-        status.failures = 3;
+        status.history.failures = 3;
     }
     sources.reschedule(now);
     let next = sources.next_check_at().unwrap();
@@ -192,9 +195,12 @@ fn unavailable_runtime_schedule_preserves_retries_and_reports_one_warning_per_ep
     {
         let status = sources.status.lock();
         assert!(status.schedule_unavailable);
-        assert_eq!(status.failures, 3);
-        assert_eq!(status.last_checked_at, Some(checked));
-        assert_eq!(status.last_error.as_deref(), Some("download_failed"));
+        assert_eq!(status.history.failures, 3);
+        assert_eq!(status.history.last_checked_at, Some(checked));
+        assert_eq!(
+            status.history.last_error.as_deref(),
+            Some("download_failed")
+        );
     }
     assert_eq!(warnings.load(Ordering::Relaxed), 1);
     let disabled = sources
@@ -212,7 +218,7 @@ fn unavailable_runtime_schedule_preserves_retries_and_reports_one_warning_per_ep
         .unwrap();
     assert!(!sources.status.lock().schedule_unavailable);
     assert_eq!(
-        sources.status.lock().last_error.as_deref(),
+        sources.status.lock().history.last_error.as_deref(),
         Some("download_failed")
     );
 }

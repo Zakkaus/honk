@@ -1,4 +1,9 @@
 use super::*;
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+
+use crate::geodata_update::{STARTUP_DELAY, due};
 
 mod schedule;
 
@@ -273,22 +278,31 @@ fn the_update_status_survives_a_restart() {
     let (checked, updated) = {
         let status = sources.status.lock();
         (
-            status.last_checked_at.unwrap(),
-            status.last_updated_at.unwrap(),
+            status.history.last_checked_at.unwrap(),
+            status.history.last_updated_at.unwrap(),
         )
     };
     drop(sources);
     let reopened = open(db(directory.path()), &settings("")).unwrap();
     let status = reopened.status.lock();
-    assert_eq!(status.last_checked_at.map(unix), Some(unix(checked)));
-    assert_eq!(status.last_updated_at.map(unix), Some(unix(updated)));
-    assert_eq!(status.last_error.as_deref(), Some("download_failed"));
-    assert_eq!(status.failures, 1);
+    assert_eq!(
+        status.history.last_checked_at.map(unix),
+        Some(unix(checked))
+    );
+    assert_eq!(
+        status.history.last_updated_at.map(unix),
+        Some(unix(updated))
+    );
+    assert_eq!(
+        status.history.last_error.as_deref(),
+        Some("download_failed")
+    );
+    assert_eq!(status.history.failures, 1);
     // One failure: the backoff of an hour, not the interval, still applies.
     let wait = status
         .next_check_at
         .unwrap()
-        .duration_since(status.last_checked_at.unwrap())
+        .duration_since(status.history.last_checked_at.unwrap())
         .unwrap();
     assert!(wait >= HOUR && wait <= 2 * HOUR, "{wait:?}");
 }
@@ -329,7 +343,7 @@ fn a_check_recorded_in_the_future_is_due_after_every_restart() {
     }
     let sources = open(db(directory.path()), &settings("")).unwrap();
     sources.record(Ok((Vec::new(), false)));
-    let checked = sources.status.lock().last_checked_at.unwrap();
+    let checked = sources.status.lock().history.last_checked_at.unwrap();
     drop(sources);
     let reopened = open(db(directory.path()), &settings("")).unwrap();
     let next = reopened.next_check_at().expect("a check is scheduled");
@@ -350,7 +364,10 @@ fn an_unreadable_update_status_is_ignored_and_replaced() {
             next <= before + STARTUP_DELAY + 2 * HOUR,
             "{value}: {next:?}"
         );
-        assert!(sources.status.lock().last_checked_at.is_none(), "{value}");
+        assert!(
+            sources.status.lock().history.last_checked_at.is_none(),
+            "{value}"
+        );
         sources.record(Ok((Vec::new(), false)));
         let record = stored_status(directory.path()).expect("the status is stored");
         assert!(record.contains("last_checked_at"), "{value}: {record}");
@@ -461,7 +478,7 @@ fn each_scheduled_wait_adds_at_most_an_hour() {
         ))
         .unwrap();
     let within = |base: Duration| {
-        let checked = sources.status.lock().last_checked_at.unwrap();
+        let checked = sources.status.lock().history.last_checked_at.unwrap();
         let wait = sources
             .next_check_at()
             .unwrap()

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use axum::extract::Request;
 use axum::http::{StatusCode, Uri};
@@ -8,7 +8,6 @@ use honk_config::experimental::{NativeApiConfig, parse_geodata_url};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::watch;
-use tokio::time::Instant;
 
 use super::operations::{OperationKind, Reservation};
 use super::{ApiError, ErrorCode, NativeState, config, parse_query, timestamp, types::RequestId};
@@ -22,18 +21,8 @@ mod tests;
 
 pub(crate) use sources::{Error as SourcesError, Fetched, Patch as SourcesPatch, Route, Sources};
 
-/// How long a file download may wait for any progress: the setup up to the
-/// answer's headers, and then each wait for more of the body.
-pub(crate) const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-/// How long a file download may take in all, so a trickle cannot hold the
-/// update forever.
-pub(crate) const DOWNLOAD_LIMIT: Duration = Duration::from_secs(600);
-/// The checksum request gets its own deadline instead of whatever a slow file
-/// download left. It covers the whole request: a fresh route decision,
-/// resolution, the tunnel, TLS and a body of at most `MAX_CHECKSUM_BYTES`.
-const CHECKSUM_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) use crate::geodata_update::Failure;
 const UPDATE_PATH: &str = "/api/v1/geodata/update";
-const MAX_CHECKSUM_BYTES: usize = 1024;
 
 #[derive(Serialize)]
 pub(crate) struct GeoData {
@@ -325,10 +314,10 @@ pub(super) async fn capability(state: &NativeState) -> Value {
                 "checksum": "sha256sum"});
             if state.geodata.as_ref().is_some() {
                 value["configurable_sources"] = json!(true);
-                value["max_urls"] = json!(sources::MAX_URLS);
-                value["interval_hours"] = json!({"min": sources::INTERVAL_HOURS.start(),
-                    "max": sources::INTERVAL_HOURS.end(),
-                    "default": sources::NOMINAL_INTERVAL_HOURS});
+                value["max_urls"] = json!(crate::geodata_update::MAX_URLS);
+                value["interval_hours"] = json!({"min": crate::geodata_update::INTERVAL_HOURS.start(),
+                    "max": crate::geodata_update::INTERVAL_HOURS.end(),
+                    "default": crate::geodata_update::NOMINAL_INTERVAL_HOURS});
                 // The file is read at startup only; patches live in the state db.
                 value["lifecycle"] = json!({"file_values": "start", "overrides_persist": true});
             }
@@ -493,29 +482,9 @@ fn unsupported() -> ApiError {
     )
 }
 
-/// Why a URL failed: the stage code, and the status of a rejected HTTP reply.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Failure {
-    pub(crate) code: &'static str,
-    pub(crate) status: Option<u16>,
-}
-
-impl From<&'static str> for Failure {
-    fn from(code: &'static str) -> Self {
-        Self { code, status: None }
-    }
-}
-
-/// Downloads `kind` from the first URL that yields a usable file. A URL is
-/// skipped on any download failure, and when fetching the sha256 published
-/// beside it fails with anything but a 404 or the digest does not match; the
-/// error of the last URL tried is returned. The file fails when it makes no
-/// progress for `IDLE_TIMEOUT` or takes longer than `DOWNLOAD_LIMIT`, and its
-/// checksum has a separate `CHECKSUM_TIMEOUT` that starts after the file
-/// arrives. Every request takes the route in
-/// `egress`; one it cannot carry fails like a connection and never goes
-/// direct instead. Without `verify_checksum`
-/// no checksum is requested and every downloaded file is accepted unverified.
+/// Downloads `kind` with [`crate::geodata_update::fetch`]. Every request
+/// takes the route in `egress`; one it cannot carry fails like a connection
+/// and never goes direct instead.
 pub(crate) async fn fetch(
     kind: &'static str,
     urls: &[String],
@@ -523,74 +492,35 @@ pub(crate) async fn fetch(
     max_bytes: usize,
     verify_checksum: bool,
 ) -> Result<(Arc<[u8]>, Fetched), Failure> {
-    let mut last = Failure::from("invalid_source");
-    for url in urls {
-        let started = Instant::now();
+    let (bytes, fetched) =
+        crate::geodata_update::fetch(urls, egress, max_bytes, verify_checksum).await?;
+    Ok((
+        bytes,
+        Fetched {
+            kind,
+            url: fetched.url,
+            sha256: fetched.sha256,
+            verified: fetched.verified,
+            route: egress.route.clone(),
+            group: fetched.via,
+        },
+    ))
+}
+
+impl crate::geodata_update::Transport for Egress<'_> {
+    /// The group the request went through, including one the rules chose.
+    type Via = Option<String>;
+
+    async fn get(
+        &self,
+        get: crate::geodata_update::Get<'_>,
+    ) -> Result<(Arc<[u8]>, Option<String>), Failure> {
         let deadline = Deadline {
-            headers: started + IDLE_TIMEOUT,
-            idle: Some((IDLE_TIMEOUT, started + DOWNLOAD_LIMIT)),
+            headers: get.headers_by,
+            idle: get.idle,
         };
-        let (bytes, group) = match download(url, egress, deadline, max_bytes).await {
-            Ok(downloaded) => downloaded,
-            Err(error) => {
-                last = error;
-                continue;
-            }
-        };
-        let sha256 = crate::configuration::digest(&bytes);
-        let verified = if verify_checksum {
-            let Some(mut checksum) = parse_geodata_url(url) else {
-                last = "invalid_source".into();
-                continue;
-            };
-            checksum.set_path(&format!("{}.sha256sum", checksum.path()));
-            let published = download(
-                checksum.as_str(),
-                egress,
-                (Instant::now() + CHECKSUM_TIMEOUT).into(),
-                MAX_CHECKSUM_BYTES,
-            )
-            .await;
-            match published {
-                Ok((published, _)) => {
-                    let matches = std::str::from_utf8(&published)
-                        .ok()
-                        .and_then(|text| text.split_whitespace().next())
-                        .is_some_and(|expected| expected.eq_ignore_ascii_case(&sha256));
-                    if !matches {
-                        last = "checksum_mismatch".into();
-                        continue;
-                    }
-                    true
-                }
-                Err(Failure {
-                    code: "http_not_found",
-                    ..
-                }) => false,
-                Err(error) => {
-                    last = Failure {
-                        code: "checksum_unavailable",
-                        status: error.status,
-                    };
-                    continue;
-                }
-            }
-        } else {
-            false
-        };
-        return Ok((
-            bytes,
-            Fetched {
-                kind,
-                url: url.clone(),
-                sha256,
-                verified,
-                route: egress.route.clone(),
-                group,
-            },
-        ));
+        download(get.url, self, deadline, get.max_bytes).await
     }
-    Err(last)
 }
 
 const DETOUR_SETTING: &str = "geodata.download";

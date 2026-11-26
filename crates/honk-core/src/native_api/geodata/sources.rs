@@ -2,9 +2,8 @@
 //! schedule, and the outcome of the last update attempt.
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
-use chrono::{DateTime, TimeZone, Utc};
 use honk_config::assets::GeodataDefaults;
 use honk_config::cron::Cron;
 use honk_config::experimental::{MAX_GEODATA_URL_BYTES, NativeApiConfig, parse_geodata_url};
@@ -13,59 +12,15 @@ use rusqlite::{OptionalExtension as _, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::geodata_update::{
+    AutoUpdate, DEFAULT_URLS, FIRST_BACKOFF, History, INTERVAL_HOURS, KINDS, MAX_URLS,
+    NOMINAL_INTERVAL_HOURS, Schedule, jitter, validate_schedule,
+};
 use crate::native_api::ApiError;
 use crate::state::StateDb;
 
-pub(crate) const KINDS: [&str; 2] = ["geosite", "geoip"];
-pub(super) const MAX_URLS: usize = 4;
-pub(super) const INTERVAL_HOURS: std::ops::RangeInclusive<u64> = 6..=168;
-/// What `interval_hours` reads under a cron schedule, so a client that knows
-/// only intervals still shows a day.
-pub(super) const NOMINAL_INTERVAL_HOURS: u64 = 24;
-const DEFAULT_CRON: &str = "0 3 * * *";
-const MAX_JITTER_SECS: u64 = 3600;
-const FIRST_BACKOFF: Duration = Duration::from_secs(3600);
-/// The shortest wait before an automatic check, so a startup never downloads
-/// at once, however long ago the last check was.
-const STARTUP_DELAY: Duration = Duration::from_secs(300);
-/// MetaCubeX full, raw first; jsDelivr serves the same bytes where GitHub is slow.
-const DEFAULT_URLS: [[&str; 2]; 2] = [
-    [
-        "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/geosite.dat",
-        "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
-    ],
-    [
-        "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/geoip.dat",
-        "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
-    ],
-];
-
 fn index(kind: &str) -> Option<usize> {
     KINDS.iter().position(|known| *known == kind)
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AutoUpdate {
-    pub(crate) enabled: bool,
-    pub(crate) schedule: Schedule,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Schedule {
-    /// At each time the expression names in the system's local time.
-    Cron(Cron),
-    /// Every so many hours after the last check, as records written before
-    /// cron schedules existed keep doing.
-    Interval(u64),
-}
-
-impl Default for AutoUpdate {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            schedule: Schedule::Cron(Cron::parse(DEFAULT_CRON).expect("the default cron parses")),
-        }
-    }
 }
 
 impl AutoUpdate {
@@ -86,19 +41,6 @@ pub(crate) enum Error {
         "geodata cron has no future occurrence in the system time zone; change or disable the schedule"
     )]
     ScheduleUnavailable,
-}
-
-fn validate_schedule<Tz: TimeZone>(
-    schedule: &Schedule,
-    now: SystemTime,
-    zone: &Tz,
-) -> Result<(), Error> {
-    if let Schedule::Cron(cron) = schedule
-        && cron.next_after(DateTime::<Utc>::from(now), zone).is_none()
-    {
-        return Err(Error::ScheduleUnavailable);
-    }
-    Ok(())
 }
 
 /// How geodata requests leave the device.
@@ -431,55 +373,10 @@ pub(crate) struct Fetched {
 
 #[derive(Default)]
 struct Status {
-    last_checked_at: Option<SystemTime>,
-    last_updated_at: Option<SystemTime>,
+    history: History,
     next_check_at: Option<SystemTime>,
-    last_error: Option<String>,
-    failures: u32,
     schedule_unavailable: bool,
     fetched: [Option<Fetched>; 2],
-}
-
-impl Status {
-    fn stored(&self) -> StoredStatus {
-        StoredStatus {
-            last_checked_at: self.last_checked_at.and_then(unix_secs),
-            last_updated_at: self.last_updated_at.and_then(unix_secs),
-            last_error: self.last_error.clone(),
-            failures: self.failures,
-        }
-    }
-}
-
-/// The part of `Status` kept in the state db's `geodata_status` row, so the
-/// schedule and the last outcome survive a restart. Times are whole seconds
-/// since the Unix epoch.
-#[derive(Default, Serialize, Deserialize)]
-#[serde(default)]
-struct StoredStatus {
-    last_checked_at: Option<u64>,
-    last_updated_at: Option<u64>,
-    last_error: Option<String>,
-    failures: u32,
-}
-
-impl From<StoredStatus> for Status {
-    fn from(stored: StoredStatus) -> Self {
-        let time = |secs: u64| UNIX_EPOCH.checked_add(Duration::from_secs(secs));
-        Self {
-            last_checked_at: stored.last_checked_at.and_then(time),
-            last_updated_at: stored.last_updated_at.and_then(time),
-            last_error: stored.last_error,
-            failures: stored.failures,
-            ..Self::default()
-        }
-    }
-}
-
-fn unix_secs(time: SystemTime) -> Option<u64> {
-    time.duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|elapsed| elapsed.as_secs())
 }
 
 /// The stored status, or an empty one when the row is missing; a row that
@@ -495,7 +392,7 @@ fn read_status(db: &StateDb) -> Status {
         .optional();
     let stored = match record {
         Ok(None) => return Status::default(),
-        Ok(Some(record)) => serde_json::from_str::<StoredStatus>(&record).ok(),
+        Ok(Some(record)) => History::from_json(&record),
         Err(error) => {
             crate::state::log_sql(&error);
             None
@@ -508,7 +405,10 @@ fn read_status(db: &StateDb) -> Status {
             );
             Status::default()
         },
-        Status::from,
+        |history| Status {
+            history,
+            ..Status::default()
+        },
     )
 }
 
@@ -636,7 +536,8 @@ impl Sources {
         }
         let auto = effective(&next).auto_update;
         if file.cron.is_some() || auto.enabled {
-            validate_schedule(&auto.schedule, now, &chrono::Local)?;
+            validate_schedule(&auto.schedule, now, &chrono::Local)
+                .map_err(|_| Error::ScheduleUnavailable)?;
         }
         if next != *stored {
             self.write(&next)?;
@@ -694,7 +595,8 @@ impl Sources {
         };
         let auto = effective(&next).auto_update;
         if explicit_cron || auto.enabled {
-            validate_schedule(&auto.schedule, SystemTime::now(), &chrono::Local)?;
+            validate_schedule(&auto.schedule, SystemTime::now(), &chrono::Local)
+                .map_err(|_| Error::ScheduleUnavailable)?;
         }
         self.write(&next)?;
         let schedule_changed = next.auto_update != stored.auto_update;
@@ -735,24 +637,14 @@ impl Sources {
         let stored = self.stored.lock();
         let auto = effective(&stored).auto_update;
         let mut status = self.status.lock();
-        let (next, unavailable) = if auto.enabled {
-            due(
-                &auto.schedule,
-                status.last_checked_at,
-                status.failures,
-                now,
-                &chrono::Local,
-            )
-        } else {
-            (None, false)
-        };
+        let (next, unavailable) = status.history.next_check(&auto, now, &chrono::Local);
         if unavailable && !status.schedule_unavailable {
             tracing::warn!(
                 "geodata cron has no future local occurrence; change or disable the schedule; failed downloads retain their retry backoff"
             );
         }
         status.schedule_unavailable = unavailable;
-        status.next_check_at = next.map(|due| due + jitter());
+        status.next_check_at = next;
         drop(status);
         drop(stored);
         self.changed.notify_one();
@@ -765,26 +657,21 @@ impl Sources {
         let now = SystemTime::now();
         let stored = {
             let mut status = self.status.lock();
-            status.last_checked_at = Some(now);
-            match outcome {
-                Ok((fetched, replaced)) => {
-                    status.failures = 0;
-                    status.last_error = None;
-                    if replaced {
-                        status.last_updated_at = Some(now);
+            status.history.record(
+                now,
+                outcome
+                    .as_ref()
+                    .map(|(_, replaced)| *replaced)
+                    .map_err(Clone::clone),
+            );
+            if let Ok((fetched, _)) = outcome {
+                for fetched in fetched {
+                    if let Some(index) = index(fetched.kind) {
+                        status.fetched[index] = Some(fetched);
                     }
-                    for fetched in fetched {
-                        if let Some(index) = index(fetched.kind) {
-                            status.fetched[index] = Some(fetched);
-                        }
-                    }
-                }
-                Err(code) => {
-                    status.failures = status.failures.saturating_add(1);
-                    status.last_error = Some(code);
                 }
             }
-            status.stored()
+            status.history.to_json()
         };
         if let Err(error) = self.write_status(&stored) {
             crate::state::log_sql(&error);
@@ -793,12 +680,11 @@ impl Sources {
         self.reschedule(now);
     }
 
-    fn write_status(&self, status: &StoredStatus) -> rusqlite::Result<()> {
-        let record = serde_json::to_string(status).expect("stored status serializes");
+    fn write_status(&self, record: &str) -> rusqlite::Result<()> {
         self.db.strict().execute(
             "INSERT INTO geodata_status (id, record) VALUES (1, ?1)
              ON CONFLICT(id) DO UPDATE SET record = excluded.record",
-            [&record],
+            [record],
         )?;
         Ok(())
     }
@@ -825,10 +711,10 @@ impl Sources {
     pub(crate) fn status_json(&self, timestamp: impl Fn(SystemTime) -> String) -> Value {
         let status = self.status.lock();
         json!({
-            "last_checked_at": status.last_checked_at.map(&timestamp),
-            "last_updated_at": status.last_updated_at.map(&timestamp),
+            "last_checked_at": status.history.last_checked_at.map(&timestamp),
+            "last_updated_at": status.history.last_updated_at.map(&timestamp),
             "next_check_at": status.next_check_at.map(&timestamp),
-            "last_error": status.last_error.as_ref().map(|code| json!({
+            "last_error": status.history.last_error.as_ref().map(|code| json!({
                 "code": code,
                 "message": "Geodata update did not complete successfully",
                 "details": null,
@@ -866,46 +752,6 @@ fn effective(stored: &Stored) -> Effective {
             .map_or_else(Route::default, |stored| stored.route.clone()),
         verify_checksum: stored.verify_checksum.unwrap_or(true),
     }
-}
-
-/// The next check before jitter, and whether the cron has no future local
-/// occurrence. Counts from the persisted last check; failure backoff can come
-/// first or remain available without a cron occurrence. Unknown, future or
-/// overdue checks wait at least `STARTUP_DELAY` to avoid immediate downloads
-/// at every startup.
-fn due<Tz: TimeZone>(
-    schedule: &Schedule,
-    last_checked: Option<SystemTime>,
-    failures: u32,
-    now: SystemTime,
-    zone: &Tz,
-) -> (Option<SystemTime>, bool) {
-    let checked = last_checked.filter(|checked| *checked <= now);
-    let reference = checked.unwrap_or(now);
-    let scheduled = match schedule {
-        Schedule::Interval(hours) => Some(reference + Duration::from_secs(hours * 3600)),
-        Schedule::Cron(cron) => cron
-            .next_after(DateTime::<Utc>::from(reference), zone)
-            .map(SystemTime::from),
-    };
-    let unavailable = scheduled.is_none();
-    let next = match checked {
-        None => Some(now),
-        Some(checked) => {
-            let retry = (failures > 0)
-                .then(|| checked + FIRST_BACKOFF.saturating_mul(1 << (failures - 1).min(16)));
-            match (scheduled, retry) {
-                (Some(scheduled), Some(retry)) => Some(scheduled.min(retry)),
-                (next, None) | (None, next) => next,
-            }
-        }
-    };
-    (next.map(|due| due.max(now + STARTUP_DELAY)), unavailable)
-}
-
-/// Up to an hour, so many devices on the same schedule do not download at once.
-fn jitter() -> Duration {
-    Duration::from_secs(rand::random_range(0..=MAX_JITTER_SECS))
 }
 
 #[cfg(test)]

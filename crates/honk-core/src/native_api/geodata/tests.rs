@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use honk_config::Config;
 use honk_config::group::Group;
@@ -14,6 +15,7 @@ use tokio::sync::RwLock;
 
 use super::*;
 use crate::download_route::Outbounds;
+use crate::geodata_update::{CHECKSUM_TIMEOUT, DOWNLOAD_LIMIT, IDLE_TIMEOUT};
 use crate::routing::Router;
 
 /// Serves `body` at every path but a checksum, which is a 404; counts the

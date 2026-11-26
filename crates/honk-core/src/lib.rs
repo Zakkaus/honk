@@ -25,6 +25,7 @@ pub(crate) mod degradations;
 pub mod dns;
 pub(crate) mod download_route;
 pub mod ebpf;
+pub mod geodata_update;
 mod logging;
 mod marked_http;
 pub mod mode;
