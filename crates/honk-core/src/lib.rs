@@ -40,8 +40,6 @@ mod sysctl;
 #[cfg(target_os = "linux")]
 pub(crate) mod tun;
 #[cfg(target_os = "linux")]
-pub use tun::run_adopted_tun;
-#[cfg(target_os = "linux")]
 pub(crate) mod xdp;
 
 #[cfg(test)]

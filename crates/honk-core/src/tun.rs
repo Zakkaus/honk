@@ -874,7 +874,11 @@ pub(crate) async fn run(
 /// `admission` and `pname_support`, and install a socket protector
 /// ([`honk_outbound::util::install_socket_protector`]) first: it replaces the
 /// bypass mark on every egress socket. Returns once the plane stops.
-pub async fn run_adopted_tun(
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the embedder entry calls it once it lands")
+)]
+pub(crate) async fn run_adopted_tun(
     plane: ControlPlane,
     tun: OwnedFd,
     admission: Arc<AtomicBool>,
