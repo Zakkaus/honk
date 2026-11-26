@@ -164,9 +164,16 @@ impl Records {
                 }
             }
             if pending.iter().any(Option::is_some) {
-                more |= tun::poll_flush(io, cx, pending, &mut attempts, &mut bytes, now, || {
-                    owner.open()
-                })?;
+                more |= tun::poll_flush(
+                    tun::Framing::Vnet,
+                    io,
+                    cx,
+                    pending,
+                    &mut attempts,
+                    &mut bytes,
+                    now,
+                    || owner.open(),
+                )?;
             }
         }
         self.first ^= 1;

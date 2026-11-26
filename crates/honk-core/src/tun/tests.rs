@@ -407,6 +407,7 @@ async fn writable_readiness_retries_the_same_lease_without_new_input() {
             let mut attempts = 0;
             let mut bytes = 0;
             let runnable = poll_flush(
+                Framing::Vnet,
                 &writer,
                 cx,
                 &mut pending,
@@ -469,6 +470,7 @@ async fn closed_capture_does_not_write_a_pending_record() {
     let mut bytes = 0;
     assert!(
         poll_flush(
+            Framing::Vnet,
             &writer,
             &mut Context::from_waker(std::task::Waker::noop()),
             &mut pending,

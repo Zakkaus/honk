@@ -462,7 +462,7 @@ impl Runtime {
                 continue;
             }
             let io = self.io.as_ref().expect("live TUN FD");
-            more |= poll_flush_framed(
+            more |= poll_flush(
                 io.get_ref().framing(),
                 io,
                 cx,
@@ -691,28 +691,8 @@ fn write_packet(fd: RawFd, header: &[u8], packet: &[u8]) -> io::Result<usize> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn poll_flush<T: AsRawFd>(
-    io: &AsyncFd<T>,
-    cx: &mut Context<'_>,
-    pending: &mut [Option<OutputLease>; BATCH],
-    attempts: &mut usize,
-    bytes: &mut usize,
-    started: Instant,
-    open: impl Fn() -> bool,
-) -> io::Result<bool> {
-    poll_flush_framed(
-        Framing::Vnet,
-        io,
-        cx,
-        pending,
-        attempts,
-        bytes,
-        started,
-        open,
-    )
-}
-
-fn poll_flush_framed<T: AsRawFd>(
     framing: Framing,
     io: &AsyncFd<T>,
     cx: &mut Context<'_>,
@@ -1024,24 +1004,26 @@ async fn run_owned(
             );
         }
     };
-    // SAFETY: the subscribed watcher retains its descriptor unchanged while registered.
-    let topology = match topology.map(|topology| unsafe { AsyncFd::register(topology) }) {
+    let topology = match topology {
         None => None,
-        Some(Ok(topology)) => Some(topology),
-        Some(Err(error)) => {
-            let (topology, error) = error.into_parts();
-            drop(topology);
-            drop(io);
-            return (
-                Some(plane),
-                Err(finish_startup(
-                    setup,
-                    #[cfg(feature = "ebpf")]
-                    source,
-                    error.into(),
-                )),
-            );
-        }
+        // SAFETY: the subscribed watcher retains its descriptor unchanged while registered.
+        Some(topology) => match unsafe { AsyncFd::register(topology) } {
+            Ok(topology) => Some(topology),
+            Err(error) => {
+                let (topology, error) = error.into_parts();
+                drop(topology);
+                drop(io);
+                return (
+                    Some(plane),
+                    Err(finish_startup(
+                        setup,
+                        #[cfg(feature = "ebpf")]
+                        source,
+                        error.into(),
+                    )),
+                );
+            }
+        },
     };
     let mut pairs = Vec::with_capacity(1 + usize::from(tun.host_facts));
     let prepared_scopes = (|| -> anyhow::Result<_> {
