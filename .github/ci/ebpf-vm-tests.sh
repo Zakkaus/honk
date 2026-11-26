@@ -126,6 +126,7 @@ HONK_XDP_CORE_TEST_BIN="$HONK_CORE_TEST_BIN" HONK_XDP_XSK_TEST_BIN="$HONK_XSK_TE
 # TUN uses the same fresh executable, independently of the eBPF Cargo feature.
 for tun_test in \
   tun::setup::tests::kernel_tun_exclusive_fd_and_containment_are_owned \
+  tun::tests::kernel_adopted_tun_carries_tcp_and_udp_through_protected_egress \
   control::packet_endpoint::tests::startup::tun_dns_bind_starts_with_prepared_addresses_and_marks_both_transports \
   control::dns_listener::tests::tun_prepared_listener_marks_tcp_udp_and_accepted_sockets \
   clash_api::sampler_tests::netns_tun_listener_marks_accepted_sockets \

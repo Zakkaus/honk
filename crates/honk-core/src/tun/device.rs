@@ -229,7 +229,7 @@ pub(super) fn verify_attachment(fd: &OwnedFd, name: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn interface_request(name: &str) -> io::Result<libc::ifreq> {
+pub(super) fn interface_request(name: &str) -> io::Result<libc::ifreq> {
     // SAFETY: an all-zero ifreq is the empty C value.
     let mut request: libc::ifreq = unsafe { std::mem::zeroed() };
     if name.is_empty() || name.len() >= request.ifr_name.len() || name.bytes().any(|byte| byte == 0)

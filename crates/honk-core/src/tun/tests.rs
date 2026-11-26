@@ -1048,3 +1048,221 @@ async fn plain_records_are_bare_ip_packets_without_offload() {
     drop(scope);
     assert_eq!(budget.used(), 0);
 }
+
+/// What an Android `VpnService` hands over: an already configured TUN that
+/// carries plain IP packets. honk's direct egress is protected by the hook,
+/// which marks it so the peer's local address is reached directly; every other
+/// socket reaches that address through the TUN.
+#[test]
+#[ignore = "requires the disposable kernel VM gate"]
+fn kernel_adopted_tun_carries_tcp_and_udp_through_protected_egress() {
+    let expected = std::env::var("HONK_CI_EXPECTED_KERNEL").unwrap_or_default();
+    assert!(std::env::var_os("HONK_CI_VM_LANE").is_some() && !expected.is_empty());
+    assert_eq!(
+        std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .unwrap()
+            .trim(),
+        expected
+    );
+    std::thread::spawn(adopted_tun_in_private_namespace)
+        .join()
+        .unwrap();
+}
+
+fn adopted_tun_in_private_namespace() {
+    use std::io::{Read as _, Write as _};
+    use std::os::fd::{AsRawFd as _, OwnedFd};
+    use std::sync::atomic::AtomicUsize;
+
+    const MARK: u32 = 0x77;
+    let ip = |args: &str| {
+        let status = std::process::Command::new("ip")
+            .args(args.split_ascii_whitespace())
+            .status()
+            .unwrap();
+        assert!(status.success(), "ip {args}: {status}");
+    };
+    nix::sched::unshare(nix::sched::CloneFlags::CLONE_NEWNET).unwrap();
+    std::fs::write("/proc/sys/net/ipv4/conf/all/rp_filter", b"0").unwrap();
+    std::fs::write("/proc/sys/net/ipv6/conf/default/disable_ipv6", b"1").unwrap();
+    ip("link set lo up");
+    let tun: OwnedFd = nix::fcntl::open(
+        "/dev/net/tun",
+        nix::fcntl::OFlag::O_RDWR | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    )
+    .unwrap();
+    let mut request = super::device::interface_request("tun0").unwrap();
+    request.ifr_ifru.ifru_flags = (libc::IFF_TUN | libc::IFF_NO_PI) as libc::c_short;
+    // SAFETY: TUNSETIFF reads and updates only this live, initialized ifreq.
+    assert_eq!(
+        unsafe { libc::ioctl(tun.as_raw_fd(), libc::TUNSETIFF, &mut request) },
+        0
+    );
+    ip("addr add 10.7.0.1/24 dev tun0");
+    ip("link set tun0 up");
+    ip("addr add 203.0.113.1/32 dev lo");
+    ip(&format!("rule add pref 100 fwmark {MARK:#x} lookup local"));
+    ip("rule add pref 200 lookup 100");
+    ip("rule add pref 300 lookup local");
+    ip("rule del pref 0");
+    ip("route add 203.0.113.0/24 dev tun0 table 100");
+
+    let bind = |kind, port| {
+        let socket = socket2::Socket::new(socket2::Domain::IPV4, kind, None).unwrap();
+        socket.set_mark(MARK).unwrap();
+        socket
+            .bind(&std::net::SocketAddr::from(([203, 0, 113, 1], port)).into())
+            .unwrap();
+        socket
+    };
+    let listener = bind(socket2::Type::STREAM, 7000);
+    listener.listen(4).unwrap();
+    let listener: std::net::TcpListener = listener.into();
+    let (peer_tx, peer_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut stream, peer) = listener.accept().unwrap();
+        peer_tx.send(peer).unwrap();
+        let mut buffer = [0; 64];
+        let length = stream.read(&mut buffer).unwrap();
+        stream.write_all(&buffer[..length]).unwrap();
+    });
+    let health = bind(socket2::Type::STREAM, 7002);
+    health.listen(4).unwrap();
+    let udp: std::net::UdpSocket = bind(socket2::Type::DGRAM, 7001).into();
+    std::thread::spawn(move || {
+        let mut buffer = [0; 64];
+        let (length, peer) = udp.recv_from(&mut buffer).unwrap();
+        udp.send_to(&buffer[..length], peer).unwrap();
+    });
+
+    let protected = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&protected);
+    let _guard = honk_outbound::util::install_socket_protector(Arc::new(move |fd| {
+        socket2::SockRef::from(&fd).set_mark(MARK)?;
+        seen.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }))
+    .unwrap();
+    let mut config = honk_config::parser::parse_dae_config(
+        &ADOPTED_CONFIG.replace("198.18.0.1/32", "10.7.0.1/32"),
+    )
+    .unwrap();
+    config.ensure_builtin_nodes();
+    config.global.dial_mode = "ip".into();
+    config.global.tcp_check_url.clear();
+    config.global.udp_check_dns = vec!["127.0.0.1:9".into()];
+    config.global.preconnect_node_count = 0;
+    config.global.udp_warm_node_count = 0;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async move {
+        // Built as the daemon builds it: the userspace backend and a running
+        // datapath flags writer, which the capture needs before readiness.
+        config.validate_assembled().unwrap();
+        let resolver = crate::dns::DnsResolver::new(&config.dns).unwrap();
+        let forwarder = resolver.forwarder();
+        let admission = Arc::new(AtomicBool::new(false));
+        let pname = Arc::new(parking_lot::RwLock::new(
+            crate::ebpf::PnameSupport::Unavailable,
+        ));
+        let mut plane = ControlPlane::new(
+            config.clone(),
+            Box::new(crate::ebpf::userspace::UserspaceBackend::new(
+                Arc::clone(&admission),
+                Arc::clone(&pname),
+            )),
+            crate::routing::Router::from_config(&config.routing).unwrap(),
+            Arc::new(honk_outbound::proxy::ProxyRegistry::default_resolver().unwrap()),
+            resolver,
+            forwarder,
+        )
+        .unwrap();
+        plane.set_mode_state(Arc::new(parking_lot::RwLock::new(
+            crate::mode::ModeState::new("Rule", "direct"),
+        )));
+        plane.start_datapath_flags_coordinator().unwrap();
+        plane
+            .alive_set()
+            .set_direct_check_addr("203.0.113.1:7002".into());
+        let shutdown = plane.shutdown_intent();
+        let tracker = plane.connection_tracker();
+        tracker.enable();
+        let running = tokio::spawn(run_adopted_tun(plane, tun, Arc::clone(&admission), pname));
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while !admission.load(Ordering::Acquire) {
+                assert!(
+                    !running.is_finished(),
+                    "adopted TUN stopped before readiness"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("adopted TUN capture must become ready");
+
+        let mut stream = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::net::TcpStream::connect("203.0.113.1:7000"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(stream.local_addr().unwrap().ip().to_string(), "10.7.0.1");
+        tokio::io::AsyncWriteExt::write_all(&mut stream, b"through-tcp")
+            .await
+            .unwrap();
+        let mut echoed = [0; 11];
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::io::AsyncReadExt::read_exact(&mut stream, &mut echoed),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(&echoed, b"through-tcp");
+        // netstack terminated the client's connection and honk dialed its own:
+        // the server sees honk's egress socket, and the plane tracks the flow.
+        let client = stream.local_addr().unwrap();
+        assert_ne!(peer_rx.recv().unwrap(), client);
+        assert!(
+            tracker.snapshot().iter().any(|flow| flow.network == "tcp"
+                && flow.source == client.to_string()
+                && flow.destination == "203.0.113.1:7000"),
+            "{:?}",
+            tracker
+                .snapshot()
+                .iter()
+                .map(|flow| (&flow.network, &flow.source, &flow.destination))
+                .collect::<Vec<_>>()
+        );
+
+        let client = tokio::net::UdpSocket::bind("10.7.0.1:0").await.unwrap();
+        client
+            .send_to(b"through-udp", "203.0.113.1:7001")
+            .await
+            .unwrap();
+        let mut echoed = [0; 64];
+        let (length, peer) =
+            tokio::time::timeout(Duration::from_secs(10), client.recv_from(&mut echoed))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(&echoed[..length], b"through-udp");
+        assert_eq!(peer.to_string(), "203.0.113.1:7001");
+        assert!(
+            protected.load(Ordering::SeqCst) >= 2,
+            "both direct dials were protected"
+        );
+
+        shutdown.request();
+        let (_, result) = tokio::time::timeout(Duration::from_secs(20), running)
+            .await
+            .unwrap()
+            .unwrap();
+        result.unwrap();
+    });
+}
