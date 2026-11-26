@@ -127,6 +127,7 @@ impl DatabaseStartup {
             let config = crate::admit_operator_config(
                 loaded.config,
                 loaded.sources[0].source.clone(),
+                &loaded.sources,
                 diagnostics,
             )?;
             same_data_dir(&config, data_dir)?;

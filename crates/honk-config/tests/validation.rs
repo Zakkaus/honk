@@ -1010,3 +1010,9 @@ fn subscription_entry_route_is_validated_as_download_detour() {
 
 #[path = "validation/dns_syslog.rs"]
 mod dns_syslog;
+
+#[path = "validation/located.rs"]
+mod located;
+
+#[path = "validation/subscription_ids.rs"]
+mod subscription_ids;

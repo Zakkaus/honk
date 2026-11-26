@@ -656,7 +656,7 @@ warning 中有來源 ID 與依清單方式遮蔽的路徑。換成任何來源�
 
 省略的 `sources[].id` 依序預設為 `source-1`、`source-2`，以此類推。ID 是 1–128 位元組的 ASCII 字母、數字、`-`、`_` 或 `.`，在請求內唯一，只用於標註診斷。提供的路徑必須非空且唯一。ID 或路徑無效、`sources` 是空陣列時回傳 400；來源超過 32 個回傳 413；`mode` 未知回傳 422。
 
-原生診斷的格式是 `{level,source_id,line,column,span,code,message}`。`level` 為 `error`、`warning` 或 `info`。診斷無法精確定位到來源時，`line` 與依位元組計的 `column` 為 `null`，`span` 也是 `null`。
+原生診斷的格式是 `{level,source_id,line,column,span,code,message}`。`level` 為 `error`、`warning` 或 `info`。語意拒絕的 `line` 與依位元組計的 `column` 指向對應設定；設定本身未寫出時，指向最近一個寫出的條目、區塊或區段。診斷無法定位到來源時，`line` 與 `column` 為 `null`。`span` 一律為 `null`。
 
 `full` 模式下，第一份文件對應入口主檔案，額外的路徑必須落在入口根目錄之內。完整離線 admission 會用到 overlay、已放行的本地 include、唯讀訂閱快取，以及實際的本地 geodata/hosts/ECH 依賴。從未抓取過的訂閱依 warning 等級 admission，不會產生快取節點。
 

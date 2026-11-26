@@ -52,6 +52,30 @@ async fn validation_is_offline_readonly_and_distinguishes_syntax_from_full_admis
 }
 
 #[tokio::test]
+async fn full_validation_places_a_semantic_refusal_at_its_setting() {
+    let fixture = Fixture::new(Access::Admin, false).await;
+    let candidate = format!(
+        "{}routing {{\n  fallback: missing-target\n}}\n",
+        fixture.originals["main.dae"]
+    );
+    let offset = candidate.rfind("fallback: missing-target").unwrap();
+    let line = candidate[..offset].matches('\n').count() + 1;
+    let column = offset - candidate[..offset].rfind('\n').unwrap();
+    let full = ok(fixture.validate("full", &candidate).send().await.unwrap()).await;
+    assert_eq!(full["valid"], false, "{full}");
+    let refusal = full["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["level"] == "error")
+        .unwrap();
+    assert_eq!(refusal["code"], "unknown-routing-target", "{refusal}");
+    assert_eq!(refusal["line"], line, "{refusal}");
+    assert_eq!(refusal["column"], column, "{refusal}");
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn full_validation_applies_include_overrides_before_semantic_admission() {
     let fixture = Fixture::new_custom(Access::Admin, false, |_, sources| {
         sources.insert("editable.dae", "global { nfqueue_enable: false }\n".into());

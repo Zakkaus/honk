@@ -271,27 +271,33 @@ impl GeoSourceSet {
     /// a missing one would silently turn its rules into never-matching ones.
     #[cfg(any(feature = "native-api", feature = "embedded"))]
     fn contain(&self, requirements: &GeoRequirements) -> std::io::Result<()> {
-        let missing = || std::io::Error::from(std::io::ErrorKind::InvalidData);
+        let invalid = || std::io::Error::from(std::io::ErrorKind::InvalidData);
+        let missing = |kind: &str, code: &str| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{kind} category {code} missing"),
+            )
+        };
         if let Some(bytes) = self.geosite.bytes() {
             let index = parse_geosite_index_inner(bytes, &requirements.geosite_codes, true)
-                .map_err(|_| missing())?;
-            if requirements
+                .map_err(|_| invalid())?;
+            if let Some(code) = requirements
                 .codes("geosite")
                 .iter()
-                .any(|code| !index.contains_key(code))
+                .find(|code| !index.contains_key(*code))
             {
-                return Err(missing());
+                return Err(missing("geosite", code));
             }
         }
         if let Some(bytes) = self.geoip.bytes() {
             let index =
-                parse_geoip_index(bytes, &requirements.geoip_codes).map_err(|_| missing())?;
-            if requirements
-                .geoip_codes
+                parse_geoip_index(bytes, &requirements.geoip_codes).map_err(|_| invalid())?;
+            if let Some(code) = requirements
+                .codes("geoip")
                 .iter()
-                .any(|code| !index.contains_key(code))
+                .find(|code| !index.contains_key(*code))
             {
-                return Err(missing());
+                return Err(missing("geoip", code));
             }
         }
         Ok(())
@@ -1421,6 +1427,32 @@ mod scan_tests {
         let mut mismatched = asset.clone();
         mismatched.sha256 = "0".repeat(64);
         assert!(GeoSourceSet::from_assets(requirements, vec![(mismatched, bytes.into())]).is_err());
+    }
+
+    #[cfg(feature = "native-api")]
+    #[test]
+    fn a_missing_category_is_named_in_the_error() {
+        let geosite = geosite_dat(&[("present", vec![domain_msg(3, "a.example", &[])])]);
+        let geoip = geoip_dat(&[("present", vec![(&[192, 0, 2, 0][..], 24)])]);
+        let sources = GeoSourceSet::from_sources(
+            GeoSource::captured(geosite.into()),
+            GeoSource::captured(geoip.into()),
+        );
+        for (kind, message) in [
+            ("geosite", "geosite category absent missing"),
+            ("geoip", "geoip category absent missing"),
+        ] {
+            let mut requirements = GeoRequirements::default();
+            requirements.add_geosite("present");
+            requirements.add_geoip("present");
+            match kind {
+                "geosite" => requirements.add_geosite("absent"),
+                _ => requirements.add_geoip("absent"),
+            }
+            let error = sources.contain(&requirements).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert_eq!(error.to_string(), message);
+        }
     }
 
     #[cfg(feature = "native-api")]

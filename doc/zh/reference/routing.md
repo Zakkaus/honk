@@ -56,7 +56,7 @@ routing {
 
 `full:`、`suffix:` 和 `keyword:` 区分大小写。`full:` 匹配整个名称：`*` 匹配任意字符序列，`?` 匹配一个字符，其他字符都按字面处理。`suffix:` 按原始文本比较后缀，因此 `suffix: example.com` 也会匹配 `notexample.com`。要按标签边界匹配域名本身及其子域名，使用 `domain(regex: '(^|\.)example\.com$')`。geosite 条目不区分大小写，并按标签边界匹配后缀。
 
-`regex:` 使用 [Rust regex 语法](https://docs.rs/regex/latest/regex/#syntax)，不是 glob 语法。无效模式会使 honk 构建路由器时失败。带前缀的空值会保留：`domain(suffix: '')` 匹配所有域名，与 `domain()` 不同。
+`regex:` 使用 [Rust regex 语法](https://docs.rs/regex/latest/regex/#syntax)，不是 glob 语法。无效模式会使 honk 构建路由器时失败，错误以 `routing.rules[N]` 指出所在规则，`N` 从 1 开始计数。带前缀的空值会保留：`domain(suffix: '')` 匹配所有域名，与 `domain()` 不同。
 
 dae 也接受独立的 `geosite:`、`geoip:`、`domain:`、`suffix:`、`keyword:`、`full:` 和 `regex:` 谓词，可加前缀 `!` 并参与合取。`domain:example.com` 表示后缀匹配，不是 `full:` 匹配。
 

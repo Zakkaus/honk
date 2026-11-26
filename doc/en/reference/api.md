@@ -703,7 +703,7 @@ Validation takes JSON `{"mode":"syntax","sources":[{"id":"candidate","content":"
 
 An omitted `sources[].id` defaults to `source-1`, `source-2` and so on. IDs are 1–128 bytes of ASCII letters, digits, `-`, `_` or `.`, and unique within the request; they only label diagnostics. Supplied paths must be nonempty and unique. Invalid IDs or paths, or an empty `sources` array, return 400. More than 32 sources return 413, and an unknown `mode` returns 422.
 
-A native diagnostic is `{level,source_id,line,column,span,code,message}`. `level` is `error`, `warning` or `info`. `line` and byte `column` are null when the diagnostic cannot be placed exactly in a source. `span` is null.
+A native diagnostic is `{level,source_id,line,column,span,code,message}`. `level` is `error`, `warning` or `info`. A semantic refusal carries the `line` and byte `column` of its setting, or of the nearest written entry, block or section when the setting itself is not written. `line` and `column` are null when the diagnostic cannot be placed in a source. `span` is null.
 
 Full mode overlays the first document on the configured entry file, resolves additional `.dae` paths within its authorized entry root, and checks real local dependencies. They are cached subscriptions, geodata, hosts and ECH material. A never-fetched subscription is admitted with a warning and no cached nodes. If the same fetch already has active nodes, they can still be rebased.
 

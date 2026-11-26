@@ -158,9 +158,9 @@ pub const TARGET: &str = env!("HONK_TARGET");
 use clap::Parser;
 use honk_config::Config;
 use honk_config::diagnostic::{
-    DetailedDiagnostic, DiagnosticSources, SettingPath, finish_attempt, report_detailed_diagnostics,
+    DetailedDiagnostic, DiagnosticSources, finish_attempt, report_detailed_diagnostics,
 };
-use honk_config::error::{DetailedConfigError, ErrorCategory};
+use honk_config::error::DetailedConfigError;
 #[cfg(test)]
 use logging::resolved_log_file_path;
 use logging::{
@@ -768,28 +768,20 @@ fn load_operator_config(
         || DiagnosticSources::new(Some(path.into())).root(),
         |diagnostic| diagnostic.source.sources().root(),
     );
-    admit_operator_config(config, source, diagnostics)
+    admit_operator_config(config, source, &[], diagnostics)
 }
 
+/// `sources`, when the loader kept them, place a refusal at its setting.
 fn admit_operator_config(
     config: Config,
     source: honk_config::diagnostic::SourceRef,
+    sources: &[honk_config::parser::SourceSnapshot],
     diagnostics: &mut Vec<DetailedDiagnostic>,
 ) -> Result<Config, DetailedConfigError> {
     config.append_diagnostics(source.clone(), diagnostics);
-    let result = config.validate_detailed().and_then(|()| {
-        subscription::validate_subscription_ids(&config.subscriptions).map_err(|_| {
-            DetailedConfigError::new(
-                ErrorCategory::Validation,
-                "invalid-subscription-id",
-                source.clone(),
-                SettingPath::new("subscriptions").field("id"),
-                "subscription IDs must be non-nil and unique",
-            )
-        })
-    });
-    let result = result.map_err(|mut error| {
+    let result = config.validate_detailed().map_err(|mut error| {
         error.diagnostic.source = source;
+        honk_config::parser::locate_setting(sources, &mut error.diagnostic);
         error
     });
     finish_attempt(result.map(|()| config), diagnostics)
@@ -825,7 +817,7 @@ fn load_operator_config_captured(
         }
     };
     let source = loaded.sources[0].source.clone();
-    let config = admit_operator_config(loaded.config, source, diagnostics)?;
+    let config = admit_operator_config(loaded.config, source, &loaded.sources, diagnostics)?;
     Ok((
         config,
         Some(configuration::SourceUpdate {

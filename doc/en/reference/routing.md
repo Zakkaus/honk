@@ -56,7 +56,7 @@ All pattern forms in one call share one condition, so `domain(geosite: netflix, 
 
 `full:`, `suffix:` and `keyword:` are case-sensitive. `full:` matches the whole name: `*` stands for any run of characters, `?` for one character, and every other character is literal. `suffix:` compares raw text, so `suffix: example.com` also matches `notexample.com`. To match a domain and its subdomains on label boundaries, use `domain(regex: '(^|\.)example\.com$')`. Geosite entries compare case-insensitively and match suffixes on label boundaries.
 
-`regex:` uses [Rust regex syntax](https://docs.rs/regex/latest/regex/#syntax), not glob syntax. An invalid pattern fails when honk builds the router. An empty prefixed value is kept: `domain(suffix: '')` matches every domain, unlike `domain()`.
+`regex:` uses [Rust regex syntax](https://docs.rs/regex/latest/regex/#syntax), not glob syntax. An invalid pattern fails when honk builds the router, and the error names the rule as `routing.rules[N]`, counting from 1. An empty prefixed value is kept: `domain(suffix: '')` matches every domain, unlike `domain()`.
 
 Standalone `geosite:`, `geoip:`, `domain:`, `suffix:`, `keyword:`, `full:` and `regex:` predicates also accept a leading `!` and conjunctions. `domain:example.com` is a suffix match, not a `full:` match.
 

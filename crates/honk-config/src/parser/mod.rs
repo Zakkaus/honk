@@ -8,6 +8,7 @@ mod entries;
 mod experimental;
 mod groups;
 pub mod lexer;
+mod locate;
 mod routing;
 
 mod read;
@@ -17,6 +18,7 @@ mod sources;
 use entries::{parse_node_section, parse_subscription_section};
 use experimental::parse_experimental_section;
 use groups::{parse_group_section, resolve_group_filters_inner};
+pub use locate::locate_setting;
 use scalars::parse_global_section;
 pub use sources::{
     LoadedConfig, SourceLimits, SourceSnapshot, check_dae_source, load_dae_sources,

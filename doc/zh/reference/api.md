@@ -656,7 +656,7 @@ warning 里有源 ID 和按列表方式遮蔽的路径。换成任何源里都�
 
 省略的 `sources[].id` 依次默认为 `source-1`、`source-2`，以此类推。ID 是 1–128 字节的 ASCII 字母、数字、`-`、`_` 或 `.`，在请求内唯一，只用于标注诊断。提供的路径必须非空且唯一。ID 或路径无效、`sources` 是空数组时返回 400；来源超过 32 个返回 413；`mode` 未知返回 422。
 
-原生诊断的格式是 `{level,source_id,line,column,span,code,message}`。`level` 为 `error`、`warning` 或 `info`。诊断无法精确定位到来源时，`line` 和按字节计的 `column` 为 `null`，`span` 也是 `null`。
+原生诊断的格式是 `{level,source_id,line,column,span,code,message}`。`level` 为 `error`、`warning` 或 `info`。语义拒绝的 `line` 和按字节计的 `column` 指向对应设置；设置本身未写出时，指向最近一个写出的条目、块或节。诊断无法定位到来源时，`line` 和 `column` 为 `null`。`span` 总是 `null`。
 
 `full` 模式下，第一份文档对应入口主文件，额外的路径必须落在入口根目录之内。完整离线 admission 会用到 overlay、已放行的本地 include、只读订阅缓存，以及实际的本地 geodata/hosts/ECH 依赖。从未拉取过的订阅按 warning 级别 admission，不会产生缓存节点。
 
