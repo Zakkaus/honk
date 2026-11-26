@@ -215,8 +215,8 @@ impl Router {
         )
     }
 
-    /// A rule that does not compile fails with a [`DetailedConfigError`] for
-    /// `routing.rules[i]` as the error's outermost context.
+    /// A rule that does not compile fails with its cause as the message and a
+    /// [`DetailedConfigError`] for `routing.rules[i]` beneath it.
     pub fn from_config(routing: &RoutingConfig) -> anyhow::Result<Self> {
         let sources = GeoSourceSet::load(&GeoRequirements::for_traffic(&routing.rules));
         Self::from_config_with_geo_sources(routing, &sources)
@@ -260,7 +260,9 @@ impl Router {
             let mut conditions = Vec::new();
             for not in [false, true] {
                 append_conditions(&mut conditions, not, rule, &assets, &mut registry, shared)
-                    .map_err(|cause| cause.context(rule_error(source_index)))?;
+                    .map_err(|cause| {
+                        anyhow::Error::new(rule_error(source_index)).context(format!("{cause:#}"))
+                    })?;
             }
 
             let outbound = rule.outbound.as_str().to_owned();
@@ -609,7 +611,7 @@ pub struct RouteMatch<'a> {
 }
 
 /// Names the rule a build failure belongs to, for callers that downcast the
-/// error to [`DetailedConfigError`]; the cause stays in the error chain.
+/// error to [`DetailedConfigError`].
 fn rule_error(source_index: usize) -> DetailedConfigError {
     DetailedConfigError::new(
         ErrorCategory::Validation,

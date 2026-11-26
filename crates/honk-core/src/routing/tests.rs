@@ -612,7 +612,11 @@ fn a_rule_that_does_not_compile_is_named_in_the_error() {
             .expect("detailed config error");
         assert_eq!(detailed.diagnostic.code, "invalid-routing-rule");
         assert_eq!(detailed.diagnostic.setting.to_string(), "routing.rules[2]");
-        assert!(error.chain().count() > 1, "the cause stays in the chain");
+        assert_ne!(
+            error.to_string(),
+            detailed.to_string(),
+            "the cause is the message"
+        );
     }
 }
 
