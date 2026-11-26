@@ -1013,3 +1013,6 @@ mod dns_syslog;
 
 #[path = "validation/located.rs"]
 mod located;
+
+#[path = "validation/subscription_ids.rs"]
+mod subscription_ids;

@@ -1166,7 +1166,18 @@ impl Config {
             check_outbound(rule.outbound.as_str(), Some(index))?;
         }
         check_outbound(&self.routing.default_outbound, None)?;
+        let mut subscription_ids = std::collections::HashSet::new();
         for (index, subscription) in self.subscriptions.iter().enumerate() {
+            if subscription.id.is_nil() || !subscription_ids.insert(subscription.id) {
+                return Err(config_validation_error(
+                    source,
+                    SettingPath::new("subscriptions")
+                        .index(index + 1)
+                        .field("id"),
+                    "invalid-subscription-id",
+                    "subscription IDs must be non-nil and unique",
+                ));
+            }
             if subscription.name.is_empty() {
                 return Err(config_validation_error(
                     source,
