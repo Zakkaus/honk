@@ -292,18 +292,7 @@ impl DnsForwarder {
         );
         let socket = async {
             let sock2 = new_asis_socket_with_mark(destination, |socket| {
-                #[cfg(target_os = "linux")]
-                {
-                    honk_outbound::util::set_mark_best_effort(
-                        socket,
-                        honk_outbound::util::bypass_mark(),
-                    )
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    let _ = socket;
-                    Ok(())
-                }
+                honk_outbound::util::prepare_egress(socket, honk_outbound::util::bypass_mark())
             })?;
             let socket =
                 tokio::net::UdpSocket::from_std(sock2.into()).context("asis UDP from_std")?;

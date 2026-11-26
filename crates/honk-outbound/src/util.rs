@@ -1,8 +1,10 @@
 //! Low-level outbound networking helpers.
 
+use parking_lot::RwLock;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::OnceLock;
+use std::os::fd::{AsFd as _, BorrowedFd};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::net::TcpStream;
 
@@ -34,6 +36,60 @@ pub fn bypass_mark() -> u32 {
     BYPASS_MARK
         .get()
         .map_or(honk_ebpf_common::DAE_BYPASS_MARK, |&(mark, _)| mark)
+}
+
+/// Called on every egress socket before it binds or connects, in place of
+/// `SO_MARK`, by an embedder that captures the host's traffic itself and must
+/// keep honk's own sockets out of that capture (Android `VpnService.protect`).
+pub type SocketProtector = Arc<dyn Fn(BorrowedFd<'_>) -> io::Result<()> + Send + Sync>;
+
+static PROTECTOR: RwLock<Option<SocketProtector>> = RwLock::new(None);
+
+/// Holds the installed [`SocketProtector`]; dropping it uninstalls it.
+#[must_use = "dropping the guard uninstalls the protector"]
+pub struct ProtectorGuard(());
+
+impl Drop for ProtectorGuard {
+    fn drop(&mut self) {
+        *PROTECTOR.write() = None;
+    }
+}
+
+/// Install the process's one [`SocketProtector`] until the guard drops. A
+/// restarted capture installs its own again, as a new `VpnService` brings a
+/// new `protect`.
+pub fn install_socket_protector(protector: SocketProtector) -> io::Result<ProtectorGuard> {
+    let mut slot = PROTECTOR.write();
+    if slot.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "a socket protector is already installed",
+        ));
+    }
+    *slot = Some(protector);
+    Ok(ProtectorGuard(()))
+}
+
+/// Whether egress sockets are protected instead of marked.
+pub fn socket_protector_installed() -> bool {
+    PROTECTOR.read().is_some()
+}
+
+/// Prepare an egress socket before it binds or connects: the installed
+/// protector when there is one, whose error fails the socket, otherwise the
+/// best-effort `mark`.
+pub fn prepare_egress(socket: &socket2::Socket, mark: u32) -> io::Result<()> {
+    let protector = PROTECTOR.read().clone();
+    if let Some(protector) = protector {
+        return protector(socket.as_fd());
+    }
+    #[cfg(target_os = "linux")]
+    return set_mark_best_effort(socket, mark);
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = mark;
+        Ok(())
+    }
 }
 
 /// Set `SO_MARK`, tolerating permission denial only when the process mark is optional.
@@ -135,13 +191,11 @@ fn new_tcp_socket(addr: &SocketAddr, mark: Option<u32>) -> io::Result<socket2::S
     socket.set_nonblocking(true)?;
     socket.set_tcp_nodelay(true)?;
     socket.set_keepalive(true)?;
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(mark) = mark {
-            set_mark_best_effort(&socket, mark)?;
-        }
-        apply_tcp_keepalive(&socket)?;
+    if let Some(mark) = mark {
+        prepare_egress(&socket, mark)?;
     }
+    #[cfg(target_os = "linux")]
+    apply_tcp_keepalive(&socket)?;
     Ok(socket)
 }
 
@@ -295,8 +349,7 @@ pub(crate) fn marked_udp_socket_with_mark(
     };
     let socket = socket2::Socket::new(domain, socket2::Type::DGRAM, None)?;
     socket.set_nonblocking(true)?;
-    #[cfg(target_os = "linux")]
-    set_mark_best_effort(&socket, mark)?;
+    prepare_egress(&socket, mark)?;
     // QUIC throughput is buffer-bound: the default 208 KiB rmem caps a
     // ~1ms-RTT path at ~2 Gbps (quic-go sets ~7 MiB and lands dae at ~3
     // Gbps). Request 8 MiB; the kernel clamps to 2×rmem_max, and honk-core
@@ -321,6 +374,83 @@ pub async fn udp_marked_bind(bind_addr: SocketAddr) -> io::Result<tokio::net::Ud
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn an_installed_protector_replaces_the_mark_before_bind_and_connect() {
+        if crate::bootstrap::run_global_test_in_child(
+            "util::tests::an_installed_protector_replaces_the_mark_before_bind_and_connect",
+        ) {
+            return;
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&calls);
+        let guard = install_socket_protector(Arc::new(move |fd| {
+            let socket = socket2::SockRef::from(&fd);
+            assert_eq!(
+                socket.local_addr()?.as_socket().map(|addr| addr.port()),
+                Some(0)
+            );
+            assert!(socket.peer_addr().is_err());
+            seen.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }))
+        .unwrap();
+        assert!(socket_protector_installed());
+        assert_eq!(
+            install_socket_protector(Arc::new(|_| Ok(())))
+                .err()
+                .map(|error| error.kind()),
+            Some(io::ErrorKind::AlreadyExists)
+        );
+        let udp = marked_udp_socket("127.0.0.1:0".parse().unwrap()).unwrap();
+        assert_eq!(socket2::SockRef::from(&udp).mark().unwrap(), 0);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let tcp = connect_marked_addr(
+            listener.local_addr().unwrap(),
+            Some(0x200),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(socket2::SockRef::from(&tcp).mark().unwrap(), 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        drop(guard);
+        assert!(!socket_protector_installed());
+        drop(marked_udp_socket("127.0.0.1:0".parse().unwrap()).unwrap());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_failing_protector_fails_the_socket() {
+        if crate::bootstrap::run_global_test_in_child(
+            "util::tests::a_failing_protector_fails_the_socket",
+        ) {
+            return;
+        }
+        let _guard = install_socket_protector(Arc::new(|_| {
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        }))
+        .unwrap();
+        assert_eq!(
+            marked_udp_socket("127.0.0.1:0".parse().unwrap())
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        assert_eq!(
+            connect_marked_addr(
+                listener.local_addr().unwrap(),
+                Some(0x200),
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
 
     fn assert_mark_policy(required: bool) {
         init_dae_socket_mark(0x200, required).unwrap();

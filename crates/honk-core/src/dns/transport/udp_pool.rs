@@ -227,8 +227,7 @@ impl UdpPool {
         };
         let socket = socket2::Socket::new(domain, socket2::Type::DGRAM, None)?;
         socket.set_nonblocking(true)?;
-        #[cfg(target_os = "linux")]
-        honk_outbound::util::set_mark_best_effort(&socket, honk_outbound::util::bypass_mark())?;
+        honk_outbound::util::prepare_egress(&socket, honk_outbound::util::bypass_mark())?;
         #[cfg(target_os = "linux")]
         error_queue::enable(&socket, address.is_ipv6())?;
         let unspecified = if address.is_ipv4() {
