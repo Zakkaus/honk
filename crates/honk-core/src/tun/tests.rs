@@ -358,6 +358,7 @@ async fn writable_readiness_retries_the_same_lease_without_new_input() {
         let mut interrupted = false;
         assert_eq!(
             flush_pending(
+                Framing::Vnet,
                 &mut pending,
                 &mut attempts,
                 &mut bytes,
@@ -514,6 +515,7 @@ async fn short_zero_and_fatal_writes_never_replay_or_release_as_success() {
         let mut attempts = 0;
         let mut bytes = 0;
         let error = flush_pending(
+            Framing::Vnet,
             &mut pending,
             &mut attempts,
             &mut bytes,
@@ -556,6 +558,7 @@ async fn interrupted_writes_keep_one_lease_with_a_finite_syscall_budget() {
     let mut attempts = 0;
     let mut bytes = 0;
     let (blocked, runnable) = flush_pending(
+        Framing::Vnet,
         &mut pending,
         &mut attempts,
         &mut bytes,
@@ -570,6 +573,7 @@ async fn interrupted_writes_keep_one_lease_with_a_finite_syscall_budget() {
     let mut attempts = 0;
     assert_eq!(
         flush_pending(
+            Framing::Vnet,
             &mut pending,
             &mut attempts,
             &mut bytes,
@@ -600,6 +604,7 @@ async fn accepted_prefix_is_not_rolled_back_when_the_next_record_blocks() {
     let mut calls = 0;
     assert_eq!(
         flush_pending(
+            Framing::Vnet,
             &mut pending,
             &mut attempts,
             &mut bytes,
@@ -881,6 +886,7 @@ async fn scope_class_groups_share_one_write_attempt_budget_and_keep_later_leases
     let mut calls = 0;
     assert_eq!(
         flush_pending(
+            Framing::Vnet,
             &mut groups[0],
             &mut attempts,
             &mut bytes,
@@ -901,6 +907,7 @@ async fn scope_class_groups_share_one_write_attempt_budget_and_keep_later_leases
     for group in 1..4 {
         assert_eq!(
             flush_pending(
+                Framing::Vnet,
                 &mut groups[group],
                 &mut attempts,
                 &mut bytes,
@@ -920,6 +927,7 @@ async fn scope_class_groups_share_one_write_attempt_budget_and_keep_later_leases
     bytes = 0;
     for group in 1..4 {
         flush_pending(
+            Framing::Vnet,
             &mut groups[group],
             &mut attempts,
             &mut bytes,
@@ -935,5 +943,108 @@ async fn scope_class_groups_share_one_write_attempt_budget_and_keep_later_leases
     scope.shutdown(true);
     owner.run().await;
     drop((groups, scope));
+    assert_eq!(budget.used(), 0);
+}
+
+const ADOPTED_CONFIG: &str = r#"
+    global { nfqueue_enable: false }
+    datapath {
+        backend: tun
+        direct: endpoint
+        tun {
+            name: tun0
+            address4: 198.18.0.1/32
+            table: 202
+            rule_priority: 10000
+            capture { 0.0.0.0/0 }
+        }
+    }
+    routing { fallback: direct }
+"#;
+
+#[test]
+fn an_adopted_tun_is_protected_instead_of_marked_and_has_no_host_source() {
+    const NAME: &str =
+        "tun::tests::an_adopted_tun_is_protected_instead_of_marked_and_has_no_host_source";
+    if crate::test_support::run_exact_in_child("HONK_TUN_ADOPTED_TEST_CHILD", NAME) {
+        return;
+    }
+    let base = honk_config::parser::parse_dae_config(ADOPTED_CONFIG).unwrap();
+    let error = validate_adopted(&base).unwrap_err().to_string();
+    assert!(error.contains("socket protector"), "{error}");
+    let _guard =
+        honk_outbound::util::install_socket_protector(std::sync::Arc::new(|_| Ok(()))).unwrap();
+    validate_adopted(&base).unwrap();
+    let mut config = base.clone();
+    config
+        .datapath
+        .as_mut()
+        .unwrap()
+        .tun
+        .as_mut()
+        .unwrap()
+        .host_facts = true;
+    assert!(validate_adopted(&config).is_err());
+    let mut config = base.clone();
+    config.datapath = None;
+    assert!(validate_adopted(&config).is_err());
+    let mut config = base;
+    config.routing.default_mark = Some(1);
+    assert!(validate_adopted(&config).is_err());
+}
+
+#[tokio::test]
+async fn plain_records_are_bare_ip_packets_without_offload() {
+    let mut ipv4 = vec![0; 28];
+    ipv4[0] = 0x45;
+    ipv4[2..4].copy_from_slice(&28u16.to_be_bytes());
+    ipv4[9] = 17;
+    let (packet, meta) = Framing::Plain.decode(&ipv4).unwrap();
+    assert_eq!(packet, &ipv4[..]);
+    assert_eq!(
+        meta,
+        RxMeta {
+            csum: Csum::Verify,
+            gso: None
+        }
+    );
+    assert!(Framing::Plain.decode(&ipv4[..27]).is_none());
+    let mut record = vec![0; VNET_BYTES];
+    record.extend_from_slice(&ipv4);
+    assert!(Framing::Plain.decode(&record).is_none());
+    assert_eq!(Framing::Vnet.decode(&record).unwrap().0, &ipv4[..]);
+    assert_eq!(Framing::Plain.tx_caps(), TxCaps::NONE);
+
+    let (scope, owner, budget) = scope();
+    let mut pending = std::array::from_fn(|_| None);
+    pending[0] = Some(output(&scope).await);
+    let expected = pending[0].as_ref().unwrap().packet().to_vec();
+    let (writer, reader) = UnixDatagram::pair().unwrap();
+    let mut attempts = 0;
+    let mut bytes = 0;
+    assert_eq!(
+        flush_pending(
+            Framing::Plain,
+            &mut pending,
+            &mut attempts,
+            &mut bytes,
+            Instant::now(),
+            |header, packet| {
+                assert!(header.is_empty());
+                write_packet(writer.as_raw_fd(), header, packet)
+            },
+        )
+        .unwrap(),
+        (false, false)
+    );
+    assert_eq!(bytes, expected.len());
+    let mut received = vec![0; RX_BYTES];
+    let length = reader.recv(&mut received).unwrap();
+    assert_eq!(&received[..length], &expected[..]);
+    assert!(pending[0].is_none());
+    drop(pending);
+    scope.shutdown(true);
+    owner.run().await;
+    drop(scope);
     assert_eq!(budget.used(), 0);
 }

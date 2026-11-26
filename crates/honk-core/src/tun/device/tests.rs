@@ -31,3 +31,22 @@ fn vnet_setup_refuses_an_unsupported_descriptor_without_fallback() {
     let error = configure_vnet(socket.as_raw_fd()).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
 }
+
+#[test]
+fn adopted_descriptors_must_be_plain_single_queue_tun() {
+    let flags = libc::IFF_TUN | libc::IFF_NO_PI;
+    for valid in [flags, flags | libc::IFF_TUN_EXCL, flags | libc::IFF_PERSIST] {
+        assert!(valid_adopted_flags(valid));
+    }
+    for wrong in [
+        flags | libc::IFF_VNET_HDR,
+        flags | libc::IFF_MULTI_QUEUE,
+        flags | libc::IFF_NAPI,
+        libc::IFF_TUN,
+        libc::IFF_TAP | libc::IFF_NO_PI,
+    ] {
+        assert!(!valid_adopted_flags(wrong));
+    }
+    let (socket, _peer) = std::os::unix::net::UnixDatagram::pair().unwrap();
+    assert!(TunDevice::adopt(socket.into()).is_err());
+}

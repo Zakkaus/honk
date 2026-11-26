@@ -22,7 +22,7 @@ use setup::TunSetup;
 use std::{
     future::poll_fn,
     io,
-    os::fd::{AsRawFd, RawFd},
+    os::fd::{AsRawFd, OwnedFd, RawFd},
     pin::Pin,
     sync::{
         Arc,
@@ -44,9 +44,61 @@ pub(crate) const TX_CAPS: TxCaps = TxCaps {
     uso6: false,
 };
 const TURN_BYTES: usize = 1 << 20;
+
+/// How records cross the descriptor. The daemon's own device prefixes each with
+/// a virtio-net header carrying checksum and segmentation offload; a descriptor
+/// an embedder opened carries bare IP packets, which are vnet records with an
+/// empty header: no offload in either direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Framing {
+    Vnet,
+    Plain,
+}
+
+impl Framing {
+    fn tx_caps(self) -> TxCaps {
+        match self {
+            Self::Vnet => TX_CAPS,
+            Self::Plain => TxCaps::NONE,
+        }
+    }
+
+    fn output_capacity(self, mtu: u16) -> usize {
+        match self {
+            Self::Vnet => u16::MAX as usize,
+            Self::Plain => usize::from(mtu),
+        }
+    }
+
+    fn decode(self, record: &[u8]) -> Option<(&[u8], RxMeta)> {
+        match self {
+            Self::Vnet => decode_record(record),
+            Self::Plain => (record.len() < RX_BYTES && exact_record(record))
+                .then(|| Some((record, vnet_meta(&[0; VNET_BYTES], record)?)))
+                .flatten(),
+        }
+    }
+}
 const TURN_TIME: Duration = Duration::from_millis(1);
 
 pub(crate) fn validate_config(config: &Config) -> anyhow::Result<()> {
+    validate_capture(config, false)
+}
+
+/// An adopted descriptor's link is the embedder's, its egress is protected
+/// instead of marked, and it has no eBPF host source.
+fn validate_adopted(config: &Config) -> anyhow::Result<()> {
+    ensure!(
+        config
+            .datapath
+            .as_ref()
+            .is_some_and(|value| value.backend == Backend::Tun),
+        "an adopted TUN requires datapath backend tun"
+    );
+    validate_capture(config, true)
+}
+
+fn validate_capture(config: &Config, adopted: bool) -> anyhow::Result<()> {
     let Some(datapath) = config
         .datapath
         .as_ref()
@@ -72,12 +124,23 @@ pub(crate) fn validate_config(config: &Config) -> anyhow::Result<()> {
                 .all(|rule| rule.mark.unwrap_or(0) == 0),
         "TUN Endpoint cannot preserve traffic rule marks"
     );
-    let mark = config.global.effective_so_mark();
-    ensure!(
-        mark != 0 && mark & 0xc800_0000 == 0,
-        "TUN requires an exact nonreserved bypass mark"
-    );
+    if adopted {
+        ensure!(
+            honk_outbound::util::socket_protector_installed(),
+            "an adopted TUN requires an installed socket protector"
+        );
+    } else {
+        let mark = config.global.effective_so_mark();
+        ensure!(
+            mark != 0 && mark & 0xc800_0000 == 0,
+            "TUN requires an exact nonreserved bypass mark"
+        );
+    }
     let host_facts = datapath.tun.as_ref().is_some_and(|tun| tun.host_facts);
+    ensure!(
+        !adopted || !host_facts,
+        "an adopted TUN has no eBPF host source for host_facts"
+    );
     ensure!(
         !host_facts || cfg!(feature = "ebpf"),
         "TUN host_facts requires the built ebpf feature and actual source admission"
@@ -110,7 +173,8 @@ pub(crate) fn validate_runtime(config: &Config, mock: bool) -> anyhow::Result<()
 
 struct Runtime {
     io: Option<AsyncFd<TunDevice>>,
-    topology: AsyncFd<Topology>,
+    /// The daemon's routing watcher and link setup; an adopted descriptor has neither.
+    topology: Option<AsyncFd<Topology>>,
     setup: Option<TunSetup>,
     drivers: Vec<PacketDriver>,
     plain_scope: ScopeId,
@@ -146,11 +210,11 @@ impl Runtime {
         #[cfg(feature = "ebpf")]
         let source_close = self.source.as_mut().map(source::Source::close).transpose();
         self.admission.store(false, Ordering::Release);
+        let device = self.io.as_ref().expect("live TUN FD").get_ref();
         let result = self
             .setup
             .as_mut()
-            .expect("live TUN setup")
-            .close_capture(self.io.as_ref().expect("live TUN FD").get_ref());
+            .map_or(Ok(()), |setup| setup.close_capture(device));
         self.closing = true;
         self.endpoints.close();
         self.dispose_pending();
@@ -216,14 +280,16 @@ impl Runtime {
             if self.endpoints.is_closing() || !self.admission.load(Ordering::Acquire) {
                 return Poll::Ready(Ok(()));
             }
-            match poll_topology(&mut self.topology, cx, Topology::check_tun_changed)? {
-                Poll::Ready(true) => {
-                    return Poll::Ready(Err(anyhow::anyhow!(
-                        "TUN routing topology changed; capture closed and restart required"
-                    )));
+            if let Some(topology) = &mut self.topology {
+                match poll_topology(topology, cx, Topology::check_tun_changed)? {
+                    Poll::Ready(true) => {
+                        return Poll::Ready(Err(anyhow::anyhow!(
+                            "TUN routing topology changed; capture closed and restart required"
+                        )));
+                    }
+                    Poll::Ready(false) => topology_more = true,
+                    Poll::Pending => {}
                 }
-                Poll::Ready(false) => topology_more = true,
-                Poll::Pending => {}
             }
         }
         let now = Instant::now();
@@ -253,6 +319,7 @@ impl Runtime {
 
     fn read_batch(&mut self, cx: &mut Context<'_>, ingress: Instant) -> anyhow::Result<bool> {
         let io = self.io.as_ref().expect("live TUN FD");
+        let framing = io.get_ref().framing();
         let mut ready = match io.poll_read_ready(cx) {
             Poll::Ready(result) => result?,
             Poll::Pending => return Ok(false),
@@ -298,7 +365,7 @@ impl Runtime {
                 "TUN record exceeds vnet and ordinary IP representation"
             );
             bytes += length;
-            let Some((packet, meta)) = decode_record(&self.rx[..length]) else {
+            let Some((packet, meta)) = framing.decode(&self.rx[..length]) else {
                 self.malformed_records = self.malformed_records.saturating_add(1);
                 continue;
             };
@@ -394,8 +461,10 @@ impl Runtime {
             if pending.iter().all(Option::is_none) {
                 continue;
             }
-            more |= poll_flush(
-                self.io.as_ref().expect("live TUN FD"),
+            let io = self.io.as_ref().expect("live TUN FD");
+            more |= poll_flush_framed(
+                io.get_ref().framing(),
+                io,
                 cx,
                 pending,
                 &mut attempts,
@@ -602,7 +671,7 @@ pub(crate) fn read_packet(fd: RawFd, buffer: &mut [u8]) -> io::Result<usize> {
     }
 }
 
-fn write_packet(fd: RawFd, header: &[u8; VNET_BYTES], packet: &[u8]) -> io::Result<usize> {
+fn write_packet(fd: RawFd, header: &[u8], packet: &[u8]) -> io::Result<usize> {
     let buffers = [
         libc::iovec {
             iov_base: header.as_ptr().cast_mut().cast(),
@@ -631,6 +700,28 @@ pub(crate) fn poll_flush<T: AsRawFd>(
     started: Instant,
     open: impl Fn() -> bool,
 ) -> io::Result<bool> {
+    poll_flush_framed(
+        Framing::Vnet,
+        io,
+        cx,
+        pending,
+        attempts,
+        bytes,
+        started,
+        open,
+    )
+}
+
+fn poll_flush_framed<T: AsRawFd>(
+    framing: Framing,
+    io: &AsyncFd<T>,
+    cx: &mut Context<'_>,
+    pending: &mut [Option<OutputLease>; BATCH],
+    attempts: &mut usize,
+    bytes: &mut usize,
+    started: Instant,
+    open: impl Fn() -> bool,
+) -> io::Result<bool> {
     if !open() {
         return Ok(true);
     }
@@ -639,15 +730,21 @@ pub(crate) fn poll_flush<T: AsRawFd>(
         Poll::Pending => return Ok(false),
     };
     let accepted_before = *bytes;
-    let (blocked, runnable) =
-        flush_pending(pending, attempts, bytes, started, |header, packet| {
+    let (blocked, runnable) = flush_pending(
+        framing,
+        pending,
+        attempts,
+        bytes,
+        started,
+        |header, packet| {
             if !open() {
                 return Err(io::ErrorKind::WouldBlock.into());
             }
             ready
                 .try_io(|inner| write_packet(inner.get_ref().as_raw_fd(), header, packet))
                 .unwrap_or_else(|_| Err(io::ErrorKind::WouldBlock.into()))
-        })?;
+        },
+    )?;
     if !open() {
         return Ok(true);
     }
@@ -667,24 +764,35 @@ pub(crate) fn poll_flush<T: AsRawFd>(
 }
 
 fn flush_pending(
+    framing: Framing,
     pending: &mut [Option<OutputLease>; BATCH],
     attempts: &mut usize,
     bytes: &mut usize,
     started: Instant,
-    mut write: impl FnMut(&[u8; VNET_BYTES], &[u8]) -> io::Result<usize>,
+    mut write: impl FnMut(&[u8], &[u8]) -> io::Result<usize>,
 ) -> io::Result<(bool, bool)> {
     for output in pending {
         let Some(lease) = output.as_ref() else {
             continue;
         };
-        let header = vnet_header(lease.packet(), lease.transmit())?;
+        let vnet = vnet_header(lease.packet(), lease.transmit())?;
+        let header = match framing {
+            Framing::Vnet => &vnet[..],
+            Framing::Plain if vnet == [0; VNET_BYTES] => &[],
+            Framing::Plain => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "plain TUN transmit carries offload metadata",
+                ));
+            }
+        };
         loop {
             if turn_limit(*attempts, *bytes, started, BATCH * 2) {
                 return Ok((false, true));
             }
             *attempts += 1;
-            let length = VNET_BYTES + lease.packet().len();
-            match write(&header, lease.packet()) {
+            let length = header.len() + lease.packet().len();
+            match write(header, lease.packet()) {
                 Ok(count) if count == length => {
                     *bytes += count;
                     drop(output.take());
@@ -731,14 +839,58 @@ pub(crate) fn poll_deadline(
     timer.as_pin_mut().unwrap().poll(cx)
 }
 
+/// Where the capture's descriptor comes from.
+enum Opening<'a> {
+    /// The daemon creates its own device and configures the link; the pin root
+    /// serves the eBPF host source.
+    Daemon {
+        #[cfg_attr(not(feature = "ebpf"), allow(dead_code))]
+        pin_root: &'a std::path::Path,
+    },
+    /// An embedder opened and configured the device.
+    Adopted(OwnedFd),
+}
+
 pub(crate) async fn run(
     plane: ControlPlane,
     pin_root: &std::path::Path,
     admission: Arc<AtomicBool>,
     pname_support: crate::ebpf::PnameSupportCell,
 ) -> (Option<ControlPlane>, anyhow::Result<()>) {
+    run_opened(
+        plane,
+        Opening::Daemon { pin_root },
+        admission,
+        pname_support,
+    )
+    .await
+}
+
+/// Run the TUN Endpoint on a descriptor an embedder opened and configured
+/// itself (Android `VpnService`): the daemon's `backend tun` capture without its
+/// link, routes, rules, sysctls, routing watcher or eBPF host source, reading and
+/// writing plain IP packets. Build `plane` with a
+/// [`UserspaceBackend`](crate::ebpf::userspace::UserspaceBackend) that shares
+/// `admission` and `pname_support`, and install a socket protector
+/// ([`honk_outbound::util::install_socket_protector`]) first: it replaces the
+/// bypass mark on every egress socket. Returns once the plane stops.
+pub async fn run_adopted_tun(
+    plane: ControlPlane,
+    tun: OwnedFd,
+    admission: Arc<AtomicBool>,
+    pname_support: crate::ebpf::PnameSupportCell,
+) -> (Option<ControlPlane>, anyhow::Result<()>) {
+    run_opened(plane, Opening::Adopted(tun), admission, pname_support).await
+}
+
+async fn run_opened(
+    plane: ControlPlane,
+    opening: Opening<'_>,
+    admission: Arc<AtomicBool>,
+    pname_support: crate::ebpf::PnameSupportCell,
+) -> (Option<ControlPlane>, anyhow::Result<()>) {
     let backend = plane.policy_backend_handle();
-    let (plane, result) = run_owned(plane, pin_root, admission, pname_support).await;
+    let (plane, result) = run_owned(plane, opening, admission, pname_support).await;
     let result = match (result, backend.write().await.cleanup().await) {
         (Ok(()), cleanup) => cleanup,
         (Err(error), Ok(())) => Err(error),
@@ -779,7 +931,7 @@ fn finish_startup(
 
 async fn run_owned(
     plane: ControlPlane,
-    _pin_root: &std::path::Path,
+    opening: Opening<'_>,
     admission: Arc<AtomicBool>,
     pname_support: crate::ebpf::PnameSupportCell,
 ) -> (Option<ControlPlane>, anyhow::Result<()>) {
@@ -787,7 +939,10 @@ async fn run_owned(
     let shutdown = plane.shutdown_intent();
     let budget = MemoryBudget::new(CAPTURE_MEMORY);
     let prepared = (|| -> anyhow::Result<_> {
-        validate_config(&config)?;
+        match opening {
+            Opening::Daemon { .. } => validate_config(&config)?,
+            Opening::Adopted(_) => validate_adopted(&config)?,
+        }
         let dns = PacketEndpoints::prepare_dns_bind(&config)?;
         let capacity = plane.packet_udp_capacity();
         ensure!(capacity != 0, "TUN requires a funded UDP endpoint capacity");
@@ -813,19 +968,27 @@ async fn run_owned(
         .and_then(|value| value.tun.as_ref())
         .unwrap();
     #[cfg(feature = "ebpf")]
-    let mut source = if tun.host_facts {
-        match source::Source::prepare(&config, &budget, _pin_root) {
-            Ok(source) => Some(source),
-            Err(error) => return (Some(plane), Err(error)),
+    let mut source = match opening {
+        Opening::Daemon { pin_root } if tun.host_facts => {
+            match source::Source::prepare(&config, &budget, pin_root) {
+                Ok(source) => Some(source),
+                Err(error) => return (Some(plane), Err(error)),
+            }
         }
-    } else {
-        None
+        _ => None,
     };
-    let (setup, device, topology) = match TunSetup::prepare(
-        &config,
-        #[cfg(feature = "ebpf")]
-        source.as_mut(),
-    ) {
+    let opened = match opening {
+        Opening::Daemon { .. } => TunSetup::prepare(
+            &config,
+            #[cfg(feature = "ebpf")]
+            source.as_mut(),
+        )
+        .map(|(setup, device, topology)| (Some(setup), device, Some(topology))),
+        Opening::Adopted(fd) => TunDevice::adopt(fd)
+            .map(|device| (None, device, None))
+            .context("adopt the embedder's TUN descriptor"),
+    };
+    let (setup, device, topology) = match opened {
         Ok(prepared) => prepared,
         Err(error) => {
             return (
@@ -839,6 +1002,7 @@ async fn run_owned(
             );
         }
     };
+    let framing = device.framing();
     // SAFETY: these concrete owners never replace their descriptors while registered.
     let io = match unsafe { AsyncFd::register(device) } {
         Ok(io) => io,
@@ -848,7 +1012,7 @@ async fn run_owned(
             return (
                 Some(plane),
                 Err(finish_startup(
-                    Some(setup),
+                    setup,
                     #[cfg(feature = "ebpf")]
                     source,
                     error.into(),
@@ -857,16 +1021,17 @@ async fn run_owned(
         }
     };
     // SAFETY: the subscribed watcher retains its descriptor unchanged while registered.
-    let topology = match unsafe { AsyncFd::register(topology) } {
-        Ok(topology) => topology,
-        Err(error) => {
+    let topology = match topology.map(|topology| unsafe { AsyncFd::register(topology) }) {
+        None => None,
+        Some(Ok(topology)) => Some(topology),
+        Some(Err(error)) => {
             let (topology, error) = error.into_parts();
             drop(topology);
             drop(io);
             return (
                 Some(plane),
                 Err(finish_startup(
-                    Some(setup),
+                    setup,
                     #[cfg(feature = "ebpf")]
                     source,
                     error.into(),
@@ -881,8 +1046,8 @@ async fn run_owned(
             u32::from(tun.mtu),
             realms,
             128,
-            u16::MAX as usize,
-            TX_CAPS,
+            framing.output_capacity(tun.mtu),
+            framing.tx_caps(),
             &budget,
         )?;
         let plain_scope = pair.0.scope();
@@ -892,8 +1057,8 @@ async fn run_owned(
                 u32::from(tun.mtu),
                 realms,
                 128,
-                u16::MAX as usize,
-                TX_CAPS,
+                framing.output_capacity(tun.mtu),
+                framing.tx_caps(),
                 &budget,
             )?;
             let scope = pair.0.scope();
@@ -918,7 +1083,7 @@ async fn run_owned(
             return (
                 Some(plane),
                 Err(finish_startup(
-                    Some(setup),
+                    setup,
                     #[cfg(feature = "ebpf")]
                     source,
                     error,
@@ -934,7 +1099,7 @@ async fn run_owned(
                 return (
                     None,
                     Err(finish_startup(
-                        Some(setup),
+                        setup,
                         #[cfg(feature = "ebpf")]
                         source,
                         error,
@@ -945,7 +1110,7 @@ async fn run_owned(
     let mut runtime = Runtime {
         io: Some(io),
         topology,
-        setup: Some(setup),
+        setup,
         drivers,
         plain_scope,
         host_scope,
@@ -997,17 +1162,16 @@ async fn run_owned(
         );
     }
     let activated = (|| -> anyhow::Result<()> {
-        let topology = runtime
-            .setup
-            .as_mut()
-            .unwrap()
-            .activate(runtime.io.as_ref().unwrap().get_ref())?;
-        // SAFETY: the final watcher retains its subscribed descriptor unchanged.
-        runtime.topology = unsafe { AsyncFd::register(topology) }.map_err(io::Error::from)?;
-        ensure!(
-            !runtime.topology.get_mut().check_changed()?,
-            "TUN topology changed before publication"
-        );
+        if let Some(setup) = runtime.setup.as_mut() {
+            let topology = setup.activate(runtime.io.as_ref().unwrap().get_ref())?;
+            // SAFETY: the final watcher retains its subscribed descriptor unchanged.
+            let mut topology = unsafe { AsyncFd::register(topology) }.map_err(io::Error::from)?;
+            ensure!(
+                !topology.get_mut().check_changed()?,
+                "TUN topology changed before publication"
+            );
+            runtime.topology = Some(topology);
+        }
         ensure!(
             !runtime.endpoints.is_closing() && !shutdown.requested(),
             "TUN closed before capture publication"
@@ -1024,8 +1188,9 @@ async fn run_owned(
     let mut failure = activated.err();
     if failure.is_none() {
         tracing::info!("TUN datapath ready");
-        if let Err(error) =
-            libsystemd::daemon::notify(false, &[libsystemd::daemon::NotifyState::Ready])
+        if runtime.setup.is_some()
+            && let Err(error) =
+                libsystemd::daemon::notify(false, &[libsystemd::daemon::NotifyState::Ready])
         {
             tracing::warn!(%error, "sd_notify readiness failed");
         }
@@ -1079,7 +1244,9 @@ async fn run_owned(
     {
         failure.get_or_insert(error);
     }
-    if let Err(error) = runtime.setup.take().unwrap().finish(failure.is_none()) {
+    if let Some(setup) = runtime.setup.take()
+        && let Err(error) = setup.finish(failure.is_none())
+    {
         failure.get_or_insert(error);
     }
     (plane, failure.map_or(Ok(()), Err))

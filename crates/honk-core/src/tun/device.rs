@@ -1,6 +1,6 @@
 //! The TUN descriptor the Endpoint reads and writes. The daemon opens its own
-//! device by name ([`TunDevice::open`]); the link it then configures lives in
-//! `setup`.
+//! device by name ([`TunDevice::open`]) and configures the link in `setup`; an
+//! embedder hands over one it opened ([`TunDevice::adopt`]).
 
 use std::fs::File;
 use std::io;
@@ -11,6 +11,8 @@ use anyhow::ensure;
 use nix::fcntl::{OFlag, open};
 use nix::sys::stat::Mode;
 
+use super::Framing;
+
 pub(super) const OFFLOADS: libc::c_ulong =
     (libc::TUN_F_CSUM | libc::TUN_F_TSO4 | libc::TUN_F_TSO6) as libc::c_ulong;
 
@@ -20,6 +22,7 @@ pub(crate) struct TunDevice {
     pub(super) fd: OwnedFd,
     pub(super) ifindex: u32,
     pub(super) incarnation: u64,
+    framing: Framing,
 }
 
 impl AsFd for TunDevice {
@@ -77,7 +80,39 @@ impl TunDevice {
             fd,
             ifindex,
             incarnation,
+            framing: Framing::Vnet,
         })
+    }
+
+    /// Take a descriptor an embedder opened and configured itself (Android
+    /// `VpnService`): a single-queue `IFF_TUN | IFF_NO_PI` device without
+    /// `IFF_VNET_HDR`, so its records are bare IP packets. Its link belongs to
+    /// the embedder; only `O_NONBLOCK` is set on the descriptor.
+    pub(crate) fn adopt(fd: OwnedFd) -> io::Result<Self> {
+        let flags = attachment(&fd)?.1;
+        if !valid_adopted_flags(flags) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "adopted TUN is not a single-queue IFF_TUN|IFF_NO_PI device (flags {flags:#x})"
+                ),
+            ));
+        }
+        let status = nix::fcntl::fcntl(&fd, nix::fcntl::FcntlArg::F_GETFL)?;
+        nix::fcntl::fcntl(
+            &fd,
+            nix::fcntl::FcntlArg::F_SETFL(OFlag::from_bits_retain(status) | OFlag::O_NONBLOCK),
+        )?;
+        Ok(Self {
+            fd,
+            ifindex: 0,
+            incarnation: 0,
+            framing: Framing::Plain,
+        })
+    }
+
+    pub(crate) fn framing(&self) -> Framing {
+        self.framing
     }
 
     pub(crate) fn new_auxiliary(name: &str) -> io::Result<Self> {
@@ -101,6 +136,12 @@ impl TunDevice {
 
 fn valid_attachment_flags(flags: libc::c_int) -> bool {
     flags & !libc::IFF_TUN_EXCL == libc::IFF_TUN | libc::IFF_NO_PI | libc::IFF_VNET_HDR
+}
+
+/// The embedder owns the link's lifetime and exclusivity, so persistence and
+/// `IFF_TUN_EXCL` are its choice.
+fn valid_adopted_flags(flags: libc::c_int) -> bool {
+    flags & !(libc::IFF_TUN_EXCL | libc::IFF_PERSIST) == libc::IFF_TUN | libc::IFF_NO_PI
 }
 
 fn configure_vnet(fd: RawFd) -> io::Result<()> {
@@ -157,7 +198,8 @@ fn configure_vnet(fd: RawFd) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn verify_attachment(fd: &OwnedFd, name: &str) -> io::Result<()> {
+/// The attached device's request (for its name) and flags, from `TUNGETIFF`.
+fn attachment(fd: &OwnedFd) -> io::Result<(libc::ifreq, libc::c_int)> {
     // SAFETY: zero initializes every byte returned by TUNGETIFF.
     let mut request: libc::ifreq = unsafe { std::mem::zeroed() };
     // SAFETY: the kernel writes only the initialized ifreq while fd stays owned.
@@ -166,6 +208,11 @@ pub(super) fn verify_attachment(fd: &OwnedFd, name: &str) -> io::Result<()> {
     }
     // SAFETY: TUNGETIFF initializes this union member.
     let flags = libc::c_int::from(unsafe { request.ifr_ifru.ifru_flags } as u16);
+    Ok((request, flags))
+}
+
+pub(super) fn verify_attachment(fd: &OwnedFd, name: &str) -> io::Result<()> {
+    let (request, flags) = attachment(fd)?;
     let actual = request
         .ifr_name
         .iter()
