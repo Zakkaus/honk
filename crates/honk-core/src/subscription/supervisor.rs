@@ -166,20 +166,13 @@ impl SubscriptionAuthorizations {
 }
 
 pub(crate) fn validate_subscription_ids(subscriptions: &[Subscription]) -> anyhow::Result<()> {
-    let mut ids = HashSet::with_capacity(subscriptions.len());
-    for subscription in subscriptions {
-        anyhow::ensure!(
-            !subscription.id.is_nil(),
-            "subscription '{}' has a nil id",
-            subscription.name
-        );
-        anyhow::ensure!(
-            ids.insert(subscription.id),
-            "duplicate subscription id {}",
-            subscription.id
-        );
+    match honk_config::subscription::invalid_subscription_id(subscriptions) {
+        Some(index) => anyhow::bail!(
+            "subscription '{}' has a nil or duplicate id",
+            subscriptions[index].name
+        ),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Drops the nodes whose IDs another provider already published, so an

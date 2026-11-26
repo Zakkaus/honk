@@ -4,6 +4,14 @@ use serde::{Deserialize, Serialize};
 use crate::diagnostic::SourceRef;
 use crate::types::SubscriptionType;
 
+/// The first subscription whose ID is nil or repeats an earlier one.
+pub fn invalid_subscription_id(subscriptions: &[Subscription]) -> Option<usize> {
+    let mut ids = std::collections::HashSet::with_capacity(subscriptions.len());
+    subscriptions
+        .iter()
+        .position(|subscription| subscription.id.is_nil() || !ids.insert(subscription.id))
+}
+
 /// A proxy subscription (e.g., subscription link).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Subscription {
