@@ -163,19 +163,14 @@ fn capture_inner(
     .map_err(|cause| dependency_error(source, "config", cause))?;
     config.append_diagnostics(source.clone(), diagnostics);
     config.validate_detailed().map_err(|mut error| {
-        error.diagnostic.source = validated_subscription(&config, &error)
-            .and_then(|subscription| declaring_source(&sources, subscription))
-            .unwrap_or(source)
-            .clone();
+        honk_config::parser::locate_setting(&sources, &mut error.diagnostic);
+        if error.diagnostic.span.is_none() {
+            error.diagnostic.source = validated_subscription(&config, &error)
+                .and_then(|subscription| declaring_source(&sources, subscription))
+                .unwrap_or(source)
+                .clone();
+        }
         error
-    })?;
-    crate::subscription::validate_subscription_ids(&config.subscriptions).map_err(|_| {
-        error(
-            source,
-            "subscription",
-            "invalid-subscription-id",
-            "subscription identifiers must be unique and nonzero",
-        )
     })?;
     config.ensure_builtin_nodes();
 

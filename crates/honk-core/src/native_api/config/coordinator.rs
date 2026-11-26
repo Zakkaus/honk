@@ -456,6 +456,7 @@ impl Worker {
             let mut config = crate::admit_operator_config(
                 loaded.config,
                 loaded.sources[0].source.clone(),
+                &loaded.sources,
                 &mut diagnostics,
             )
             .map_err(|error| reject(error, &diagnostics, &loaded.sources))?;
