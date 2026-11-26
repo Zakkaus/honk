@@ -579,6 +579,44 @@ fn test_domain_regex_route() {
 }
 
 #[test]
+fn a_rule_that_does_not_compile_is_named_in_the_error() {
+    let rule = |condition: RoutingCondition| RoutingRule {
+        name: String::new(),
+        condition,
+        outbound: RoutingOutbound::Simple("proxy".into()),
+        priority: 0,
+        must: false,
+        mark: 0,
+    };
+    for condition in [
+        RoutingCondition {
+            domain_regex: vec!["(".into()],
+            ..Default::default()
+        },
+        RoutingCondition {
+            port: vec!["70000".into()],
+            ..Default::default()
+        },
+    ] {
+        let mut routing = RoutingConfig::default();
+        routing.rules = vec![
+            rule(RoutingCondition {
+                domain: vec!["a.test".into()],
+                ..Default::default()
+            }),
+            rule(condition),
+        ];
+        let error = Router::from_config(&routing).unwrap_err();
+        let detailed = error
+            .downcast_ref::<DetailedConfigError>()
+            .expect("detailed config error");
+        assert_eq!(detailed.diagnostic.code, "invalid-routing-rule");
+        assert_eq!(detailed.diagnostic.setting.to_string(), "routing.rules[2]");
+        assert!(error.chain().count() > 1, "the cause stays in the chain");
+    }
+}
+
+#[test]
 fn test_domain_glob_route() {
     let rules = vec![RoutingRule {
         name: "glob-google".into(),

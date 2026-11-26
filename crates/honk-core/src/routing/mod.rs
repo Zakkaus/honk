@@ -1,5 +1,7 @@
 //! Routing engine: compiles rules and determines outbound for connections.
 
+use honk_config::diagnostic::{DiagnosticSources, SettingPath};
+use honk_config::error::{DetailedConfigError, ErrorCategory};
 use honk_config::routing::{RoutingConfig, RoutingRule};
 use honk_ebpf_common::{DomainRouting, ROUTING_FACT_CAPACITY};
 use honk_outbound::proxy::DirectMark;
@@ -213,6 +215,8 @@ impl Router {
         )
     }
 
+    /// A rule that does not compile fails with a [`DetailedConfigError`] for
+    /// `routing.rules[i]` as the error's outermost context.
     pub fn from_config(routing: &RoutingConfig) -> anyhow::Result<Self> {
         let sources = GeoSourceSet::load(&GeoRequirements::for_traffic(&routing.rules));
         Self::from_config_with_geo_sources(routing, &sources)
@@ -255,7 +259,8 @@ impl Router {
         for (source_index, rule) in rules.iter().enumerate() {
             let mut conditions = Vec::new();
             for not in [false, true] {
-                append_conditions(&mut conditions, not, rule, &assets, &mut registry, shared)?;
+                append_conditions(&mut conditions, not, rule, &assets, &mut registry, shared)
+                    .map_err(|cause| cause.context(rule_error(source_index)))?;
             }
 
             let outbound = rule.outbound.as_str().to_owned();
@@ -601,6 +606,20 @@ pub struct RouteMatch<'a> {
     pub rule_name: &'a str,
     pub rule_type: &'a str,
     pub rule_payload: &'a str,
+}
+
+/// Names the rule a build failure belongs to, for callers that downcast the
+/// error to [`DetailedConfigError`]; the cause stays in the error chain.
+fn rule_error(source_index: usize) -> DetailedConfigError {
+    DetailedConfigError::new(
+        ErrorCategory::Validation,
+        "invalid-routing-rule",
+        DiagnosticSources::new(None).root(),
+        SettingPath::new("routing")
+            .field("rules")
+            .index(source_index + 1),
+        "routing rule cannot be compiled; check its patterns and ports",
+    )
 }
 
 fn append_conditions(
