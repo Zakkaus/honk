@@ -1,5 +1,5 @@
 use super::overall_dial_timeout;
-use super::routing::{RoutingDecision, build_connection_info, connection_chains};
+use super::routing::{RoutingDecision, build_connection_info, connection_chains, dial_mode_sniffs};
 use crate::control::udp_endpoint::{
     RawDnsRoute, UdpEndpoint, UdpInitLease, UdpTerminal, UdpTrafficEvidence,
 };
@@ -234,7 +234,7 @@ impl ControlPlaneHandle {
             handoff
         });
         observation.handoff(handoff.as_ref(), raw_dns_route.is_none());
-        let skip_sniff = matches!(dial_mode, DialMode::Ip)
+        let skip_sniff = !dial_mode_sniffs(dial_mode)
             || handoff.as_ref().is_some_and(|ho| {
                 ho.must != 0
                     || matches!(
@@ -341,14 +341,8 @@ impl ControlPlaneHandle {
             .await;
         let outbound_name = mode_decision.name;
         let mode_constraint = mode_decision.constraint;
-        let target_domain = if matches!(
-            outbound_name.as_str(),
-            "direct" | "block" | "must_rules" | "control_plane_routing"
-        ) {
-            None
-        } else {
-            quic_domain.as_deref().map(Arc::<str>::from)
-        };
+        let target_domain =
+            udp_target_domain(&outbound_name, quic_domain.as_deref()).map(Arc::<str>::from);
         let target_is_domain = target_domain.is_some();
         observation.mode_applied(&outbound_name);
         observation.udp_dial_mode(dial_mode, quic_domain.as_deref(), domain_verification, None);
@@ -419,11 +413,6 @@ impl ControlPlaneHandle {
                 _ => {}
             }
         }
-        let requested_ipver = if original_dst.is_ipv6() {
-            IpVersion::V6
-        } else {
-            IpVersion::V4
-        };
         #[cfg(feature = "ebpf")]
         let staged_outbound;
         let (
@@ -479,18 +468,7 @@ impl ControlPlaneHandle {
                     .transpose()?;
             }
             let select = || {
-                let context = crate::group::ScoreSelectionContext {
-                    network: SelectionNetwork::Udp,
-                    probe_domain: ProbeDomain::DataUdp,
-                    target_family: Some(requested_ipver),
-                    health_family: requested_ipver,
-                    target: Some(match target_domain.as_deref() {
-                        Some(domain) => {
-                            crate::group::ScoreTarget::domain(domain, original_dst.port())
-                        }
-                        None => original_dst.into(),
-                    }),
-                };
+                let context = udp_score_context(original_dst, target_domain.as_deref());
                 resolve_outbound_plan_for_target(
                     &config,
                     &gm,
@@ -1004,6 +982,38 @@ impl ControlPlaneHandle {
             }
         }
         (outcome, collected)
+    }
+}
+
+/// The sniffed domain a UDP score target keys on; outbounds that dial the
+/// destination address key on the address.
+pub(super) fn udp_target_domain<'a>(outbound: &str, domain: Option<&'a str>) -> Option<&'a str> {
+    domain.filter(|_| {
+        !matches!(
+            outbound,
+            "direct" | "block" | "must_rules" | "control_plane_routing"
+        )
+    })
+}
+
+pub(super) fn udp_score_context(
+    target: SocketAddr,
+    domain: Option<&str>,
+) -> crate::group::ScoreSelectionContext {
+    let family = if target.is_ipv6() {
+        IpVersion::V6
+    } else {
+        IpVersion::V4
+    };
+    crate::group::ScoreSelectionContext {
+        network: SelectionNetwork::Udp,
+        probe_domain: ProbeDomain::DataUdp,
+        target_family: Some(family),
+        health_family: family,
+        target: Some(match domain {
+            Some(domain) => crate::group::ScoreTarget::domain(domain, target.port()),
+            None => target.into(),
+        }),
     }
 }
 

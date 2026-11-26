@@ -22,14 +22,14 @@ pub struct ModeState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Selection {
     Name(String),
-    #[cfg(feature = "native-api")]
+    #[cfg(any(feature = "native-api", feature = "embedded"))]
     Target(Option<ModeTarget>),
 }
 
 /// Shared routing snapshot, published only through [`DatapathFlagsHandle`].
 pub type SharedModeState = Arc<parking_lot::RwLock<ModeState>>;
 
-#[cfg(feature = "native-api")]
+#[cfg(any(feature = "native-api", feature = "embedded"))]
 #[cfg_attr(not(any(feature = "clash-api", test)), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ModeTarget {
@@ -37,9 +37,9 @@ pub(crate) enum ModeTarget {
     Group { id: String, name: String },
 }
 
-#[cfg(feature = "native-api")]
+#[cfg(any(feature = "native-api", feature = "embedded"))]
 impl ModeTarget {
-    #[cfg(any(feature = "clash-api", test))]
+    #[cfg(all(feature = "native-api", any(feature = "clash-api", test)))]
     pub(crate) fn from_name(
         name: &str,
         config: &honk_config::Config,
@@ -70,7 +70,7 @@ impl ModeTarget {
         }
     }
 
-    #[cfg(any(feature = "clash-api", test))]
+    #[cfg(any(feature = "clash-api", feature = "embedded", test))]
     fn present(
         &self,
         config: &honk_config::Config,
@@ -90,7 +90,10 @@ pub(crate) enum ModeSource {
     Runtime,
 }
 
-#[cfg(all(feature = "native-api", any(feature = "clash-api", test)))]
+#[cfg(any(
+    feature = "embedded",
+    all(feature = "native-api", any(feature = "clash-api", test))
+))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ModeOverride {
     Unchanged,
@@ -111,7 +114,7 @@ impl ModeState {
         }
     }
 
-    #[cfg(feature = "native-api")]
+    #[cfg(any(feature = "native-api", feature = "embedded"))]
     pub(crate) fn native() -> Self {
         Self {
             selection: Selection::Target(None),
@@ -128,14 +131,17 @@ impl ModeState {
     pub fn global_selection(&self) -> &str {
         match &self.selection {
             Selection::Name(name) => name,
-            #[cfg(feature = "native-api")]
+            #[cfg(any(feature = "native-api", feature = "embedded"))]
             Selection::Target(target) => target.as_ref().map_or("", ModeTarget::name),
         }
     }
 
     /// Call with the accepted config and catalog under the config read barrier.
     /// The returned node identity must remain typed through candidate selection.
-    #[cfg(all(feature = "native-api", any(feature = "clash-api", test)))]
+    #[cfg(any(
+        feature = "embedded",
+        all(feature = "native-api", any(feature = "clash-api", test))
+    ))]
     pub(crate) fn native_override(
         &self,
         outbound: &str,
@@ -198,7 +204,7 @@ impl ModeState {
         if self.is_global() {
             let direct = match &self.selection {
                 Selection::Name(name) => name == "direct",
-                #[cfg(feature = "native-api")]
+                #[cfg(any(feature = "native-api", feature = "embedded"))]
                 Selection::Target(target) => {
                     matches!(target, Some(ModeTarget::Node { id, .. }) if *id == honk_config::config::DIRECT_NODE_ID)
                 }
@@ -241,7 +247,7 @@ impl ModeState {
                 }
                 Selection::Name(_) => {}
                 // Native callers must carry the identity, not downgrade to a display name.
-                #[cfg(feature = "native-api")]
+                #[cfg(any(feature = "native-api", feature = "embedded"))]
                 Selection::Target(_) => return "block".to_owned(),
             }
         }

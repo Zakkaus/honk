@@ -21,7 +21,7 @@ type UnpackedTcpScorePlan = (
     RouteHealthRevision,
 );
 
-pub(super) fn tcp_score_context(
+pub(in crate::control::connection) fn tcp_score_context(
     target: SocketAddr,
     domain: Option<&str>,
     health_family: IpVersion,

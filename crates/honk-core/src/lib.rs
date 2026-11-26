@@ -25,6 +25,8 @@ pub(crate) mod degradations;
 pub mod dns;
 pub(crate) mod download_route;
 pub mod ebpf;
+#[cfg(any(feature = "clash-api", feature = "embedded"))]
+pub(crate) mod group_view;
 mod logging;
 mod marked_http;
 pub mod mode;
@@ -2151,3 +2153,6 @@ mod startup_lifecycle_tests {
             .unwrap();
     }
 }
+
+#[cfg(feature = "embedded")]
+pub use control::embedded;

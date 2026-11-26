@@ -19,6 +19,7 @@ use nfqueue_runtime::{
 };
 #[cfg(feature = "ebpf")]
 use nfqueue_runtime::{NfqueueRuntime, NfqueueRuntimeEvent, wait_nfqueue_event};
+mod health;
 mod lifecycle;
 pub mod packet_sniffer;
 mod preconnect;
@@ -540,3 +541,6 @@ pub(crate) fn direct_check_addr(bootstrap_resolver: &str) -> String {
 
 #[cfg(test)]
 use preconnect::preconnect_candidates;
+
+#[cfg(feature = "embedded")]
+pub use connection::embedded;

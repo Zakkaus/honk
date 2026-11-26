@@ -235,106 +235,49 @@ impl ControlPlane {
             let c = self.config.read().await;
             c.global.check_interval_secs
         };
-        let check_timeout = std::time::Duration::from_secs(5);
-
-        {
-            let c = self.config.read().await;
-            honk_outbound::tls::set_tls_mode(&c.global.tls_implementation);
-            honk_outbound::tls::set_utls_imitate(&c.global.utls_imitate);
-        }
-
-        // Configure HTTP-based health checks from config (Go: TcpCheckOption).
-        {
-            let c = self.config.read().await;
-            let check_url = c.global.tcp_check_url.first().cloned().unwrap_or_default();
-            let check_method = if c.global.tcp_check_http_method.is_empty() {
-                "HEAD".to_string()
-            } else {
-                c.global.tcp_check_http_method.clone()
-            };
-            let service = self.dns_controller.dns_service();
-            let recovery_resolver: crate::outbound::ResolveHook = Arc::new(move |host, port| {
-                let service = service.clone();
+        let service = self.dns_controller.dns_service();
+        let recovery_resolver: crate::outbound::ResolveHook = Arc::new(move |host, port| {
+            let service = service.clone();
+            Box::pin(async move {
+                let resolved = service.resolve_name_without_fallback(&host).await?;
+                Ok(resolved
+                    .ipv4
+                    .into_iter()
+                    .chain(resolved.ipv6)
+                    .map(|ip| SocketAddr::new(ip, port))
+                    .collect())
+            })
+        });
+        let udp_resolver: crate::outbound::ResolveHook = {
+            let controller = self.dns_controller.clone();
+            Arc::new(move |host: String, port: u16| {
+                let controller = controller.clone();
                 Box::pin(async move {
-                    let resolved = service.resolve_name_without_fallback(&host).await?;
-                    Ok(resolved
-                        .ipv4
-                        .into_iter()
-                        .chain(resolved.ipv6)
-                        .map(|ip| SocketAddr::new(ip, port))
-                        .collect())
-                })
-            });
-            let prober = Arc::new(
-                super::probers::http::ProxyHttpProber::new(
-                    self.config.clone(),
-                    self.proxy_registry.clone(),
-                    self.runtime_registry.clone(),
-                    check_method.clone(),
-                    self.group_manager.clone(),
-                )
-                .with_udp_recovery_resolver(recovery_resolver),
-            );
-            alive_set.set_route_http_probe(prober.clone());
-            if !check_url.is_empty() {
-                alive_set
-                    .set_http_probe(prober, check_url, check_method)
-                    .await;
-            } else {
-                info!(
-                    "HTTP health check disabled (no tcp_check_url configured), using TCP connect"
-                );
-            }
-        }
-
-        // Configure UDP health checks (Go: UdpCheckOption): each probe
-        // cycle sends one DNS query through the node's own UDP data
-        // path, so nodes with working TCP but broken UDP (e.g. an
-        // AnyTLS server without UoT) are marked dead for the UDP
-        // domains and excluded from UDP selection.
-        {
-            let dns_raw = {
-                let c = self.config.read().await;
-                c.global.effective_udp_check_dns().to_vec()
-            };
-            let quic_url = super::probers::quic_probe_url(&*self.config.read().await);
-            let resolver: crate::outbound::ResolveHook = {
-                let controller = self.dns_controller.clone();
-                Arc::new(move |host: String, port: u16| {
-                    let controller = controller.clone();
-                    Box::pin(async move {
-                        controller.resolve_domain(&host).await.map(|addresses| {
-                            addresses
-                                .into_iter()
-                                .map(|ip| std::net::SocketAddr::new(ip, port))
-                                .collect()
-                        })
+                    controller.resolve_domain(&host).await.map(|addresses| {
+                        addresses
+                            .into_iter()
+                            .map(|ip| std::net::SocketAddr::new(ip, port))
+                            .collect()
                     })
                 })
-            };
-            let dns_probe = UdpDnsProbeTarget::new(dns_raw, Some(resolver.clone()));
-            match tokio::time::timeout(check_timeout, dns_probe.resolve()).await {
-                Ok(Ok((target, _))) => info!("UDP health check enabled (dns={})", target),
-                _ => info!("UDP DNS health target initialization deferred to later health checks"),
-            }
-            self.quic_score_target = quic_url.map(|url| {
-                Arc::new(QuicScoreProbeTarget::new(
-                    url,
-                    Some(resolver),
-                    Arc::clone(&self.degradations),
-                ))
-            });
-            alive_set.set_udp_probe(Arc::new(ProxyUdpProber::new(
-                self.config.clone(),
-                self.proxy_registry.clone(),
-                self.runtime_registry.clone(),
-                self.stats.clone(),
-                dns_probe,
-                self.quic_score_target.clone(),
-                self.group_manager.clone(),
-            )));
-        }
+            })
+        };
+        self.quic_score_target = super::health::install_probers(
+            &alive_set,
+            super::health::ProberParts {
+                config: self.config.clone(),
+                proxy_registry: self.proxy_registry.clone(),
+                runtime_registry: self.runtime_registry.clone(),
+                group_manager: self.group_manager.clone(),
+                stats: self.stats.clone(),
+                degradations: Arc::clone(&self.degradations),
+                recovery_resolver: Some(recovery_resolver),
+                udp_resolver: Some(udp_resolver),
+            },
+        )
+        .await;
 
+        let check_timeout = super::health::HEALTH_CHECK_TIMEOUT;
         info!(
             "Starting health check loop (interval={}s, timeout={}s)",
             interval_secs,

@@ -137,23 +137,18 @@ impl ControlPlaneHandle {
         original_dst: std::net::IpAddr,
         client_addr: std::net::SocketAddr,
     ) -> (Option<String>, bool, &'static str) {
-        match (dial_mode, domain) {
-            (DialMode::Domain, Some(domain)) => {
-                match self
-                    .verify_domain_reality(&domain, original_dst, client_addr)
-                    .await
-                {
-                    RealityOutcome::ExactMatch => (Some(domain), true, "matched"),
-                    RealityOutcome::OtherFamilyOnly => (Some(domain), true, "other_family_trusted"),
-                    RealityOutcome::Mismatch => {
-                        debug!(domain = %domain, destination = %original_dst,
-                            "sniffed domain failed reality check; falling back to IP");
-                        (None, false, "failed")
-                    }
-                }
-            }
-            (_, domain) => (domain, false, "not_required"),
+        let outcome = match (dial_mode, domain.as_deref()) {
+            (DialMode::Domain, Some(name)) => Some(
+                self.verify_domain_reality(name, original_dst, client_addr)
+                    .await,
+            ),
+            _ => None,
+        };
+        if let (Some(RealityOutcome::Mismatch), Some(domain)) = (outcome, &domain) {
+            debug!(domain = %domain, destination = %original_dst,
+                "sniffed domain failed reality check; falling back to IP");
         }
+        reality_checked_domain(dial_mode, domain, outcome)
     }
 
     /// Whether a sniffed domain should participate in userspace routing.
@@ -368,6 +363,33 @@ pub(in crate::control) enum RealityOutcome {
     /// Same-family answers exist but do not contain the destination, or the
     /// domain did not resolve at all.
     Mismatch,
+}
+
+/// The sniffed domain that routing and score selection use, whether it
+/// passed the reality check, and the check's label. `dial_mode: domain` keeps
+/// a domain only when `outcome` trusts it; other modes keep it unchecked.
+pub(super) fn reality_checked_domain(
+    dial_mode: DialMode,
+    domain: Option<String>,
+    outcome: Option<RealityOutcome>,
+) -> (Option<String>, bool, &'static str) {
+    match (dial_mode, domain, outcome) {
+        (DialMode::Domain, Some(domain), Some(RealityOutcome::ExactMatch)) => {
+            (Some(domain), true, "matched")
+        }
+        (DialMode::Domain, Some(domain), Some(RealityOutcome::OtherFamilyOnly)) => {
+            (Some(domain), true, "other_family_trusted")
+        }
+        (DialMode::Domain, Some(_), _) => (None, false, "failed"),
+        (_, domain, _) => (domain, false, "not_required"),
+    }
+}
+
+/// Whether the TCP and UDP handlers sniff a server name under `dial_mode`.
+/// `dial_mode: ip` always dials the original destination, so no name is
+/// sniffed and none keys routing or score selection.
+pub(super) fn dial_mode_sniffs(dial_mode: DialMode) -> bool {
+    !matches!(dial_mode, DialMode::Ip)
 }
 
 /// Pure reality-check decision (unit-tested). See [`ControlPlane::verify_domain_reality`].

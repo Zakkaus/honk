@@ -1949,6 +1949,20 @@ carrier 觀測由控制心跳接入，和選路呼叫相互獨立。
 
 一個節點可以同時計入多個明確原因。瞬時值跟隨目前執行時 generation；已排乾資源會從下一次快照中消失。
 
+## 嵌入式路由引擎
+
+預設關閉的 `embedded` Cargo feature 提供函式庫 API `honk_core::embedded::Engine`。應用程式自行擷取流量（例如從 TUN 裝置讀取）時，可以用它取得常駐程式對每條流會做出的路由決定。它不啟動 listener、HTTP 堆疊或資料面；只有健康檢查和延遲測試會發起連線。用 `--features embedded` 建置；`--no-default-features --features embedded` 同樣可用。
+
+- `Engine::new(config, data_root)` 接收解析後的設定，按常駐程式啟動時的方式組裝。訂閱節點須事先合併進設定。geodata 只從 `data_root/geosite.dat` 和 `data_root/geoip.dat` 讀取。規則需要的檔案缺失、無法解析或缺少規則用到的類別時，建置引擎失敗。常駐程式在這種情況下只記錄警告並使用空的比對資料，這會放寬取反規則。
+- `Engine::decide(&Flow)` 接收傳輸協定、來源位址和目的位址、嗅探到的伺服器名稱及 reality check 是否信任它，以及已知時的行程名稱、MAC 位址和 DSCP。它回傳命中的規則（設定中的序號、名稱以及 Clash 風格的類型和 payload；適用 `fallback` 時為空）、規則選出的出站及其 `must` 修飾符、模式處理結果和模式處理後的出站、direct fwmark、依序排列的候選節點及其 group 鏈，以及常駐程式是否會對冷啟動的 URLTest group 並行嘗試前幾個候選。
+- `global.dial_mode` 的處理與常駐程式相同：`dial_mode: ip` 下忽略傳入的伺服器名稱；`dial_mode: domain` 下丟棄 reality check 不信任的伺服器名稱。沒有行程名稱的流不會命中 `pname` 規則。
+- 新建的引擎處於 Rule 模式，沒有 GLOBAL 目標，也不讀取 `experimental.clash_api.default_mode`。`set_mode` 選擇 Rule、Global 或 Direct。`set_global_target` 接收設定中的節點 id 或 group 名稱；如果另一個節點與該節點同名，則拒絕。沒有目標的 GLOBAL 阻斷所有非 `must` 的流；任何模式都不改變 `must` 或 `block` 的結果。
+- `Engine::start_health(Outbounds)` 啟動常駐程式的健康檢查：`global.tcp_check_url` 的 HTTP 檢查、UDP DNS 檢查和 QUIC 檢查，週期為 `global.check_interval`，單次探測逾時與常駐程式相同，為 5 秒。節點探測透過應用程式傳入的 `ProxyRegistry` 和 `SharedRuntimeRegistry` 發起連線。此後 URLTest、Fallback、LoadBalance 和 Score group 依探測結果選擇節點，與常駐程式一致。呼叫之前所有節點都視為可用，第一個候選可能是無法連線的節點。此呼叫需要 Tokio 執行環境；引擎被釋放時檢查隨之停止。
+- `Engine::select(group, member)` 設定 Selector group 在 TCP 和 UDP 上使用的成員，不需重新載入設定，效果與 `PUT /proxies/{group}` 相同；下一次 `decide` 即使用該成員。引擎不持有連線，因此 `interrupt_connections` 由應用程式自行處理。
+- `Engine::test_node(id, url, timeout)` 和 `Engine::test_group(name, url, timeout)` 執行 Clash API 的延遲測試（`/proxies/{name}/delay` 和 `/group/{name}/delay`），回傳節點或每個成員的延遲。子 group 透過其目前選中的葉節點測量，測試結束後 URLTest group 重新選擇。測量結果計入健康資料。
+- `Engine::groups()` 列出每個 group 的策略、成員、顯示為已選的成員（即 Clash API 的 `now`，不含 Score 驗證結果），以及每個成員的節點 id、存活狀態和最近一次 TCP 延遲。在常駐程式的寬限期內，探測失敗不會把新登記的節點標記為不可用，但 URLTest 已把它排在最後。
+- 一個引擎只對應一份設定及其執行時選擇。要套用新設定，需建立新的引擎，再重新設定模式、GLOBAL 目標和 Selector 選擇。
+
 ## Related docs
 
 - [Experimental 設定](./experimental.md)

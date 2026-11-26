@@ -1,6 +1,6 @@
 use super::handoff::RetireAck;
 use super::overall_dial_timeout;
-use super::routing::{build_connection_info, connection_chains};
+use super::routing::{build_connection_info, connection_chains, dial_mode_sniffs};
 use crate::control::*;
 use crate::group::{OwnedTarget, SelectionNetwork, SelectionPlanMode};
 
@@ -16,7 +16,7 @@ use super::observation::ConnectionObservation;
 use crate::observe::catalog::CatalogIdentity;
 
 mod dial;
-mod score;
+pub(super) mod score;
 mod terminal;
 
 use score::{
@@ -258,7 +258,7 @@ impl ControlPlaneHandle {
 
                 // Skip sniffing when the datapath already made a final decision.
                 // In ip mode we always dial by original_dst.
-                let mut skip_sniff = matches!(dial_mode, DialMode::Ip);
+                let mut skip_sniff = !dial_mode_sniffs(dial_mode);
                 if let Some(ref ho) = handoff {
                     let final_handoff = matches!(
                         ho.outbound,

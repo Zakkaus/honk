@@ -100,9 +100,9 @@ The root `rust-toolchain.toml` pins the host compiler; `crates/honk-ebpf/rust-to
 
 | Recipe                                                                          | Purpose                                                                                                                                                                                                                                      |
 | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `build` / `check` / `lint` / `fmt` / `fmt-check`                                              | `cargo build --release` / `check` / `clippy --all --all-targets --features honk-core/native-ui,honk-core/dns-syslog,honk-core/udp-bench,honk-core/dns-bench -- -D warnings` / `fmt --all` / `fmt --all -- --check`                                                                                                                                  |
+| `build` / `check` / `lint` / `fmt` / `fmt-check`                                              | `cargo build --release` / `check` / `clippy --all --all-targets --features honk-core/native-ui,honk-core/dns-syslog,honk-core/udp-bench,honk-core/dns-bench,honk-core/embedded -- -D warnings` / `fmt --all` / `fmt --all -- --check`                                                                                                                                  |
 | `test-routing` | Complete pre-provisioned floor-kernel VM gate, including compiled routing goldens and failed-publication preservation; prerequisites in `honk-real-ebpf-tests` |
-| `test` / `test-ci` / `test-core` / `test-config` / `test-ebpf` | Test suites (`test` = full workspace; `test-ci` = nextest CI profile with `honk-core/native-ui,honk-core/dns-syslog`, per-test timeouts and JUnit; `test-core` = core + outbound unit/integration tests; `test-config` = config unit/integration tests; `test-ebpf` = honk-ebpf-common only) |
+| `test` / `test-ci` / `test-core` / `test-config` / `test-ebpf` | Test suites (`test` = full workspace; `test-ci` = nextest CI profile with `honk-core/native-ui,honk-core/dns-syslog,honk-core/embedded`, per-test timeouts and JUnit; `test-core` = core + outbound unit/integration tests; `test-config` = config unit/integration tests; `test-ebpf` = honk-ebpf-common only) |
 | `test-netns` | Depends on `test-routing`, sharing its single disposable-VM run of routing, real NFQUEUE/eBPF, ownership, lifecycle and exact SO_MARK tests |
 | `outbound-ci` / `outbound-ci-e2e`                                               | honk-outbound gate (`ci/outbound-ci.sh`: fmt + clippy + honk-config & honk-outbound suites; `...-e2e` adds live hy2 e2e via `HONK_HY2_SERVER=`) — run after every outbound change                                                            |
 | `dns-ci`                                                                        | DNS subsystem gate (`ci/dns-ci.sh`: fmt + clippy + honk-config + honk-core dns/control + honk-outbound suites) — run after every DNS-path change                                                                                             |
@@ -127,6 +127,20 @@ Repository status is current command output and CI; dated pass counts are histor
 DNS syslog auditing is a default-off `dns-syslog` feature, independent of API
 features. Builds without it use zero-sized audit hooks and reject enabled audit
 at startup. Wire contract: `doc/en/design/dns-syslog.md`; implementation rules: `.agents/rules/configuration.md`.
+
+The userspace engine (`honk_core::embedded`, `control/connection/embedded.rs`)
+is a default-off `embedded` feature for applications that capture flows
+themselves. It calls the daemon's router, typed mode override and group plan
+resolver; its parity test (`--features embedded,native-api`)
+compares every decision and score context with the control plane's. The typed
+mode override in `mode.rs` compiles for `embedded` and for `native-api` with
+`clash-api`. Its health state and probers come from `control/health.rs`, which
+the daemon's bootstrap and health loop also call; its delay tests and group
+display come from `group_view.rs`, shared with the Clash API. Change those
+shared functions rather than copying them into the engine, and keep
+`--no-default-features --features embedded` free of `clash-api`, `native-api`,
+`axum` and `flow-observation` in `cargo tree -e features`. `just lint`, `just test-ci` and the CI `lint` and `test` jobs
+enable `honk-core/embedded`. User docs: [embedded routing engine](doc/en/reference/api.md#embedded-routing-engine).
 
 `just test-ci` requires `cargo-nextest` and selects `.config/nextest.toml`'s `ci` profile: no retries, a three-minute per-test timeout and no fail-fast. JUnit is written to `target/nextest/ci/junit.xml`; CI uploads it on failure. Plain `cargo test` remains supported.
 
@@ -196,7 +210,7 @@ Stop and ask before touching an area `CONTRIBUTING.md` §2 reserves, before anyt
 - Use `tracing` macros for logging; prefer structured fields (`info!(network = "tcp", outbound = %name, ...)`). Levels follow frequency × actionability: ERROR only when configured function is lost until an operator acts (committed-degraded activation, process exit, permanent subsystem death, invariant breach); WARN once per entered degraded state (fallback, ceiling, node/group unavailable, rejected candidate with the old config intact); INFO for low-rate lifecycle, operator outcomes and recovery; DEBUG for single connection/request/query outcomes and periodic maintenance. Log a failure once, at the layer that owns its stats/Score/recovery; repeat a persisting state at DEBUG, not per tick. A failure that repeats per query with no episode boundary (DNS SERVFAIL, singleflight saturation) uses `logging::warn_throttled!`: WARN at most every 10 s per site. Native `/api/v1/logs`, Clash `/logs` and the console all receive these levels.
 - Use `tokio` async/await and `tokio::select!` for long-lived loops.
 - Kernel/userspace structs belong in `honk-ebpf-common`; follow its stable `#[repr(C)]` layout and coordinated `honk-ebpf`/`honk-core` map-writer change rules.
-- Follow `cargo fmt --all` and keep `just lint` (all targets with `honk-core/native-ui,honk-core/udp-bench,honk-core/dns-bench`) and `cargo clippy --workspace --all-targets --no-default-features --features honk-core/udp-bench,honk-core/dns-bench -- -D warnings` clean.
+- Follow `cargo fmt --all` and keep `just lint` (all targets with `honk-core/native-ui,honk-core/udp-bench,honk-core/dns-bench,honk-core/embedded`) and `cargo clippy --workspace --all-targets --no-default-features --features honk-core/udp-bench,honk-core/dns-bench -- -D warnings` clean.
 - Match the surrounding file's idioms; make minimal, scoped changes (no opportunistic cleanups).
 
 ## Commits and pull requests
